@@ -4,14 +4,39 @@ namespace rosetta {
     // PybindVisitor's py_bindable_type: nanobind, like pybind11, has no caster
     // for raw C arrays (e.g. a method returning `double (&)[3][3]`) and needs a
     // complete type (sizeof / typeid) for a class returned/taken by value or
-    // reference. Pointers stay bindable even to an incomplete type.
+    // reference. `sizeof(T*)` is always valid, so a pointer is judged by its
+    // pointee (incomplete pointee ⇒ not bindable); a std::vector is cast
+    // element-wise, so it recurses into its element type.
+    template <class P>
+    concept nb_pointee_ok =
+        std::is_void_v<std::remove_cv_t<std::remove_pointer_t<P>>> ||
+        requires { sizeof(std::remove_pointer_t<P>); };
+
+    template <class T> struct nb_vector_elem {
+        static constexpr bool is = false;
+        using type               = void;
+    };
+    template <class E, class A> struct nb_vector_elem<std::vector<E, A>> {
+        static constexpr bool is = true;
+        using type               = E;
+    };
+
+    template <class T> consteval bool nb_is_bindable() {
+        using U = std::remove_cvref_t<T>;
+        if constexpr (std::is_array_v<std::remove_reference_t<T>>) {
+            return false;
+        } else if constexpr (std::is_pointer_v<U>) {
+            return nb_pointee_ok<U>;
+        } else if constexpr (nb_vector_elem<U>::is) {
+            return nb_is_bindable<typename nb_vector_elem<U>::type>();
+        } else {
+            return std::is_arithmetic_v<U> || std::is_enum_v<U> || std::is_void_v<U> ||
+                   requires { sizeof(U); };
+        }
+    }
+
     template <class T>
-    concept nb_bindable_type =
-        !std::is_array_v<std::remove_reference_t<T>> &&
-        (std::is_pointer_v<std::remove_cvref_t<T>> ||
-         std::is_arithmetic_v<std::remove_cvref_t<T>> ||
-         std::is_enum_v<std::remove_cvref_t<T>> || std::is_void_v<std::remove_cvref_t<T>> ||
-         requires { sizeof(std::remove_cvref_t<T>); });
+    concept nb_bindable_type = nb_is_bindable<T>();
 
     template <std::meta::info Fn, std::size_t... Is>
     consteval bool nb_params_bindable(std::index_sequence<Is...>) {
@@ -36,7 +61,10 @@ namespace rosetta {
             constexpr auto dann   = ann::get_or<doc>(doc{""}, Anns...);
             if constexpr (params.size() == 0)
                 saw_default_ctor = true;
-            register_init<Ctor>(std::make_index_sequence<params.size()>{}, dann.text);
+            // Skip a constructor nanobind can't represent (e.g. a vector of
+            // pointers to an incomplete type) rather than failing the build.
+            if constexpr (nb_params_bindable<Ctor>(std::make_index_sequence<params.size()>{}))
+                register_init<Ctor>(std::make_index_sequence<params.size()>{}, dann.text);
         }
 
       private:

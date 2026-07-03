@@ -91,6 +91,23 @@ namespace rosetta {
         bool                 integer = false; // kind == "number" and integral (vs floating)
         std::string          spelling; // prettified C++ type spelling (for human docs)
         std::vector<GenEnumerator> enumerators; // populated when kind == "enum"
+
+        // True when the type is a raw pointer to a class (`T*`); `object` then
+        // holds the pointee class identifier. `kind` is deliberately left
+        // "unknown" so backends that don't opt in keep skipping raw pointers (no
+        // regression); a backend that CAN marshal a pointer to a bound class
+        // (e.g. embind via allow_raw_pointers) checks this flag explicitly.
+        bool is_pointer = false;
+
+        // True when the type is a std::function<R(A...)>. Like is_pointer, `kind`
+        // stays "unknown" so backends that don't opt in keep skipping callbacks;
+        // a backend that CAN marshal a JS function into a std::function (e.g.
+        // embind via emscripten::val) checks this flag and consults `callback_sig`
+        // to decide whether the whole signature is convertible. `callback_sig[0]`
+        // is the return type (kind "void" when none); [1..] are the parameter
+        // types, each cvref-stripped like any other GenType.
+        bool                 is_callback = false;
+        std::vector<GenType> callback_sig;
     };
 
     /** @brief A numeric range constraint (rosetta::range annotation). */
@@ -179,6 +196,13 @@ namespace rosetta {
         std::string name;       // reflected (unqualified) C++ identifier
         std::string name_space; // enclosing namespace ("" if global, "a::b" if nested)
         std::string header; // binding_info<T>::header — basename for #include
+
+        // Qualified names of the direct *public* base classes (e.g.
+        // "arch::BaseRemote"), in declaration order. A backend that registers an
+        // inheritance relationship — e.g. pybind11's py::class_<T, Base> so a
+        // derived instance is accepted where a base pointer/reference is expected
+        // — consults these, filtering to the bases that are themselves bound.
+        std::vector<std::string> bases;
         std::string doc;    // class_markdown(*this) — per-class Markdown fragment (README body)
         std::string annotations_json; // raw out-of-line annotation side-car (ann_json_source<T>), if any
 
@@ -194,6 +218,12 @@ namespace rosetta {
         // even when `T()` is valid; backends that emit an explicit binding for
         // it (e.g. python-expanded's py::init<>()) consult this instead.
         bool is_default_constructible = false;
+
+        // Whether T is abstract (has an unoverridden pure virtual). An abstract
+        // class cannot be instantiated, so a backend must not emit any constructor
+        // binding for it (embind's class_ constructor, for one, would try to
+        // allocate the abstract type and fail to compile).
+        bool is_abstract = false;
 
         // Exact C++ spellings of each constructor's parameter types, in the same
         // order as `ctors`. Parallel to `ctors` (which carries the neutral IR);

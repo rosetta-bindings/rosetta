@@ -164,13 +164,16 @@ namespace rosetta {
     // the class is registered as py::class_<T, Trampoline> so Python subclasses
     // can override those virtuals and C++ dispatches back into Python. With no
     // trampoline (the default) this is the plain py::class_<T> binding as before.
-    template <typename T, typename Trampoline> // default `= T` is on the declaration
+    template <typename T, typename Trampoline, typename... Bases> // default `= T` on the declaration
     inline void bind_pybind(py::module_ &m, const char *py_name) {
+        // pybind11 sorts the extra py::class_ template args itself: a base of T is
+        // registered as a base, the trampoline (a subclass of T) as the alias — so
+        // `Bases...` and `Trampoline` may be listed together in any order.
         if constexpr (std::is_same_v<Trampoline, T>) {
-            py::class_<T> cls(m, py_name);
+            py::class_<T, Bases...> cls(m, py_name);
             bind_pybind_into<T, T>(cls);
         } else {
-            py::class_<T, Trampoline> cls(m, py_name);
+            py::class_<T, Bases..., Trampoline> cls(m, py_name);
             bind_pybind_into<T, Trampoline>(cls);
         }
     }

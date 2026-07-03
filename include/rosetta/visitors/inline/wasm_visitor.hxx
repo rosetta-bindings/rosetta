@@ -2,15 +2,41 @@ namespace rosetta {
 
     // A type embind can represent in a generated signature. Raw C arrays
     // (e.g. a method returning `double (&)[3][3]`) have no embind binding, and a
-    // class returned/taken by value or reference must be complete (sizeof). A
-    // pointer stays bindable even to an incomplete type.
+    // class returned/taken by value or reference must be complete (sizeof).
+    // A pointer is judged by its pointee — `sizeof(T*)` is always valid, so the
+    // generic clause would wrongly accept a pointer to an incomplete type; embind
+    // still needs the pointed-to class registered. A std::vector is marshalled
+    // element-wise, so it recurses into its element type.
+    template <class P>
+    concept wasm_pointee_ok =
+        std::is_void_v<std::remove_cv_t<std::remove_pointer_t<P>>> ||
+        requires { sizeof(std::remove_pointer_t<P>); };
+
+    template <class T> struct wasm_vector_elem {
+        static constexpr bool is = false;
+        using type               = void;
+    };
+    template <class E, class A> struct wasm_vector_elem<std::vector<E, A>> {
+        static constexpr bool is = true;
+        using type               = E;
+    };
+
+    template <class T> consteval bool wasm_is_bindable() {
+        using U = std::remove_cvref_t<T>;
+        if constexpr (std::is_array_v<std::remove_reference_t<T>>) {
+            return false;
+        } else if constexpr (std::is_pointer_v<U>) {
+            return wasm_pointee_ok<U>;
+        } else if constexpr (wasm_vector_elem<U>::is) {
+            return wasm_is_bindable<typename wasm_vector_elem<U>::type>();
+        } else {
+            return std::is_arithmetic_v<U> || std::is_enum_v<U> || std::is_void_v<U> ||
+                   requires { sizeof(U); };
+        }
+    }
+
     template <class T>
-    concept wasm_bindable_type =
-        !std::is_array_v<std::remove_reference_t<T>> &&
-        (std::is_pointer_v<std::remove_cvref_t<T>> ||
-         std::is_arithmetic_v<std::remove_cvref_t<T>> ||
-         std::is_enum_v<std::remove_cvref_t<T>> || std::is_void_v<std::remove_cvref_t<T>> ||
-         requires { sizeof(std::remove_cvref_t<T>); });
+    concept wasm_bindable_type = wasm_is_bindable<T>();
 
     template <std::meta::info Fn, std::size_t... Is>
     consteval bool wasm_params_bindable(std::index_sequence<Is...>) {
@@ -32,7 +58,10 @@ namespace rosetta {
             constexpr auto params = std::define_static_array(std::meta::parameters_of(Ctor));
             if constexpr (params.size() == 0)
                 saw_default_ctor = true;
-            register_ctor<Ctor>(std::make_index_sequence<params.size()>{});
+            // Skip a constructor embind can't represent (a parameter with no
+            // marshalling, e.g. a vector of pointers to an incomplete type).
+            if constexpr (wasm_params_bindable<Ctor>(std::make_index_sequence<params.size()>{}))
+                register_ctor<Ctor>(std::make_index_sequence<params.size()>{});
         }
 
         template <std::meta::info Fld, auto... Anns> void field(const char * name) {

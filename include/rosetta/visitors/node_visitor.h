@@ -20,10 +20,12 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <experimental/meta>
 #include <functional>
 #include <napi.h>
+#include <memory>
 #include <rosetta/walk.h>
 #include <string>
 #include <type_traits>

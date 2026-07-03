@@ -38,13 +38,39 @@ namespace rosetta {
         // class types incomplete in this TU (no sizeof / copy). Everything else
         // goes through QVariant::fromValue / QVariant::value as before. A pointer
         // stays usable even to an incomplete type.
+        // `sizeof(T*)` is always valid, so a pointer is judged by its pointee
+        // (incomplete pointee ⇒ not bindable); a std::vector recurses into its
+        // element type so a vector of incomplete-pointee is rejected too.
+        template <class P>
+        concept pointee_ok =
+            std::is_void_v<std::remove_cv_t<std::remove_pointer_t<P>>> ||
+            requires { sizeof(std::remove_pointer_t<P>); };
+
+        template <class T> struct vector_elem {
+            static constexpr bool is = false;
+            using type               = void;
+        };
+        template <class E, class A> struct vector_elem<std::vector<E, A>> {
+            static constexpr bool is = true;
+            using type               = E;
+        };
+
+        template <class T> consteval bool is_bindable() {
+            using U = std::remove_cvref_t<T>;
+            if constexpr (std::is_array_v<std::remove_reference_t<T>>) {
+                return false;
+            } else if constexpr (std::is_pointer_v<U>) {
+                return pointee_ok<U>;
+            } else if constexpr (vector_elem<U>::is) {
+                return is_bindable<typename vector_elem<U>::type>();
+            } else {
+                return std::is_arithmetic_v<U> || std::is_enum_v<U> || std::is_void_v<U> ||
+                       requires { sizeof(U); };
+            }
+        }
+
         template <class T>
-        concept bindable_type =
-            !std::is_array_v<std::remove_reference_t<T>> &&
-            (std::is_pointer_v<std::remove_cvref_t<T>> ||
-             std::is_arithmetic_v<std::remove_cvref_t<T>> ||
-             std::is_enum_v<std::remove_cvref_t<T>> || std::is_void_v<std::remove_cvref_t<T>> ||
-             requires { sizeof(std::remove_cvref_t<T>); });
+        concept bindable_type = is_bindable<T>();
 
         template <std::meta::info Fn, std::size_t... Is>
         consteval bool params_bindable(std::index_sequence<Is...>) {

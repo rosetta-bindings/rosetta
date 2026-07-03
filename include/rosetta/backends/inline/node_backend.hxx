@@ -109,6 +109,13 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 "class Js_" + k.name + " : public " + k.name + ", public rosetta::NapiTrampoline {\npublic:\n";
             s += "    using " + k.name + "::" + k.name + ";\n";
             for (const GenMethod *m : virts) {
+                // Skip a virtual whose signature has no Node-API marshalling (e.g. a
+                // pointer to a type left incomplete in this TU): napi_call_override
+                // could not convert the argument and the override would fail to
+                // compile. A concrete bound class still supplies the body.
+                if (!m->sig_bindable) {
+                    continue;
+                }
                 const bool  is_void = (m->ret_cpp == "void");
                 std::string sig     = "    " + m->ret_cpp + " " + m->name + "(";
                 std::string names;  // p0, p1, ... — base-call + JS-forward args
@@ -150,7 +157,12 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             if (body.empty()) {
                 return {};
             }
-            return "\nnamespace rosetta_node {\n" + body + "} // namespace rosetta_node\n";
+            // `using namespace std;` is scoped to this trampoline-only namespace so
+            // override signatures reproducing a parameter's exact spelling resolve
+            // unqualified std names (display_string_of drops `std::`, e.g.
+            // `vector<double, allocator<double>>`).
+            return "\nnamespace rosetta_node {\nusing namespace std;\n" + body +
+                   "} // namespace rosetta_node\n";
         }
 
         inline std::string node_bindings(const GenContext &c) {

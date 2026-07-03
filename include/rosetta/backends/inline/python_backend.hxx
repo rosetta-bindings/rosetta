@@ -138,17 +138,49 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         }
 
         inline std::string python_bindings(const GenContext &c) {
+            // Qualified name of a bound class, to match against GenClass::bases.
+            auto qualified = [](const GenClass &k) {
+                return k.name_space.empty() ? k.name : k.name_space + "::" + k.name;
+            };
+            // Set of bound qualified names: a base is only registered with
+            // py::class_ when it is itself bound (pybind needs it registered).
+            std::vector<std::string> bound;
+            for (const auto &k : c.classes) {
+                bound.push_back(qualified(k));
+            }
+            auto is_bound = [&](const std::string &n) {
+                for (const auto &b : bound) {
+                    if (b == n) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
             std::string binds;
             // Enums first so class fields/methods can resolve them.
             for (const auto &e : c.enums) {
                 binds += "    rosetta::bind_pybind_enum<" + e.name + ">(m, \"" + e.name + "\");\n";
             }
             for (const auto &k : c.classes) {
-                if (virtual_methods(k).empty()) {
-                    binds += "    rosetta::bind_pybind<" + k.name + ">(m, \"" + k.name + "\");\n";
-                } else {
+                // Trailing template args: the bound base classes. A base must be
+                // registered before its derived — that follows from manifest order.
+                std::string base_args;
+                for (const auto &b : k.bases) {
+                    if (is_bound(b)) {
+                        base_args += ", " + b;
+                    }
+                }
+                if (!virtual_methods(k).empty()) {
                     binds += "    rosetta::bind_pybind<" + k.name + ", rosetta_py::Py_" + k.name +
+                             base_args + ">(m, \"" + k.name + "\");\n";
+                } else if (!base_args.empty()) {
+                    // No trampoline: spell Trampoline explicitly as T so the bases
+                    // land in the right template-parameter positions.
+                    binds += "    rosetta::bind_pybind<" + k.name + ", " + k.name + base_args +
                              ">(m, \"" + k.name + "\");\n";
+                } else {
+                    binds += "    rosetta::bind_pybind<" + k.name + ">(m, \"" + k.name + "\");\n";
                 }
             }
             for (const auto &f : c.functions) {

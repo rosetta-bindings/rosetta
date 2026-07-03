@@ -9,31 +9,88 @@ namespace rosetta {
     template <typename R, typename... A>
     struct is_std_function<std::function<R(A...)>> : std::true_type {};
 
-    // Can a value of T cross the N-API boundary? Scalars, strings, vectors of
-    // supported types, and user class types (marshalled as wrapped objects)
-    // are convertible; std::function and other unhandled types are not.
+    template <typename T> struct is_std_array : std::false_type {};
+    template <typename U, std::size_t N> struct is_std_array<std::array<U, N>> : std::true_type {};
+
+    // Is a std::function<R(A...)> marshalable as a JS callback? Forward-declared
+    // here so napi_supported can consult it; defined just below (it recurses back
+    // into napi_supported to check the return and argument types).
+    template <typename T> consteval bool napi_callback_marshalable();
+
+    // A raw pointer to a class that is *complete* in this TU — marshalled as a
+    // non-owning JS handle to the pointed-to object. Completeness is required so
+    // Wrap<pointee> can be instantiated (unique_ptr member, ObjectWrap machinery);
+    // a pointer to a merely forward-declared class (e.g. Triangle here) is left
+    // unsupported. The pointee may be abstract (a referenced-only base such as
+    // BaseRemote) — that is fine, it is never constructed on this path.
+    template <class U>
+    concept napi_class_ptr =
+        std::is_pointer_v<U> && std::is_class_v<std::remove_cv_t<std::remove_pointer_t<U>>> &&
+        requires { sizeof(std::remove_cv_t<std::remove_pointer_t<U>>); };
+
+    // A class marshalled BY VALUE (wrapped Napi object). The conversion
+    // default-constructs a wrapper and copy-assigns the value in/out, so the
+    // class must be complete, default-constructible and copy-assignable. The
+    // `sizeof` clause comes first so the later traits are never evaluated on an
+    // incomplete type (e.g. a forward-declared ModelRegions returned by value),
+    // which would be a hard error rather than "unsupported".
+    template <class U>
+    concept napi_value_class = std::is_class_v<U> && requires { sizeof(U); } &&
+                               std::is_default_constructible_v<U> && std::is_copy_assignable_v<U>;
+
+    // Can a value of T cross the N-API boundary? Scalars, strings, vectors and
+    // fixed arrays of supported types, JS-callback-shaped std::function params,
+    // and user class types (marshalled as wrapped objects) are convertible;
+    // other types are not.
     template <typename T> consteval bool napi_supported() {
         using U = std::remove_cvref_t<T>;
         if constexpr (std::is_same_v<U, std::string> || std::is_same_v<U, bool> ||
                       std::is_arithmetic_v<U>) {
             return true;
         } else if constexpr (is_std_function<U>::value) {
-            return false;
+            // A callback param: bindable when its whole signature marshals (a JS
+            // function is wrapped into the std::function by from_napi).
+            return napi_callback_marshalable<U>();
         } else if constexpr (is_std_vector<U>::value) {
+            return napi_supported<typename U::value_type>();
+        } else if constexpr (is_std_array<U>::value) {
             return napi_supported<typename U::value_type>();
         } else if constexpr (std::is_enum_v<U>) {
             return true; // marshalled as its underlying integer
+        } else if constexpr (napi_class_ptr<U>) {
+            return true; // raw pointer to a bound class → non-owning JS handle
         } else if constexpr (std::is_class_v<U>) {
-            return true; // user type → wrapped Napi object
+            // By-value user type — supported only when it can actually round-trip
+            // (a non-copyable/incomplete helper like ModelRegions is skipped;
+            // pass such types by pointer instead).
+            return napi_value_class<U>;
         } else {
             return false;
         }
+    }
+
+    // A std::function<R(A...)> crosses the boundary iff its return type is void or
+    // marshalable and every argument type is marshalable. The pointer parameter
+    // is only a compile-time pattern to recover R and A... (never dereferenced).
+    template <typename R, typename... A>
+    consteval bool napi_callback_marshalable_impl(std::function<R(A...)> *) {
+        bool ok = std::is_void_v<R> || napi_supported<std::remove_cvref_t<R>>();
+        ((ok = ok && napi_supported<std::remove_cvref_t<A>>()), ...);
+        return ok;
+    }
+    template <typename T> consteval bool napi_callback_marshalable() {
+        return napi_callback_marshalable_impl(static_cast<T *>(nullptr));
     }
 
     // ---- Forward declarations (mutually recursive with conversions) ----
 
     template <typename T, typename Tramp = T> class Wrap;
     template <typename T> Napi::FunctionReference &ctor_ref();
+
+    // Wrap a JS function value into an owning std::function of the requested
+    // signature (defined after from_napi, which it uses to convert the callback's
+    // return value). Used by from_napi for std::function parameters.
+    template <typename Fn> Fn make_js_callback(const Napi::Value &v);
 
     // ---- Virtual-method trampoline support (JS subclasses override C++) ----
 
@@ -70,8 +127,13 @@ namespace rosetta {
     // NOTE: dispatch is by arity only — two constructors with the same number
     // of parameters but different types cannot be told apart here.
     template <typename T>
-    std::unordered_map<std::size_t, std::function<T(const Napi::CallbackInfo &)>> &ctor_table() {
-        static std::unordered_map<std::size_t, std::function<T(const Napi::CallbackInfo &)>> table;
+    std::unordered_map<std::size_t, std::function<T *(const Napi::CallbackInfo &)>> &ctor_table() {
+        // Heap-constructs T from the JS args (returns an owning raw pointer the
+        // caller adopts). Building on the heap — rather than returning by value —
+        // avoids requiring T be movable, and lets Wrap hold it in a unique_ptr
+        // whose element type may be abstract (a referenced-only base like
+        // BaseRemote) without instantiating an impossible value member.
+        static std::unordered_map<std::size_t, std::function<T *(const Napi::CallbackInfo &)>> table;
         return table;
     }
 
@@ -85,19 +147,35 @@ namespace rosetta {
             return Napi::Boolean::New(env, v);
         } else if constexpr (std::is_floating_point_v<U> || std::is_integral_v<U>) {
             return Napi::Number::New(env, static_cast<double>(v));
-        } else if constexpr (is_std_vector<U>::value) {
+        } else if constexpr (is_std_vector<U>::value || is_std_array<U>::value) {
             Napi::Array arr = Napi::Array::New(env, v.size());
             for (std::size_t i = 0; i < v.size(); ++i) {
                 arr.Set(static_cast<uint32_t>(i), to_napi(env, v[i]));
             }
             return arr;
+        } else if constexpr (is_std_function<U>::value) {
+            static_assert(sizeof(U) == 0,
+                          "to_napi: cannot marshal a std::function out to JS (callbacks "
+                          "are only supported as inbound parameters)");
         } else if constexpr (std::is_enum_v<U>) {
             return Napi::Number::New(
                 env, static_cast<double>(static_cast<std::underlying_type_t<U>>(v)));
-        } else if constexpr (std::is_class_v<U>) {
+        } else if constexpr (napi_class_ptr<U>) {
+            // Raw pointer to a bound class: wrap the EXISTING object non-owningly
+            // (the C++ side keeps ownership). A fresh JS wrapper is made, then its
+            // `self_` is retargeted at `v` so method/field access operates on the
+            // pointed-to object instead of the wrapper's own `inner`.
+            using P = std::remove_cv_t<std::remove_pointer_t<U>>;
+            if (v == nullptr) {
+                return env.Null();
+            }
+            Napi::Object obj              = ctor_ref<P>().New({});
+            Wrap<P>::Unwrap(obj)->self_ = const_cast<P *>(v);
+            return obj;
+        } else if constexpr (napi_value_class<U>) {
             // User type: build a fresh wrapped object and copy the value in.
             Napi::Object obj = ctor_ref<U>().New({});
-            Wrap<U>::Unwrap(obj)->inner = v;
+            Wrap<U>::Unwrap(obj)->obj() = v;
             return obj;
         } else {
             static_assert(sizeof(T) == 0, "to_napi: unsupported type");
@@ -122,15 +200,58 @@ namespace rosetta {
                 out.push_back(from_napi<Elem>(arr.Get(i)));
             }
             return out;
+        } else if constexpr (is_std_array<T>::value) {
+            Napi::Array arr = v.As<Napi::Array>();
+            T           out{};
+            for (std::size_t i = 0; i < out.size(); ++i) {
+                out[i] = from_napi<typename T::value_type>(arr.Get(static_cast<uint32_t>(i)));
+            }
+            return out;
+        } else if constexpr (is_std_function<T>::value) {
+            return make_js_callback<T>(v);
         } else if constexpr (std::is_enum_v<T>) {
             return static_cast<T>(
                 static_cast<std::underlying_type_t<T>>(v.As<Napi::Number>().Int64Value()));
-        } else if constexpr (std::is_class_v<T>) {
+        } else if constexpr (napi_class_ptr<T>) {
+            // Raw pointer param: hand back the address of the wrapped object (or
+            // null). Non-owning — the JS side keeps owning its wrapper.
+            using P = std::remove_cv_t<std::remove_pointer_t<T>>;
+            if (v.IsNull() || v.IsUndefined()) {
+                return static_cast<T>(nullptr);
+            }
+            return static_cast<T>(&Wrap<P>::Unwrap(v.As<Napi::Object>())->obj());
+        } else if constexpr (napi_value_class<T>) {
             // User type: unwrap the wrapped object and copy the value out.
-            return Wrap<T>::Unwrap(v.As<Napi::Object>())->inner;
+            return Wrap<T>::Unwrap(v.As<Napi::Object>())->obj();
         } else {
             static_assert(sizeof(T) == 0, "from_napi: unsupported type");
         }
+    }
+
+    // Materialize a std::function<R(A...)> that forwards to a JS callback. The JS
+    // function is kept alive by a persistent reference (shared so the resulting
+    // std::function stays copyable); each C++ invocation marshals the arguments
+    // out with to_napi and the return value back with from_napi. Calls run
+    // synchronously on the JS thread — valid because bound C++ methods invoke the
+    // callback during a JS-initiated call (e.g. a solver.run()), not from another
+    // thread. The pointer parameter only carries R and A... (never dereferenced).
+    template <typename R, typename... A>
+    std::function<R(A...)> make_js_callback_impl(const Napi::Value &v, std::function<R(A...)> *) {
+        Napi::Env env = v.Env();
+        auto      ref = std::make_shared<Napi::FunctionReference>(
+            Napi::Persistent(v.As<Napi::Function>()));
+        return [ref, env](A... args) -> R {
+            Napi::HandleScope scope(env);
+            Napi::Value       r = ref->Call({to_napi(env, args)...});
+            if constexpr (std::is_void_v<R>) {
+                (void)r;
+            } else {
+                return from_napi<std::remove_cvref_t<R>>(r);
+            }
+        };
+    }
+    template <typename Fn> Fn make_js_callback(const Napi::Value &v) {
+        return make_js_callback_impl(v, static_cast<Fn *>(nullptr));
     }
 
     // A wrapped user class type — i.e. one marshalled as a JS object holding an
@@ -139,7 +260,8 @@ namespace rosetta {
     template <typename T> consteval bool is_napi_user_class() {
         using U = std::remove_cvref_t<T>;
         return std::is_class_v<U> && !std::is_same_v<U, std::string> &&
-               !is_std_vector<U>::value && !is_std_function<U>::value;
+               !is_std_vector<U>::value && !is_std_array<U>::value &&
+               !is_std_function<U>::value;
     }
 
     // Materialize a call argument from a JS value for a reflected parameter of
@@ -153,7 +275,7 @@ namespace rosetta {
     template <typename P> decltype(auto) arg_from_napi(const Napi::Value &v) {
         using U = std::remove_cvref_t<P>;
         if constexpr (std::is_lvalue_reference_v<P> && is_napi_user_class<U>()) {
-            return (Wrap<U>::Unwrap(v.As<Napi::Object>())->inner); // -> U& into the wrapper
+            return (Wrap<U>::Unwrap(v.As<Napi::Object>())->obj()); // -> U& into the wrapper
         } else {
             return from_napi<U>(v);
         }
@@ -225,42 +347,66 @@ namespace rosetta {
 
     template <typename T, typename Tramp> class Wrap : public Napi::ObjectWrap<Wrap<T, Tramp>> {
     public:
-        // The held value is the trampoline subclass when one was supplied (so its
-        // vtable routes virtuals back into JS), otherwise plain T. Either way it
-        // IS-A T, so all field/method access below is unchanged.
-        Tramp inner;
+        // `self_` is the object all field/method access goes through, via obj().
+        // It is the FIRST data member so its offset is independent of `Tramp` —
+        // to_napi<T*> retargets it through a possibly-mismatched Wrap<T,T> view
+        // (it only knows T, not the trampoline), which is only sound at a fixed
+        // offset. Normally self_ == &inner (this wrapper owns the object); for a
+        // wrapper produced from a raw T* it points at the external, non-owned
+        // object instead, and `inner` stays an unused default-constructed slot.
+        T *self_ = nullptr;
+
+        // Owned storage, engaged only when this wrapper owns the object. It holds
+        // the trampoline subclass when one was supplied (so its vtable routes
+        // virtuals back into JS), otherwise plain T; either way it IS-A T. Access
+        // is always through obj() (never this directly), so a non-owning wrapper
+        // works too. A unique_ptr (rather than a bare `Tramp inner` value member)
+        // lets Tramp be non-default-constructible (built from the JS ctor args)
+        // or an abstract referenced-only base (held but never constructed here).
+        std::unique_ptr<Tramp> owned_;
+
+        T       &obj() { return *self_; }
+        const T &obj() const { return *self_; }
 
         Wrap(const Napi::CallbackInfo &info) : Napi::ObjectWrap<Wrap<T, Tramp>>(info) {
-            // Give the trampoline a handle to its JS object so virtual overrides
-            // can dispatch into JS (no-op when Tramp == T).
-            if constexpr (!std::is_same_v<T, Tramp>) {
-                inner.__rosetta_set_self(this->Value());
-            }
-            // `inner` is default-constructed above; if the call arity matches a
-            // registered constructor, rebuild it from the JS arguments. The table
-            // builds the concrete held type (Tramp), so this works even when T is
-            // abstract. Assigning through the T& base slice leaves inner's dynamic
-            // type (and its JS-self handle) intact — only T's members are copied.
+            // Build the concrete held type (Tramp) from the JS arguments when the
+            // arity matches a registered constructor; fall back to a default ctor
+            // for a 0-arg call. A raw-pointer wrapper (to_napi<T*>) is made with 0
+            // args and then retargets self_ at the external object, so it is fine
+            // for owned_ to stay null here (e.g. a non-constructible/abstract T).
             auto &tbl = ctor_table<Tramp>();
             auto  it  = tbl.find(info.Length());
             if (it != tbl.end()) {
-                static_cast<T &>(inner) = it->second(info);
-            } else if (info.Length() > 0) {
+                owned_.reset(it->second(info));
+            } else if (info.Length() == 0) {
+                if constexpr (std::is_default_constructible_v<Tramp> &&
+                              !std::is_abstract_v<Tramp>) {
+                    owned_ = std::make_unique<Tramp>();
+                }
+            } else {
                 throw Napi::TypeError::New(info.Env(),
                                            "no matching constructor for " +
                                                std::to_string(info.Length()) + " argument(s)");
+            }
+            if (owned_) {
+                self_ = static_cast<T *>(owned_.get());
+                // Give the trampoline a handle to its JS object so virtual
+                // overrides can dispatch into JS (no-op when Tramp == T).
+                if constexpr (!std::is_same_v<T, Tramp>) {
+                    owned_->__rosetta_set_self(this->Value());
+                }
             }
         }
 
         template <std::meta::info Fld>
         Napi::Value get_field(const Napi::CallbackInfo &info) {
-            return to_napi(info.Env(), inner.[:Fld:]);
+            return to_napi(info.Env(), obj().[:Fld:]);
         }
 
         template <std::meta::info Fld>
         void set_field(const Napi::CallbackInfo &info, const Napi::Value &v) {
             using FieldT  = [:std::meta::type_of(Fld):];
-            inner.[:Fld:] = from_napi<FieldT>(v);
+            obj().[:Fld:] = from_napi<FieldT>(v);
         }
 
         template <std::meta::info Fld, rosetta::range R>
@@ -272,7 +418,7 @@ namespace rosetta {
             if (d < R.min || d > R.max) {
                 throw Napi::RangeError::New(info.Env(), std::string(name) + " out of range");
             }
-            inner.[:Fld:] = val;
+            obj().[:Fld:] = val;
         }
 
         template <std::meta::info Fld>
@@ -302,10 +448,10 @@ namespace rosetta {
             using R               = [:std::meta::return_type_of(Fn):];
             constexpr auto params = std::define_static_array(std::meta::parameters_of(Fn));
             if constexpr (std::is_void_v<R>) {
-                (inner.[:Fn:])(arg_from_napi<typename[:std::meta::type_of(params[Is]):]>(info[Is])...);
+                (obj().[:Fn:])(arg_from_napi<typename[:std::meta::type_of(params[Is]):]>(info[Is])...);
                 return info.Env().Undefined();
             } else {
-                R r = (inner.[:Fn:])(arg_from_napi<typename[:std::meta::type_of(params[Is]):]>(info[Is])...);
+                R r = (obj().[:Fn:])(arg_from_napi<typename[:std::meta::type_of(params[Is]):]>(info[Is])...);
                 return to_napi(info.Env(), r);
             }
         }
@@ -428,9 +574,9 @@ namespace rosetta {
         // template (not a lambda) so the std::function stores a plain function
         // pointer — capturing the consteval-only param pack would be ill-formed.
         template <std::meta::info Ctor, std::size_t... Is>
-        static Tramp construct(const Napi::CallbackInfo &info) {
+        static Tramp *construct(const Napi::CallbackInfo &info) {
             constexpr auto params = std::define_static_array(std::meta::parameters_of(Ctor));
-            return Tramp(arg_from_napi<typename[:std::meta::type_of(params[Is]):]>(info[Is])...);
+            return new Tramp(arg_from_napi<typename[:std::meta::type_of(params[Is]):]>(info[Is])...);
         }
 
         template <std::meta::info Ctor, std::size_t... Is>

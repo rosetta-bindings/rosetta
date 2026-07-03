@@ -24,7 +24,7 @@ if(NOT EMSCRIPTEN)
     message(FATAL_ERROR "Configure via `emcmake cmake ...` (a stock emsdk, no fork needed).")
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable({{LIB}} auto_emscripten.cpp{{USER_SOURCES}})
@@ -60,6 +60,52 @@ target_link_options({{LIB}} PRIVATE
 set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
 )CMK";
 
+        // Emitted verbatim into auto_emscripten.cpp: converts an emscripten::val
+        // to/from C++ and wraps a JS function into a std::function of any
+        // val-convertible signature. `to_val`/`from_val` handle scalars, strings,
+        // std::array (element-wise) and registered types (embind's built-in
+        // val↔type). `make_fn` captures the JS function in the returned closure;
+        // the C++ side invokes it synchronously (valid for calls made during a
+        // JS-initiated call, e.g. a solver.run()).
+        constexpr std::string_view WASMX_CALLBACK_HELPER =
+            R"CB(
+namespace rosetta_wx {
+    template <typename T> struct is_std_array : std::false_type {};
+    template <typename U, std::size_t N> struct is_std_array<std::array<U, N>> : std::true_type {};
+
+    template <typename T> emscripten::val to_val(const T &x) {
+        if constexpr (is_std_array<std::remove_cvref_t<T>>::value) {
+            emscripten::val a = emscripten::val::array();
+            for (std::size_t i = 0; i < x.size(); ++i) a.set(i, to_val(x[i]));
+            return a;
+        } else {
+            return emscripten::val(x);
+        }
+    }
+    template <typename T> T from_val(const emscripten::val &v) {
+        if constexpr (is_std_array<T>::value) {
+            T out{};
+            for (std::size_t i = 0; i < out.size(); ++i)
+                out[i] = from_val<typename T::value_type>(v[i]);
+            return out;
+        } else {
+            return v.template as<T>();
+        }
+    }
+    template <typename F> struct fn_wrap;
+    template <typename R, typename... A> struct fn_wrap<std::function<R(A...)>> {
+        static std::function<R(A...)> make(emscripten::val f) {
+            return [f](A... args) -> R {
+                emscripten::val r = f(to_val<std::remove_cvref_t<A>>(args)...);
+                if constexpr (std::is_void_v<R>) { (void)r; }
+                else { return from_val<std::remove_cvref_t<R>>(r); }
+            };
+        }
+    };
+    template <typename F> F make_fn(emscripten::val f) { return fn_wrap<F>::make(f); }
+}
+)CB";
+
         // A compilable C++ spelling for an IR type. Mirrors cpp_type_of for the
         // kinds embind needs to name explicitly (vector element types,
         // read-only/range setter parameters). Member pointers cover everything
@@ -92,32 +138,184 @@ set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
         // Can embind marshal this type? Scalars, bool, string, enums, user
         // objects, and vectors of marshalable types qualify; std::function and
         // anything else the IR tagged "unknown" do not.
-        inline bool wx_marshalable(const GenType &t) {
+        // Is `name` (unqualified) one of the bound classes? A raw pointer is only
+        // marshalable when its pointee is itself registered with embind.
+        inline bool wx_is_bound(const std::string &name, const GenContext &c) {
+            for (const auto &k : c.classes) {
+                if (k.name == name) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        inline bool wx_marshalable(const GenType &t, const GenContext &c) {
+            // Bare raw pointer to a bound class: embind handles it via
+            // allow_raw_pointers (non-owning), returning/accepting a JS handle to
+            // the C++ object.
+            if (t.is_pointer) {
+                return wx_is_bound(t.object, c);
+            }
             if (t.kind == "unknown") {
                 return false;
             }
+            // A by-value class is marshalable only when it is itself registered
+            // (a bound class_). An unregistered/incomplete object — std::array,
+            // std::initializer_list, a forward-declared helper like ModelRegions —
+            // has no embind type and would abort the build.
+            if (t.kind == "object") {
+                return wx_is_bound(t.object, c);
+            }
             if (t.kind == "vector") {
-                return t.element.empty() || wx_marshalable(t.element.front());
+                if (t.element.empty()) {
+                    return true;
+                }
+                // A vector *of* raw pointers would need register_vector<T*>, which
+                // embind does not support — keep skipping those.
+                if (t.element.front().is_pointer) {
+                    return false;
+                }
+                return wx_marshalable(t.element.front(), c);
             }
             return true;
         }
 
-        inline bool wx_method_ok(const GenMethod &m) {
-            if (m.ret.kind != "void" && !wx_marshalable(m.ret)) {
+        // Can a value of this type ride across the boundary INSIDE a JS callback,
+        // i.e. through the emitted rosetta_wx::to_val / from_val helpers? That set
+        // is: scalars, bool, strings, enums, std::array (element-wise), vectors of
+        // such, and registered classes (embind val ↔ registered type). Raw
+        // pointers, nested callbacks, and unbound by-value objects are out — so a
+        // callback taking e.g. `Triangle*` or `Eigen::VectorXd&` stays skipped.
+        inline bool wx_val_convertible(const GenType &t, const GenContext &c) {
+            if (t.is_pointer || t.is_callback) {
                 return false;
             }
-            for (const auto &p : m.params) {
-                if (!wx_marshalable(p.type)) {
+            if (t.kind == "number" || t.kind == "boolean" || t.kind == "string" ||
+                t.kind == "enum") {
+                return true;
+            }
+            if (t.kind == "vector") {
+                return !t.element.empty() && !t.element.front().is_pointer &&
+                       wx_val_convertible(t.element.front(), c);
+            }
+            if (t.kind == "object") {
+                // display_string_of drops the std:: prefix (see qualify_std), so a
+                // std::array spelling arrives as "array<...>" — qualify then test.
+                if (qualify_std(t.spelling).rfind("std::array<", 0) == 0) {
+                    return true; // handled element-wise by the rosetta_wx helper
+                }
+                return wx_is_bound(t.object, c); // registered class ↔ emscripten::val
+            }
+            return false;
+        }
+
+        // A std::function param is bindable via an emscripten::val adapter iff its
+        // whole signature is val-convertible (return may additionally be void).
+        inline bool wx_callback_convertible(const GenType &t, const GenContext &c) {
+            if (!t.is_callback || t.callback_sig.empty()) {
+                return false;
+            }
+            const GenType &ret = t.callback_sig.front();
+            if (!(ret.kind == "void" || wx_val_convertible(ret, c))) {
+                return false;
+            }
+            for (std::size_t i = 1; i < t.callback_sig.size(); ++i) {
+                if (!wx_val_convertible(t.callback_sig[i], c)) {
                     return false;
                 }
             }
             return true;
         }
 
+        // A parameter is bindable when embind marshals it directly, OR it is a
+        // callback we can wrap with an emscripten::val adapter.
+        inline bool wx_param_ok(const GenType &t, const GenContext &c) {
+            return wx_marshalable(t, c) || (t.is_callback && wx_callback_convertible(t, c));
+        }
+
+        inline bool wx_params_have_callback(const std::vector<GenParam> &params) {
+            for (const auto &p : params) {
+                if (p.type.is_callback) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // A signature that names a raw pointer needs the allow_raw_pointers policy.
+        inline bool wx_type_has_raw_ptr(const GenType &t) {
+            if (t.is_pointer) {
+                return true;
+            }
+            if (t.kind == "vector" && !t.element.empty()) {
+                return wx_type_has_raw_ptr(t.element.front());
+            }
+            return false;
+        }
+
+        inline bool wx_method_has_raw_ptr(const GenMethod &m) {
+            if (wx_type_has_raw_ptr(m.ret)) {
+                return true;
+            }
+            for (const auto &p : m.params) {
+                if (wx_type_has_raw_ptr(p.type)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        inline bool wx_method_ok(const GenMethod &m, const GenContext &c) {
+            if (m.ret.kind != "void" && !wx_marshalable(m.ret, c)) {
+                return false;
+            }
+            for (const auto &p : m.params) {
+                if (!wx_param_ok(p.type, c)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Emit the (lambda parameter decls, forwarded call args) for a parameter
+        // list that may contain callbacks. A callback param is received as an
+        // `emscripten::val` and wrapped into its std::function via the rosetta_wx
+        // helper; every other param passes through with its exact C++ spelling.
+        struct WxAdapterParams {
+            std::string decls; // e.g. "emscripten::val arg0, bool arg1"
+            std::string args;  // e.g. "rosetta_wx::make_fn<...>(arg0), arg1"
+        };
+        inline WxAdapterParams wx_adapter_params(const std::vector<std::string> &param_cpp,
+                                                 const std::vector<GenParam>    &params) {
+            WxAdapterParams a;
+            for (std::size_t j = 0; j < params.size(); ++j) {
+                const std::string an = "arg" + std::to_string(j);
+                if (j) {
+                    a.decls += ", ";
+                    a.args += ", ";
+                }
+                if (params[j].type.is_callback) {
+                    a.decls += "emscripten::val " + an;
+                    a.args += "rosetta_wx::make_fn<" + qualify_std(params[j].type.spelling) + ">(" +
+                              an + ")";
+                } else {
+                    a.decls += qualify_std(param_cpp[j]) + " " + an;
+                    a.args += an;
+                }
+            }
+            return a;
+        }
+
         // Accumulate the distinct vector types reachable from the surface, so a
         // register_vector<element>() can be emitted for each. Keyed by the
         // element's C++ spelling to dedup (vector<int> vs vector<double>).
         inline void wx_collect_vectors(const GenType &t, std::vector<GenType> &out) {
+            if (t.is_callback) {
+                for (const auto &s : t.callback_sig) {
+                    wx_collect_vectors(s, out); // a vector inside a callback still needs registering
+                }
+                return;
+            }
             if (t.kind == "vector" && !t.element.empty()) {
                 const std::string key = wx_cpp_type(t.element.front());
                 bool              seen = false;
@@ -141,7 +339,7 @@ set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
                     wx_collect_vectors(f.type, out);
                 }
                 for (const auto &m : k.methods) {
-                    if (!wx_method_ok(m)) {
+                    if (!wx_method_ok(m, c)) {
                         continue;
                     }
                     wx_collect_vectors(m.ret, out);
@@ -152,7 +350,7 @@ set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
                 for (const auto &params : k.ctors) {
                     bool ok = true;
                     for (const auto &p : params) {
-                        ok = ok && wx_marshalable(p.type);
+                        ok = ok && wx_param_ok(p.type, c);
                     }
                     if (!ok) {
                         continue;
@@ -220,30 +418,84 @@ set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
             return ".property(\"" + f.name + "\", &" + self + "::" + f.name + ")";
         }
 
-        inline std::string wx_class(const GenClass &k) {
+        inline std::string wx_class(const GenClass &k, const GenContext &c) {
             std::vector<std::string> segs;
 
+            // First bound base, spelled with emscripten::base<> so embind wires up
+            // the prototype chain and up-casts. embind supports single inheritance,
+            // so only the first base that is itself bound is used.
+            std::string base_arg;
+            {
+                auto qualified = [](const GenClass &g) {
+                    return g.name_space.empty() ? g.name : g.name_space + "::" + g.name;
+                };
+                for (const auto &b : k.bases) {
+                    bool bound = false;
+                    for (const auto &g : c.classes) {
+                        if (qualified(g) == b) {
+                            bound = true;
+                            break;
+                        }
+                    }
+                    if (bound) {
+                        base_arg = ", emscripten::base<" + b + ">";
+                        break;
+                    }
+                }
+            }
+
             // Constructors (exact spellings, std::-qualified). ctor_param_cpp is
-            // parallel to ctors, which carries the IR used for the skip check.
-            bool saw_default = false;
-            for (std::size_t i = 0; i < k.ctor_param_cpp.size(); ++i) {
-                const auto &ir = k.ctors[i];
-                bool        ok = true;
+            // parallel to ctors, which carries the IR used for the skip check. An
+            // abstract class cannot be constructed, so emit no constructors for it.
+            bool                     saw_default = false;
+            std::vector<std::size_t> seen_arities; // embind dispatches ctors by arity
+            for (std::size_t i = 0; !k.is_abstract && i < k.ctor_param_cpp.size(); ++i) {
+                const auto &ir      = k.ctors[i];
+                bool        ok      = true;
+                bool        raw_ptr = false;
                 for (const auto &p : ir) {
-                    ok = ok && wx_marshalable(p.type);
+                    ok = ok && wx_param_ok(p.type, c);
+                    raw_ptr = raw_ptr || wx_type_has_raw_ptr(p.type);
                 }
                 if (!ok) {
                     continue;
                 }
+                const bool has_cb = wx_params_have_callback(ir);
                 const auto &params = k.ctor_param_cpp[i];
+                // embind resolves overloaded constructors by parameter COUNT only,
+                // and throws at registration if two share an arity — so keep just
+                // the first marshalable constructor of each arity.
+                bool dup = false;
+                for (std::size_t a : seen_arities) {
+                    if (a == params.size()) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (dup) {
+                    continue;
+                }
+                seen_arities.push_back(params.size());
                 if (params.empty()) {
                     saw_default = true;
+                }
+                if (has_cb) {
+                    // A ctor taking a callback can't be spelled as .constructor<...>
+                    // (embind has no type for std::function). Emit a factory lambda
+                    // that receives the callback as an emscripten::val, wraps it, and
+                    // heap-allocates the object (embind owns the returned pointer).
+                    const WxAdapterParams ad = wx_adapter_params(params, ir);
+                    segs.push_back(".constructor(+[](" + ad.decls + ") -> " + k.name +
+                                   " * {\n            return new " + k.name + "(" + ad.args +
+                                   ");\n        }, emscripten::allow_raw_pointers())");
+                    continue;
                 }
                 std::string args;
                 for (std::size_t j = 0; j < params.size(); ++j) {
                     args += (j ? ", " : "") + qualify_std(params[j]);
                 }
-                segs.push_back(".constructor<" + args + ">()");
+                const std::string policy = raw_ptr ? "emscripten::allow_raw_pointers()" : "";
+                segs.push_back(".constructor<" + args + ">(" + policy + ")");
             }
             if (!saw_default && k.is_default_constructible) {
                 segs.push_back(".constructor<>()");
@@ -253,15 +505,59 @@ set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
                 segs.push_back(wx_field_segment(k, f));
             }
             for (const auto &m : k.methods) {
-                if (!wx_method_ok(m)) {
+                if (!wx_method_ok(m, c)) {
                     continue; // unmarshalable signature (e.g. std::function param)
                 }
-                const std::string mp = "&" + k.name + "::" + m.name;
+                if (wx_params_have_callback(m.params)) {
+                    // A method taking a callback: bind a free-function-style lambda
+                    // whose first arg is the receiver, converting the callback from
+                    // an emscripten::val. embind's static member functions can't take
+                    // a receiver this way, so a static callback method is left out.
+                    if (m.is_static) {
+                        continue;
+                    }
+                    const WxAdapterParams ad = wx_adapter_params(m.param_cpp, m.params);
+                    const std::string     decls =
+                        k.name + " &self" + (ad.decls.empty() ? "" : ", " + ad.decls);
+                    const std::string call = "self." + m.name + "(" + ad.args + ")";
+                    const std::string body = (m.ret.kind == "void")
+                                                 ? ("            " + call + ";\n")
+                                                 : ("            return " + call + ";\n");
+                    const std::string policy =
+                        wx_method_has_raw_ptr(m) ? ", emscripten::allow_raw_pointers()" : "";
+                    segs.push_back(".function(\"" + m.name + "\", +[](" + decls + ") {\n" + body +
+                                   "        }" + policy + ")");
+                    continue;
+                }
+                // Disambiguate the member-function pointer with an explicit cast to
+                // the exact signature: a plain `&T::m` is ambiguous for an
+                // overloaded method (embind then reports "no matching function").
+                std::string args;
+                for (std::size_t j = 0; j < m.param_cpp.size(); ++j) {
+                    args += (j ? ", " : "") + qualify_std(m.param_cpp[j]);
+                }
+                std::string quals;
+                if (m.is_const) {
+                    quals += " const";
+                }
+                if (m.is_noexcept) {
+                    quals += " noexcept";
+                }
+                const std::string ret = qualify_std(m.ret_cpp);
+                const std::string fp =
+                    m.is_static ? (ret + " (*)(" + args + ")" + quals)
+                                : (ret + " (" + k.name + "::*)(" + args + ")" + quals);
+                const std::string mp =
+                    "static_cast<" + fp + ">(&" + k.name + "::" + m.name + ")";
+                // A raw pointer to a bound class needs the allow_raw_pointers policy.
+                const std::string policy =
+                    wx_method_has_raw_ptr(m) ? ", emscripten::allow_raw_pointers()" : "";
                 segs.push_back((m.is_static ? ".class_function(\"" : ".function(\"") + m.name +
-                               "\", " + mp + ")");
+                               "\", " + mp + policy + ")");
             }
 
-            std::string s = "    emscripten::class_<" + k.name + ">(\"" + k.name + "\")";
+            std::string s =
+                "    emscripten::class_<" + k.name + base_arg + ">(\"" + k.name + "\")";
             if (segs.empty()) {
                 return s + ";\n";
             }
@@ -282,23 +578,31 @@ set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
                         ">(\"" + wx_vector_name(vt) + "\");\n";
             }
             for (const auto &k : c.classes) {
-                body += wx_class(k);
+                body += wx_class(k, c);
             }
             for (const auto &f : c.functions) {
-                bool ok = (f.ret.kind == "void" || wx_marshalable(f.ret));
+                bool ok      = (f.ret.kind == "void" || wx_marshalable(f.ret, c));
+                bool raw_ptr = wx_type_has_raw_ptr(f.ret);
                 for (const auto &p : f.params) {
-                    ok = ok && wx_marshalable(p.type);
+                    ok      = ok && wx_marshalable(p.type, c);
+                    raw_ptr = raw_ptr || wx_type_has_raw_ptr(p.type);
                 }
                 if (ok) {
-                    body += "    emscripten::function(\"" + f.name + "\", &" + f.qualified + ");\n";
+                    const std::string policy =
+                        raw_ptr ? ", emscripten::allow_raw_pointers()" : "";
+                    body += "    emscripten::function(\"" + f.name + "\", &" + f.qualified +
+                            policy + ");\n";
                 }
             }
 
             std::string out = "// Generated by rosetta::generate (expanded, reflection-free) — "
                               "do not edit by hand.\n";
             out += "#include <emscripten/bind.h>\n";
+            out += "#include <array>\n";
+            out += "#include <functional>\n";
             out += "#include <stdexcept>\n";
             out += "#include <string>\n";
+            out += "#include <type_traits>\n";
             out += "#include <vector>\n";
             // pybind-free: just the user's (stock) headers below.
             auto add = [&](const std::string &h) { append_include(out, h); };
@@ -312,6 +616,7 @@ set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
                 add(f.header);
             }
             out += using_namespaces_of(c); // `using namespace` for namespaced user types
+            out += WASMX_CALLBACK_HELPER;  // rosetta_wx::make_fn / to_val / from_val
             out += "\nEMSCRIPTEN_BINDINGS(" + c.lib + ") {\n";
             out += body;
             out += "}\n";

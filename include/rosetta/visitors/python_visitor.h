@@ -28,8 +28,10 @@ namespace rosetta {
     // Trampoline defaults to T (plain py::class_<T>); the python backend passes a
     // generated Py_T subclass for classes with virtuals. The default lives here on
     // the declaration; the definition must NOT repeat it (one default per template,
-    // and a mismatched 1-param decl would make the <T> call ambiguous).
-    template <typename T, typename Trampoline = T>
+    // and a mismatched 1-param decl would make the <T> call ambiguous). Trailing
+    // `Bases...` are the (bound) C++ base classes registered with py::class_ so a
+    // derived instance is accepted where a base pointer/reference is expected.
+    template <typename T, typename Trampoline = T, typename... Bases>
     void bind_pybind(py::module_ &, const char *);
 
     // Register an enum type as a py::enum_ (its enumerators become module-level

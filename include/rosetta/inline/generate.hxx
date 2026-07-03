@@ -449,6 +449,10 @@ endif()
             return s;
         }
 
+        // Forward decl: decompose a std::function<R(A...)> into its return +
+        // parameter GenTypes (defined after type_descriptor, which it calls).
+        template <typename F> inline void fill_callback_sig(GenType &g);
+
         // Map a C++ type to the language-neutral GenType descriptor.
         template <typename T> inline GenType type_descriptor() {
             using U = std::remove_cvref_t<T>;
@@ -468,7 +472,9 @@ endif()
                 g.kind    = "number";
                 g.integer = std::is_integral_v<U>;
             } else if constexpr (is_func<U>::value) {
-                g.kind = "unknown";
+                g.kind        = "unknown";
+                g.is_callback = true;
+                fill_callback_sig<U>(g);
             } else if constexpr (is_vec<U>::value) {
                 g.kind = "vector";
                 g.element.push_back(type_descriptor<typename U::value_type>());
@@ -481,6 +487,13 @@ endif()
                         std::define_static_string(std::meta::identifier_of(e));
                     g.enumerators.push_back(GenEnumerator{en, static_cast<long long>([:e:])});
                 }
+            } else if constexpr (std::is_pointer_v<U> &&
+                                 std::is_class_v<std::remove_cv_t<std::remove_pointer_t<U>>>) {
+                // Raw pointer to a class: keep kind "unknown" (backends that can't
+                // marshal a pointer keep skipping it), but record the pointee so an
+                // opt-in backend can bind it (e.g. embind allow_raw_pointers).
+                g.is_pointer = true;
+                g.object     = class_name<std::remove_cv_t<std::remove_pointer_t<U>>>();
             } else if constexpr (std::is_class_v<U>) {
                 g.kind   = "object";
                 g.object = class_name<U>();
@@ -488,6 +501,19 @@ endif()
                 g.kind = "unknown";
             }
             return g;
+        }
+
+        // Decompose std::function<R(A...)>: callback_sig[0] = return type (kind
+        // "void" when R is void), followed by one entry per parameter. Types are
+        // cvref-stripped like every other GenType so a backend can test each with
+        // its normal marshalability predicate.
+        template <typename R, typename... A>
+        inline void fill_callback_sig_impl(GenType &g, std::type_identity<std::function<R(A...)>>) {
+            g.callback_sig.push_back(type_descriptor<std::remove_cvref_t<R>>());
+            (g.callback_sig.push_back(type_descriptor<std::remove_cvref_t<A>>()), ...);
+        }
+        template <typename F> inline void fill_callback_sig(GenType &g) {
+            fill_callback_sig_impl(g, std::type_identity<F>{});
         }
 
         template <std::meta::info Fn, std::size_t... Is>
@@ -528,18 +554,19 @@ endif()
             return param_cpp_impl<Fn>(std::make_index_sequence<n>{});
         }
 
-        // --- Signature representability, evaluated here at reflection time ---
-        // Mirrors python_visitor's py_bindable_type gate, but the result is baked
-        // into GenMethod::sig_bindable so a backend (which only sees the string IR)
-        // can skip emitting a trampoline override pybind11 can't compile — e.g. a
-        // virtual taking a pointer to a type left incomplete in the binding TU.
-        // `sizeof(T*)` is always valid, so a pointer is judged by its pointee; a
-        // std::vector is cast element-wise, so it recurses into its element.
-        template <class P>
-        concept sig_pointee_ok =
-            std::is_void_v<std::remove_cv_t<std::remove_pointer_t<P>>> ||
-            requires { sizeof(std::remove_pointer_t<P>); };
-
+        // --- Trampoline signature representability, evaluated at reflection time ---
+        // Baked into GenMethod::sig_bindable so a backend (which only sees the
+        // string IR) can skip emitting a *trampoline override* it could not compile.
+        // This is the conservative common denominator across language backends:
+        //   * no raw C arrays (no caster anywhere);
+        //   * no pointers — marshalling a raw pointer back across the boundary for a
+        //     host-language override is not something every backend supports (pybind
+        //     handles a pointer to a *registered* type, but Node-API's to_napi has no
+        //     conversion for a bare pointer at all), so an overridable signature must
+        //     avoid them. Normal (non-overridable) methods are still bound through
+        //     each backend's own per-type gate, which may accept pointers.
+        //   * a std::vector recurses into its element (a vector<T*> is thus rejected).
+        // Value/reference parameters of complete types are fine for every backend.
         template <class T> struct sig_vector_elem {
             static constexpr bool is = false;
             using type               = void;
@@ -554,7 +581,7 @@ endif()
             if constexpr (std::is_array_v<std::remove_reference_t<T>>) {
                 return false;
             } else if constexpr (std::is_pointer_v<U>) {
-                return sig_pointee_ok<U>;
+                return false;
             } else if constexpr (sig_vector_elem<U>::is) {
                 return sig_type_bindable<typename sig_vector_elem<U>::type>();
             } else {
@@ -775,6 +802,21 @@ endif()
                 gc.annotations.emplace_back([:std::meta::constant_of(a):]);
             }
             gc.is_default_constructible = std::is_default_constructible_v<T>;
+            gc.is_abstract              = std::is_abstract_v<T>;
+            // Direct public bases as qualified names; the backend filters to the
+            // ones actually bound before registering the relationship.
+            {
+                constexpr auto ctx = std::meta::access_context::current();
+                template for (constexpr auto base : std::define_static_array(
+                                  std::meta::bases_of(std::meta::dealias(^^T), ctx))) {
+                    if constexpr (std::meta::is_public(base)) {
+                        using B              = [:std::meta::type_of(base):];
+                        const std::string ns = class_namespace<B>();
+                        gc.bases.push_back(ns.empty() ? class_name<B>()
+                                                      : ns + "::" + class_name<B>());
+                    }
+                }
+            }
             IRVisitor<T> v{gc};
             walk<T>(v);
             // Render the doc fragment after the walk has filled fields/methods.
