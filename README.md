@@ -238,6 +238,27 @@ Result: `bindings/{python,node}/` — each a self-contained CMake project exposi
 
 The full walkthrough is in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md); every manifest field is documented in [`docs/MANIFEST.md`](./docs/MANIFEST.md); the `binding_info<T>` trait and the layered tooling model are in [`docs/GENERATE.md`](./docs/GENERATE.md). The worked examples live in `examples/manifest/` and `examples/geom-lib/`.
 
+## Extending a generated binding in C++
+
+Everything under `bindings/` is regenerated output — never edit it. When the stock binding misses something you need (a helper the walker skips, such as an overloaded free function; a custom view over a type that isn't bound; a typed-array export for a renderer), add it in a **separate hand-written C++ file** and compile it *alongside* the generated source, from a small build of your own that lives outside `bindings/`. The binding frameworks accept several registration blocks per module, so your file simply contributes a second one — nothing generated is touched, and regenerating the bindings never clobbers your extensions.
+
+A complete worked example is [`pmp-rosetta/wasm-viz`](https://github.com/rosetta-bindings/pmp-rosetta/tree/main/wasm-viz): a stand-alone WebAssembly build for a three.js viewer that compiles the generated `bindings/wasm-expanded/auto_emscripten.cpp` verbatim plus one hand-written `viz_helpers.cpp`, which adds what the auto-generated binding does not expose — flat vertex/index buffers as JS typed arrays, and a wrapper for an overloaded function the generator skips — in its own `EMSCRIPTEN_BINDINGS` block:
+
+```cpp
+// viz_helpers.cpp — compiled next to the generated auto_emscripten.cpp
+emscripten::val mesh_positions(const pmp::SurfaceMesh &mesh);  // Float32Array
+emscripten::val mesh_triangles(const pmp::SurfaceMesh &mesh);  // Uint32Array
+void triangulate_mesh(pmp::SurfaceMesh &m) { pmp::triangulate(m); } // overload → skipped by the generator
+
+EMSCRIPTEN_BINDINGS(pmp_viz) { // second block; the generated one keeps its own
+    emscripten::function("mesh_positions", &mesh_positions);
+    emscripten::function("mesh_triangles", &mesh_triangles);
+    emscripten::function("triangulate_mesh", &triangulate_mesh);
+}
+```
+
+Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BINDINGS` blocks in one module. Backends with a single module entry point (pybind11's `PYBIND11_MODULE`, N-API's `NODE_API_MODULE`) can't add a second block to the *same* module — there, ship your extras as a small companion module built the same way (it sees the same user headers and links the same library), and import/require both.
+
 ## Examples
 
 | Path                       | What it shows                                       |

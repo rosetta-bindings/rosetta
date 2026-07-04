@@ -242,14 +242,27 @@ endif()
         //
         // WebAssembly does NOT use this (a native shared object cannot enter a wasm
         // module) — the wasm backends link the static archive directly.
+        // True when a user source is a C translation unit (vendored zlib / rply /
+        // libMeshb…), so the generated CMakeLists must enable_language(C).
+        inline bool has_c_user_sources(const GenContext &c) {
+            for (const auto &src : c.user_sources) {
+                if (src.size() > 2 && src.compare(src.size() - 2, 2, ".c") == 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         inline std::string user_lib_block(const GenContext &c) {
-            if (c.user_lib_name.empty() && c.user_sources.empty()) {
+            if (c.user_lib_name.empty() && c.user_sources.empty() &&
+                c.compile_definitions.empty()) {
                 return {};
             }
             std::string s;
-            // Both the user-sources and user-lib parts act on ${ROSETTA_BINDING_TARGET};
-            // establish it once (a suffixed-target backend — <lib>_qt, <lib>_demo —
-            // sets it before this block, so only default when unset).
+            // The user-sources, compile-definitions and user-lib parts all act on
+            // ${ROSETTA_BINDING_TARGET}; establish it once (a suffixed-target
+            // backend — <lib>_qt, <lib>_demo — sets it before this block, so only
+            // default when unset).
             s += "\nif(NOT DEFINED ROSETTA_BINDING_TARGET)\n";
             s += "    set(ROSETTA_BINDING_TARGET " + c.lib + ")\n";
             s += "endif()\n";
@@ -257,10 +270,26 @@ endif()
             // User sources (manifest "user_sources"): the bound headers declare the
             // API; compile these translation units holding the bodies into the binding.
             if (!c.user_sources.empty()) {
+                if (has_c_user_sources(c)) {
+                    s += "# Some user sources are C (vendored zlib / rply / libMeshb…).\n";
+                    s += "enable_language(C)\n";
+                }
                 s += "# User sources (manifest \"user_sources\") compiled into the binding.\n";
                 s += "target_sources(${ROSETTA_BINDING_TARGET} PRIVATE\n";
                 for (const auto &src : c.user_sources) {
                     s += "    " + src + "\n";
+                }
+                s += ")\n";
+            }
+
+            // Preprocessor definitions (manifest "compile_definitions") applied to
+            // the binding target — they reach the bound headers and user_sources
+            // alike (e.g. GEOGRAM_USE_BUILTIN_DEPS, GEOGRAM_WITH_HLBFGS).
+            if (!c.compile_definitions.empty()) {
+                s += "# Definitions (manifest \"compile_definitions\") for the binding.\n";
+                s += "target_compile_definitions(${ROSETTA_BINDING_TARGET} PRIVATE\n";
+                for (const auto &def : c.compile_definitions) {
+                    s += "    " + def + "\n";
                 }
                 s += ")\n";
             }
@@ -328,6 +357,24 @@ endif()
             for (const auto &src : c.user_sources) {
                 user_sources += "\n    " + src;
             }
+            // {{USER_ENABLE_C}} — "enable_language(C)" line for the wasm templates
+            // (placed right before their add_executable; the native templates get
+            // it via {{USER_LIB_BLOCK}} instead). Empty when no .c user source.
+            const std::string user_enable_c =
+                has_c_user_sources(c) ? "enable_language(C)\n\n" : "";
+            // {{USER_DEFS_BLOCK}} — target_compile_definitions for the wasm
+            // templates, whose fixed-name target doesn't go through
+            // {{USER_LIB_BLOCK}}/${ROSETTA_BINDING_TARGET}. Empty when no defs.
+            std::string user_defs_block;
+            if (!c.compile_definitions.empty()) {
+                user_defs_block =
+                    "\n\n# Definitions (manifest \"compile_definitions\") for the binding.\n"
+                    "target_compile_definitions(" + c.lib + " PRIVATE";
+                for (const auto &def : c.compile_definitions) {
+                    user_defs_block += "\n    " + def;
+                }
+                user_defs_block += ")";
+            }
             return subst(tmpl, {{"LIB", c.lib},
                                 {"HEADER_BLOCK", CMAKE_HEADER},
                                 {"CPP26_ROOT", root},
@@ -341,6 +388,8 @@ endif()
                                 {"USER_LIB_DIR", c.user_lib_dir},
                                 {"USER_LIB_BLOCK", user_lib_block(c)},
                                 {"USER_SOURCES", user_sources},
+                                {"USER_ENABLE_C", user_enable_c},
+                                {"USER_DEFS_BLOCK", user_defs_block},
                                 {"REFLECTION_FLAGS", std::string(REFLECTION_FLAGS)},
                                 {"STDLIB_LINK", std::string(STDLIB_LINK)}});
         }
@@ -1008,7 +1057,8 @@ namespace rosetta {
                                         user_include, opt.rosetta_include.string(),
                                         opt.cpp26_root, opt.cpp26_cxx, opt.cpp26_cc,
                                         opt.cpp26_lib, opt.qt_dir, opt.user_lib_name,
-                                        opt.user_lib_dir, opt.user_lib_link, user_sources});
+                                        opt.user_lib_dir, opt.user_lib_link, user_sources,
+                                        opt.compile_definitions});
         }
     }
 

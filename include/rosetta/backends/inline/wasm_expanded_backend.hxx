@@ -27,11 +27,11 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable({{LIB}} auto_emscripten.cpp{{USER_SOURCES}})
+{{USER_ENABLE_C}}add_executable({{LIB}} auto_emscripten.cpp{{USER_SOURCES}})
 
 # Only the user's headers — rosetta's include dir is deliberately absent.
 target_include_directories({{LIB}} PRIVATE
-    {{USER_INCLUDE}})
+    {{USER_INCLUDE}}){{USER_DEFS_BLOCK}}
 
 # Optional external user library (manifest "user_lib"). WebAssembly cannot link a
 # native .dylib/.so and has no rpath, so the manifest's `link` choice is overridden

@@ -49,6 +49,11 @@
 //                                                   //   preferred form, with fallback to
 //                                                   //   whichever is built. wasm is always
 //                                                   //   static (no native .so in wasm).
+//     "compile_definitions": [                      // optional: preprocessor definitions
+//       "GEOGRAM_USE_BUILTIN_DEPS",                 //   ("NAME" or "NAME=VALUE") applied to
+//       "GEOGRAM_WITH_HLBFGS"                       //   the driver AND every compiled
+//     ],                                            //   binding target (they reach the bound
+//                                                   //   headers and user_sources alike).
 //     "targets": [                                  // shared by every class
 //       { "lang": "python", "name": "pygeom" },     // per-target module name
 //       "node"                                      // shorthand: uses module_name
@@ -130,7 +135,8 @@ struct Manifest {
     std::vector<ClassEntry>    classes;
     std::vector<FunctionEntry> functions; // free functions to expose
     std::vector<std::string>   plugins;   // extra .cpp sources (absolute) for the driver
-    std::vector<std::string>   user_sources; // user .cpp sources (absolute) compiled into the bindings
+    std::vector<std::string>   user_sources; // user .cpp/.c sources (absolute) compiled into the bindings
+    std::vector<std::string>   compile_definitions; // "NAME"/"NAME=VALUE" defs for driver + bindings
     std::string                cpp26_root; // optional C++26/P2996 toolchain root (verbatim)
     std::string                cpp26_cxx;  // optional C++ compiler (name or path)
     std::string                cpp26_cc;   // optional C compiler (name or path)
@@ -291,6 +297,28 @@ static Manifest load(const fs::path &manifest_path) {
             }
         }
         m.user_sources = std::move(deduped);
+    }
+
+    // `compile_definitions` is optional: preprocessor definitions ("NAME" or
+    // "NAME=VALUE") applied to the driver and to every compiled binding target,
+    // so they reach the bound headers and the user_sources alike (e.g. a
+    // third-party lib's configuration switches: GEOGRAM_USE_BUILTIN_DEPS,
+    // GEOGRAM_WITH_HLBFGS). A single string is accepted as a one-element list.
+    if (j.contains("compile_definitions")) {
+        const auto &cd  = j.at("compile_definitions");
+        auto        add = [&](const std::string &d) {
+            if (d.empty()) {
+                throw std::runtime_error("\"compile_definitions\" entries must not be empty");
+            }
+            m.compile_definitions.push_back(d);
+        };
+        if (cd.is_array()) {
+            for (const auto &e : cd) {
+                add(e.get<std::string>());
+            }
+        } else {
+            add(cd.get<std::string>());
+        }
     }
 
     // `cpp26_root` is optional: the path to the C++26 / P2996 reflection
@@ -492,6 +520,15 @@ static std::string render_project_gen_cpp(const Manifest &m) {
         }
         out << "    };\n";
     }
+    // Preprocessor definitions applied to each binding target (manifest
+    // "compile_definitions").
+    if (!m.compile_definitions.empty()) {
+        out << "    opt.compile_definitions = {\n";
+        for (const auto &def : m.compile_definitions) {
+            out << "        \"" << def << "\",\n";
+        }
+        out << "    };\n";
+    }
     out << "    opt.targets         = {\n";
     for (const auto &t : m.targets) {
         out << "        {\"" << t.lang << "\", \"" << t.name << "\"},\n";
@@ -559,8 +596,19 @@ static std::string render_cmakelists(const Manifest &m) {
     for (const auto &inc : m.user_include) {
         out << "    " << inc.string() << "\n";
     }
-    out << "    " << m.rosetta_include.string() << ")\n\n"
-        << "target_compile_options(" << target << " PRIVATE\n"
+    out << "    " << m.rosetta_include.string() << ")\n\n";
+
+    // The driver includes the bound headers (the reflection walk), so it must
+    // see the same preprocessor definitions the bindings will be built with.
+    if (!m.compile_definitions.empty()) {
+        out << "target_compile_definitions(" << target << " PRIVATE\n";
+        for (std::size_t i = 0; i < m.compile_definitions.size(); ++i) {
+            out << "    " << m.compile_definitions[i]
+                << (i + 1 < m.compile_definitions.size() ? "\n" : ")\n\n");
+        }
+    }
+
+    out << "target_compile_options(" << target << " PRIVATE\n"
         << "    -freflection -freflection-latest -fexperimental-library "
            "-fannotation-attributes)\n\n"
         << "target_link_options(" << target << " PRIVATE\n"
@@ -608,7 +656,8 @@ static std::string render_cmakelists(const Manifest &m) {
 
 // A fully-commented example manifest, emitted by `--init`. It exercises every
 // commonly-used field — cpp26_* toolchain overrides, a multi-entry user_include,
-// rosetta_include, generator_name / module_name, user_sources, a representative
+// rosetta_include, generator_name / module_name, user_sources,
+// compile_definitions, a representative
 // spread of targets, and one example class and one example function — so the
 // user can delete what they don't need rather than hunt the docs for what exists.
 static std::string render_example_manifest() {
@@ -633,10 +682,15 @@ static std::string render_example_manifest() {
     "generator_name": "mylib",
     "module_name": "mylib",
 
-    "//user_sources": "Optional .cpp files compiled straight into every binding target. Use when the bound headers only DECLARE the API and the bodies live in these sources (rather than a pre-built library). Entries may be shell globs, e.g. \"./src/algorithms/*.cpp\".",
+    "//user_sources": "Optional .cpp (or .c) files compiled straight into every binding target. Use when the bound headers only DECLARE the API and the bodies live in these sources (rather than a pre-built library). Entries may be shell globs, e.g. \"./src/algorithms/*.cpp\". C sources make the generated CMakeLists enable_language(C) automatically.",
     "user_sources": [
         "./src/widget.cpp",
         "./src/algorithms/*.cpp"
+    ],
+
+    "//compile_definitions": "Optional preprocessor definitions (\"NAME\" or \"NAME=VALUE\") applied to the driver and every compiled binding target — e.g. a third-party lib's configuration switches such as GEOGRAM_USE_BUILTIN_DEPS or GEOGRAM_WITH_HLBFGS. Omit if unused.",
+    "compile_definitions": [
+        "MYLIB_SOME_SWITCH"
     ],
 
     "//targets": "A target is a bare string (\"python\", uses module_name) or {\"lang\": ..., \"name\": ...}. *-expanded backends fully expand the bindings so they build with a stock compiler.",

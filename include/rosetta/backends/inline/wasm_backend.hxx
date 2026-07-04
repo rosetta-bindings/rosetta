@@ -32,11 +32,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
-add_executable({{LIB}} auto_emscripten.cpp{{USER_SOURCES}})
+{{USER_ENABLE_C}}add_executable({{LIB}} auto_emscripten.cpp{{USER_SOURCES}})
 
 target_include_directories({{LIB}} PRIVATE
     {{USER_INCLUDE}}
-    {{ROSETTA_INCLUDE}})
+    {{ROSETTA_INCLUDE}}){{USER_DEFS_BLOCK}}
 
 # Optional external user library (manifest "user_lib"). WebAssembly cannot link a
 # native .dylib/.so and has no rpath, so the manifest's `link` choice is overridden

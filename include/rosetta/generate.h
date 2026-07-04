@@ -305,7 +305,16 @@ namespace rosetta {
         // you want built into the binding rather than linked from a pre-built
         // library. Each compiled backend adds them to its binding target via
         // target_sources(); the text-only backends ignore them. Absolute paths.
+        // Entries may be C sources (.c) — the generated CMakeLists then calls
+        // enable_language(C) so they build (vendored zlib / rply / libMeshb…).
         std::vector<std::filesystem::path> user_sources;
+
+        // Optional preprocessor definitions applied to every compiled binding
+        // target (and picked up by user_sources), each "NAME" or "NAME=VALUE" —
+        // e.g. {"GEOGRAM_USE_BUILTIN_DEPS", "GEOGRAM_WITH_HLBFGS"}. Emitted as
+        // target_compile_definitions(... PRIVATE ...); text-only backends
+        // ignore them.
+        std::vector<std::string> compile_definitions;
     };
 
     /**
@@ -327,7 +336,8 @@ namespace rosetta {
         std::string              user_lib_name;   // external lib to link bindings against (-l<name>); empty ⇒ none
         std::string              user_lib_dir;    // directory holding that lib (-L / rpath)
         std::string              user_lib_link;   // "shared" (default) | "static"; wasm always static
-        std::vector<std::string> user_sources;    // user .cpp files compiled into the binding target (abs paths)
+        std::vector<std::string> user_sources;    // user .cpp/.c files compiled into the binding target (abs paths)
+        std::vector<std::string> compile_definitions; // "NAME"/"NAME=VALUE" defs for the binding target
     };
 
     /**

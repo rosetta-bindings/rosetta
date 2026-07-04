@@ -73,7 +73,8 @@ cmake --build path/to/generated/build
 | `classes` | ✅ | — | The classes / structs / enums to bind. See [Classes](#classes). |
 | `functions` | — | `[]` | Free (non-member) functions to bind. See [Functions](#functions). |
 | `user_lib` | — | — | Link the generated bindings against a pre-built external library. See [Linking an external library](#linking-an-external-library-user_lib). |
-| `user_sources` | — | `[]` | List of user `.cpp` files compiled directly into every generated binding target. See [Compiling user sources](#compiling-user-sources-user_sources). |
+| `user_sources` | — | `[]` | List of user `.cpp` (or `.c`) files compiled directly into every generated binding target. See [Compiling user sources](#compiling-user-sources-user_sources). |
+| `compile_definitions` | — | `[]` | Preprocessor definitions (`"NAME"` or `"NAME=VALUE"`) applied to the generator driver and every compiled binding target. See [Preprocessor definitions](#preprocessor-definitions-compile_definitions). |
 | `plugins` | — | `[]` | Extra `.cpp` sources to compile into the generator driver (e.g. a custom backend). Paths relative to the manifest. |
 | `qt_dir` | — | a built-in path | Qt 6 install prefix used by the `qt` / `qml` (and `-expanded`) backends. e.g. `"$ENV{HOME}/Qt/6.8.3/macos"`. |
 | `cpp26_root` | — | `$ENV{HOME}/devs/c++/clang-p2996/build` | Root of the C++26 / P2996 reflection toolchain used by the *thin* backends. Moves `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` together. |
@@ -280,6 +281,51 @@ removing matching files**.
 `user_sources` and `user_lib` are independent — use either, or both. The
 text-only backends (`markdown`, `html`, `json`, `typescript`, `openapi`,
 `paraview`) compile nothing and ignore it.
+
+Entries may also be **C sources** (`.c`) — e.g. a third-party library's
+vendored dependencies (zlib, rply, libMeshb, OpenNL…). When any `.c` file is
+listed, the generated CMakeLists calls `enable_language(C)` automatically so
+they compile alongside the C++ binding:
+
+```json
+"user_sources": [
+  "./geogram/src/lib/geogram/mesh/*.cpp",
+  "./geogram/src/lib/geogram/third_party/rply/*.c",
+  "./geogram/src/lib/geogram/third_party/zlib/*.c"
+]
+```
+
+---
+
+## Preprocessor definitions (`compile_definitions`)
+
+Use `compile_definitions` to pass preprocessor switches to the build — most
+commonly a third-party library's configuration macros. Each entry is `"NAME"`
+or `"NAME=VALUE"`:
+
+```json
+"compile_definitions": [
+  "GEOGRAM_USE_BUILTIN_DEPS",
+  "GEOGRAM_WITH_HLBFGS"
+]
+```
+
+(This geogram example selects the vendored libMeshb / rply / zlib over system
+libraries, and compiles the HLBFGS optimizer in — required by the Newton
+iterations of CVT remeshing.)
+
+The definitions are emitted as `target_compile_definitions(... PRIVATE ...)`
+in **two** places, so the whole pipeline sees a consistent configuration:
+
+- the **generator driver** — it includes the bound headers for the reflection
+  walk, which must see the same preprocessor state the bindings will be built
+  with;
+- **every compiled binding target** — where they reach the bound headers and
+  the [`user_sources`](#compiling-user-sources-user_sources) alike.
+
+A single string is accepted as a one-element list. The text-only backends
+(`markdown`, `html`, `json`, `typescript`, `openapi`, `paraview`) compile
+nothing and ignore it.
 
 ---
 
