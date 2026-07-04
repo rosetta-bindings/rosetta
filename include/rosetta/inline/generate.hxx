@@ -255,7 +255,7 @@ endif()
 
         inline std::string user_lib_block(const GenContext &c) {
             if (c.user_lib_name.empty() && c.user_sources.empty() &&
-                c.compile_definitions.empty()) {
+                c.compile_definitions.empty() && c.link_options.empty()) {
                 return {};
             }
             std::string s;
@@ -290,6 +290,17 @@ endif()
                 s += "target_compile_definitions(${ROSETTA_BINDING_TARGET} PRIVATE\n";
                 for (const auto &def : c.compile_definitions) {
                     s += "    " + def + "\n";
+                }
+                s += ")\n";
+            }
+
+            // Extra linker flags for this target (manifest target "link_options") —
+            // e.g. "-lnodefs.js" on a wasm target whose bound code mounts NODEFS.
+            if (!c.link_options.empty()) {
+                s += "# Linker flags (manifest target \"link_options\") for the binding.\n";
+                s += "target_link_options(${ROSETTA_BINDING_TARGET} PRIVATE\n";
+                for (const auto &opt : c.link_options) {
+                    s += "    \"" + opt + "\"\n";
                 }
                 s += ")\n";
             }
@@ -362,16 +373,26 @@ endif()
             // it via {{USER_LIB_BLOCK}} instead). Empty when no .c user source.
             const std::string user_enable_c =
                 has_c_user_sources(c) ? "enable_language(C)\n\n" : "";
-            // {{USER_DEFS_BLOCK}} — target_compile_definitions for the wasm
-            // templates, whose fixed-name target doesn't go through
-            // {{USER_LIB_BLOCK}}/${ROSETTA_BINDING_TARGET}. Empty when no defs.
+            // {{USER_DEFS_BLOCK}} — target_compile_definitions (and per-target
+            // target_link_options) for the wasm templates, whose fixed-name
+            // target doesn't go through {{USER_LIB_BLOCK}}/
+            // ${ROSETTA_BINDING_TARGET}. Empty when no defs and no link flags.
             std::string user_defs_block;
             if (!c.compile_definitions.empty()) {
-                user_defs_block =
+                user_defs_block +=
                     "\n\n# Definitions (manifest \"compile_definitions\") for the binding.\n"
                     "target_compile_definitions(" + c.lib + " PRIVATE";
                 for (const auto &def : c.compile_definitions) {
                     user_defs_block += "\n    " + def;
+                }
+                user_defs_block += ")";
+            }
+            if (!c.link_options.empty()) {
+                user_defs_block +=
+                    "\n\n# Linker flags (manifest target \"link_options\") for the binding.\n"
+                    "target_link_options(" + c.lib + " PRIVATE";
+                for (const auto &opt : c.link_options) {
+                    user_defs_block += "\n    \"" + opt + "\"";
                 }
                 user_defs_block += ")";
             }
@@ -1058,7 +1079,7 @@ namespace rosetta {
                                         opt.cpp26_root, opt.cpp26_cxx, opt.cpp26_cc,
                                         opt.cpp26_lib, opt.qt_dir, opt.user_lib_name,
                                         opt.user_lib_dir, opt.user_lib_link, user_sources,
-                                        opt.compile_definitions});
+                                        opt.compile_definitions, t.link_options});
         }
     }
 

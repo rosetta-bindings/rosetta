@@ -182,6 +182,20 @@ See [FREE_FUNCTIONS](FREE_FUNCTIONS.md) for details.
 `name` is optional in the object form too (defaults to `module_name`). One
 generator emits a **single combined module per target** exposing every class.
 
+The object form also accepts **`link_options`** — extra linker flags applied
+to *this target only*, emitted as `target_link_options(... PRIVATE ...)` in
+the generated project. Per-target (unlike `compile_definitions`) because link
+flags are toolchain-specific — e.g. geogram's `GEO::initialize()` mounts the
+host filesystem with NODEFS under Node, which needs emscripten's nodefs
+library on the **wasm** link line and would break a native link:
+
+```json
+"targets": [
+  { "lang": "python-expanded" },
+  { "lang": "wasm-expanded", "link_options": ["-lnodefs.js"] }
+]
+```
+
 ### Available `lang` values
 
 Thin (reflection re-runs at the target's compile time — needs the C++26

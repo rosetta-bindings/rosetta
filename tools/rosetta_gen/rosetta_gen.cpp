@@ -50,14 +50,16 @@
 //                                                   //   whichever is built. wasm is always
 //                                                   //   static (no native .so in wasm).
 //     "compile_definitions": [                      // optional: preprocessor definitions
-//       "GEOGRAM_USE_BUILTIN_DEPS",                 //   ("NAME" or "NAME=VALUE") applied to
-//       "GEOGRAM_WITH_HLBFGS"                       //   the driver AND every compiled
+//       "XXX_USE_BUILTIN_DEPS",                 //   ("NAME" or "NAME=VALUE") applied to
+//       "XXX_WITH_HLBFGS"                       //   the driver AND every compiled
 //     ],                                            //   binding target (they reach the bound
 //                                                   //   headers and user_sources alike).
 //     "targets": [                                  // shared by every class
 //       { "lang": "python", "name": "pygeom" },     // per-target module name
-//       "node"                                      // shorthand: uses module_name
-//     ],
+//       { "lang": "wasm-expanded",                  // optional per-target linker
+//         "link_options": ["-lnodefs.js"] },        //   flags (only THIS target's
+//       "node"                                      //   link line — flags are
+//     ],                                            //   toolchain-specific)
 //     "classes": [
 //       { "name": "Model", "header": "Model.h",
 //         "annotations": "Model.ann.json" },        // optional out-of-line annotations
@@ -125,6 +127,12 @@ struct FunctionEntry {
 struct TargetEntry {
     std::string lang; // "python", "node", "rest", "web"
     std::string name; // module / library name for this backend
+
+    // Optional extra linker flags for THIS target only ("link_options").
+    // Per-target — unlike compile_definitions — because link flags are
+    // toolchain-specific: e.g. "-lnodefs.js" only makes sense on a wasm
+    // target and would break a native link.
+    std::vector<std::string> link_options;
 };
 
 struct Manifest {
@@ -204,7 +212,8 @@ static Manifest load(const fs::path &manifest_path) {
         j.contains("module_name") ? j.at("module_name").get<std::string>() : m.generator_name;
 
     // A target is either a bare string ("node") — using module_name — or an
-    // object { "lang": ..., "name": ... } overriding the module name.
+    // object { "lang": ..., "name": ..., "link_options": [...] } overriding
+    // the module name and optionally adding per-target linker flags.
     for (const auto &t : j.at("targets")) {
         TargetEntry e;
         if (t.is_string()) {
@@ -213,6 +222,17 @@ static Manifest load(const fs::path &manifest_path) {
         } else {
             e.lang = t.at("lang").get<std::string>();
             e.name = t.contains("name") ? t.at("name").get<std::string>() : module_name;
+            // Optional per-target linker flags (see TargetEntry::link_options).
+            if (t.contains("link_options")) {
+                for (const auto &o : t.at("link_options")) {
+                    std::string flag = o.get<std::string>();
+                    if (flag.empty()) {
+                        throw std::runtime_error(
+                            "\"link_options\" entries must not be empty");
+                    }
+                    e.link_options.push_back(std::move(flag));
+                }
+            }
         }
         m.targets.push_back(std::move(e));
     }
@@ -302,8 +322,8 @@ static Manifest load(const fs::path &manifest_path) {
     // `compile_definitions` is optional: preprocessor definitions ("NAME" or
     // "NAME=VALUE") applied to the driver and to every compiled binding target,
     // so they reach the bound headers and the user_sources alike (e.g. a
-    // third-party lib's configuration switches: GEOGRAM_USE_BUILTIN_DEPS,
-    // GEOGRAM_WITH_HLBFGS). A single string is accepted as a one-element list.
+    // third-party lib's configuration switches: XXX_USE_BUILTIN_DEPS,
+    // XXX_WITH_HLBFGS). A single string is accepted as a one-element list.
     if (j.contains("compile_definitions")) {
         const auto &cd  = j.at("compile_definitions");
         auto        add = [&](const std::string &d) {
@@ -531,7 +551,16 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     }
     out << "    opt.targets         = {\n";
     for (const auto &t : m.targets) {
-        out << "        {\"" << t.lang << "\", \"" << t.name << "\"},\n";
+        out << "        {\"" << t.lang << "\", \"" << t.name << "\"";
+        // Per-target linker flags (manifest target "link_options").
+        if (!t.link_options.empty()) {
+            out << ", {";
+            for (std::size_t i = 0; i < t.link_options.size(); ++i) {
+                out << (i ? ", " : "") << "\"" << t.link_options[i] << "\"";
+            }
+            out << "}";
+        }
+        out << "},\n";
     }
     out << "    };\n";
     if (!m.functions.empty()) {
@@ -688,7 +717,7 @@ static std::string render_example_manifest() {
         "./src/algorithms/*.cpp"
     ],
 
-    "//compile_definitions": "Optional preprocessor definitions (\"NAME\" or \"NAME=VALUE\") applied to the driver and every compiled binding target — e.g. a third-party lib's configuration switches such as GEOGRAM_USE_BUILTIN_DEPS or GEOGRAM_WITH_HLBFGS. Omit if unused.",
+    "//compile_definitions": "Optional preprocessor definitions (\"NAME\" or \"NAME=VALUE\") applied to the driver and every compiled binding target — e.g. a third-party lib's configuration switches such as XXX_USE_BUILTIN_DEPS or XXX_WITH_HLBFGS. Omit if unused.",
     "compile_definitions": [
         "MYLIB_SOME_SWITCH"
     ],

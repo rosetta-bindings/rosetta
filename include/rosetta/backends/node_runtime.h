@@ -130,7 +130,14 @@ namespace rosetta {
         }
     }
 
-    template <typename T> T from_napi(const Napi::Value &v) {
+    // Returns by value for scalars / strings / vectors / enums, but by
+    // REFERENCE for wrapped class types: the C++ object lives inside the JS
+    // object's Wrap, so handing out `T&` (a) lets a bound function mutate the
+    // caller-visible object through `T&` / out-parameters, and (b) avoids
+    // copying types whose copy is shallow or deleted (e.g. pImpl facades —
+    // a by-value return would copy the pointer and dangle it when the
+    // temporary is destroyed).
+    template <typename T> decltype(auto) from_napi(const Napi::Value &v) {
         if constexpr (std::is_same_v<T, std::string>) {
             return v.As<Napi::String>().Utf8Value();
         } else if constexpr (std::is_same_v<T, bool>) {
@@ -152,7 +159,7 @@ namespace rosetta {
             return static_cast<T>(
                 static_cast<std::underlying_type_t<T>>(v.As<Napi::Number>().Int64Value()));
         } else if constexpr (std::is_class_v<T>) {
-            return Wrap<T>::Unwrap(v.As<Napi::Object>())->inner;
+            return static_cast<T &>(Wrap<T>::Unwrap(v.As<Napi::Object>())->inner);
         } else {
             static_assert(sizeof(T) == 0, "from_napi: unsupported type");
         }

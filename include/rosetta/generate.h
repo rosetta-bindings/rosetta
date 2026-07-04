@@ -68,6 +68,13 @@ namespace rosetta {
     struct TargetSpec {
         std::string lang; // "python", "node", "rest", "web"
         std::string name; // module / library name for this backend
+
+        // Extra linker flags for THIS target only (manifest target
+        // "link_options"). Per-target — unlike compile_definitions — because
+        // link flags are inherently toolchain-specific: e.g. "-lnodefs.js"
+        // is only meaningful for the wasm backends and would break a native
+        // link.
+        std::vector<std::string> link_options;
     };
 
     /**
@@ -338,6 +345,7 @@ namespace rosetta {
         std::string              user_lib_link;   // "shared" (default) | "static"; wasm always static
         std::vector<std::string> user_sources;    // user .cpp/.c files compiled into the binding target (abs paths)
         std::vector<std::string> compile_definitions; // "NAME"/"NAME=VALUE" defs for the binding target
+        std::vector<std::string> link_options;    // extra linker flags for THIS target (TargetSpec::link_options)
     };
 
     /**
