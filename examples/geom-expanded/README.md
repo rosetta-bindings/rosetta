@@ -2,7 +2,7 @@
 
 A variant of [`../geom-lib`](../geom-lib) whose generated bindings **build with a
 stock toolchain** — no clang-p2996, no reflection, (almost) no rosetta headers on
-the machine that compiles the binding. It ships seven such targets:
+the machine that compiles the binding. It ships nine such targets:
 
 - **`python-expanded`** → a pybind11 module that builds with a stock **C++17** compiler.
 - **`nanobind-expanded`** → a [nanobind](https://github.com/wjakob/nanobind) module
@@ -21,6 +21,15 @@ the machine that compiles the binding. It ships seven such targets:
   shim registers every field/method/constructor by *member pointer*, so the runtime
   deduces the marshalled types — no reflection. Out-of-line `range`/`readonly`/`doc`
   flow straight in (e.g. `Triangle.a` rejects an out-of-range value at run time).
+- **`java-expanded`** → the same C-ABI shim (stock **C++20**) plus handle-backed
+  Java wrappers reaching it through the FFM API (`java.lang.foreign`).
+- **`lua-expanded`** → a [sol2](https://github.com/ThePhD/sol2) module (stock
+  **C++17** + Lua 5.1–5.4 / LuaJIT; sol2 fetched automatically) built as a plain
+  `require`-able C module (`luaopen_luageom` in `luageom.so`). Vector parameters
+  accept plain Lua tables (a second `sol::nested` overload is generated beside
+  the exact one), a Lua function converts natively into a `std::function`
+  callback parameter, and the out-of-line `range` on `Triangle.a/b/c` validates
+  at run time.
 
 Two things make the stock-toolchain targets possible:
 
@@ -118,6 +127,23 @@ System.Console.WriteLine(t.kind);   // enum, marshalled as its integer value
 At run time the .NET loader must find `libcsgeom.*` (e.g.
 `DYLD_LIBRARY_PATH=bindings/csharp-expanded/build` on macOS, `LD_LIBRARY_PATH=…` on Linux).
 
+### 3g. Lua — sol2 module (stock C++17 + Lua 5.1–5.4 / LuaJIT)
+```sh
+# sol2 is fetched automatically at configure time; on macOS `brew install lua@5.4`
+# (sol2 does not support Lua 5.5 yet — the generated CMake prefers a 5.4 install)
+cmake -S bindings/lua-expanded -B bindings/lua-expanded/build
+cmake --build bindings/lua-expanded/build -j
+#   -> bindings/lua-expanded/luageom.so — a require-able C module
+```
+
+```lua
+local geom = require("luageom")
+local s = geom.Surface.new({0,0,0, 1,0,0, 0,1,0}, {0,1,2})  -- tables in
+s:transform(function(p) return geom.Point.new(p.x, p.z, p.y) end) -- Lua fn -> std::function
+local t = geom.Triangle.new(1, 2, 3)
+t.a = -5                              -- error: out-of-line range, enforced natively
+```
+
 ## Run the examples
 
 Each binding has a matching, self-contained script:
@@ -132,6 +158,10 @@ node    example_wasm.js       # wasm-expanded      (geom — embind, async load 
 python3 -m http.server 8000   # wasm-expanded running in a browser
 
 DYLD_LIBRARY_PATH=bindings/csharp-expanded/build dotnet run --project run # csharp-expanded
+
+# lua-expanded (luageom — tables, callbacks, range). Use the SAME Lua version
+# the module was built against (Homebrew's plain `lua` is 5.5 — unsupported):
+/opt/homebrew/opt/lua@5.4/bin/lua example_lua.lua
 ```
 
 [`example_csharp.cs`](example_csharp.cs) covers the **csharp-expanded** target

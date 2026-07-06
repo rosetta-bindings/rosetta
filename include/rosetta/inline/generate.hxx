@@ -995,6 +995,7 @@ endif()
 #include <rosetta/backends/python_expanded_backend.h>
 #include <rosetta/backends/csharp_expanded_backend.h>
 #include <rosetta/backends/java_expanded_backend.h>
+#include <rosetta/backends/lua_expanded_backend.h>
 #include <rosetta/backends/nanobind_expanded_backend.h>
 #include <rosetta/backends/node_expanded_backend.h>
 #include <rosetta/backends/qt_expanded_backend.h>
@@ -1020,6 +1021,7 @@ namespace rosetta {
             m["qt-expanded"]     = std::make_shared<gen_detail::QtExpandedBackend>();
             m["qml-expanded"]    = std::make_shared<gen_detail::QmlExpandedBackend>();
             m["julia"]           = std::make_shared<gen_detail::JuliaBackend>();
+            m["lua-expanded"]    = std::make_shared<gen_detail::LuaExpandedBackend>();
             m["rest"]            = std::make_shared<gen_detail::RestBackend>();
             m["wasm"]            = std::make_shared<gen_detail::WasmBackend>();
             m["wasm-expanded"]   = std::make_shared<gen_detail::WasmExpandedBackend>();

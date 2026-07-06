@@ -20,7 +20,7 @@
   <img src="https://img.shields.io/badge/Clang%20%7C%20MSVC-tracking-lightgrey.svg" alt="Clang | MSVC: tracking">
 </p>
 
-A C++26 reflection playground with **24 generator backends** — Python (pybind11 / nanobind), Node, WebAssembly, Qt, QML, REST, Julia, OpenAPI, JSON, TypeScript, C#, Java, Markdown, HTML, ParaView... bindings for **your existing classes — without modifying them**. Point rosetta at a header via a small [manifest.json](./docs/MANIFEST.md), run one tool, get per-language binding projects out.
+A C++26 reflection playground with **25 generator backends** — Python (pybind11 / nanobind), Node, WebAssembly, Qt, QML, REST, Julia, Lua, OpenAPI, JSON, TypeScript, C#, Java, Markdown, HTML, ParaView... bindings for **your existing classes — without modifying them**. Point rosetta at a header via a small [manifest.json](./docs/MANIFEST.md), run one tool, get per-language binding projects out.
 
 > **Your target compiler doesn't support reflection?** Generate the expanded binding once on a Linux or macOS host with a C++26 / P2996 compiler — e.g. the [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) fork — then ship and build the generated sources anywhere with a stock toolchain (plain Clang / GCC / MSVC, or a stock emsdk for WebAssembly). No reflection is needed on the target (see the **expanded** backends below).
 
@@ -91,14 +91,15 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 | 22 | **C# (expanded)** — same wrapper (stock C++20) | ✅ | ✅ |
 | 23 | **Java** — native C-ABI + handle-backed FFM wrappers | ✅ | — |
 | 24 | **Java (expanded)** — same wrapper (stock C++20) | ✅ | ✅ |
+| 25 | **Lua (expanded)** — fully-expanded sol2 module, `require`-able (stock C++17) | ✅ | ✅ |
 
 > **C++26** = builds against the reflection toolchain (⚠️ = with caveats — see notes below). **C++20** = the generated target also builds on a stock, pre-reflection toolchain (no reflection needed on the target); text-only outputs qualify trivially. The generator itself always needs C++26.
 >
-> Notes: **Julia** builds & runs but skips `std::vector` (fork libc++ gap); **WebAssembly** (thin) needs a reflection-aware emsdk, while **wasm-expanded** builds with a stock emsdk (`std::vector` via `register_vector`); the **expanded** Qt/QML targets need Qt 6 but no moc on the generated code.
+> Notes: **Julia** builds & runs but skips `std::vector` (fork libc++ gap); **WebAssembly** (thin) needs a reflection-aware emsdk, while **wasm-expanded** builds with a stock emsdk (`std::vector` via `register_vector`); the **expanded** Qt/QML targets need Qt 6 but no moc on the generated code; **lua-expanded** needs Lua 5.1–5.4 or LuaJIT (sol2 does not support Lua 5.5 yet) — sol2 itself is fetched automatically at configure time.
 
 > New backends register without touching the generator, thanks to the visitor pattern — see [EXTENDING_BACKEND](docs/EXTENDING_BACKEND.md).
 
-**Expanded (reflection-free) targets.** The default `python` / `nanobind` / `node` / `wasm` / `qt` / `qml` / `csharp` / `java` backends emit a *thin* binding that re-runs the reflection walk at the target's compile time, so building the binding also needs the C++26 toolchain. The `python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded`, `qt-expanded`, `qml-expanded`, `csharp-expanded` and `java-expanded` targets instead **fully expand** every field, method, constructor and enumerator into explicit pybind11 / nanobind / N-API / embind / Qt / member-pointer calls. Reflection runs once, on the generation host; the generated binding is ordinary C++ that builds with a stock compiler — a plain C++17/20 compiler, a stock emsdk, or stock Qt 6 (the host still needs C++26 to *run the generator*, the target does not). This pairs naturally with [out-of-line annotations](docs/OUT_OF_LINE_ANNOTATIONS.md) so the bound headers stay stock C++ too — see [`examples/geom-expanded`](examples/geom-expanded).
+**Expanded (reflection-free) targets.** The default `python` / `nanobind` / `node` / `wasm` / `qt` / `qml` / `csharp` / `java` backends emit a *thin* binding that re-runs the reflection walk at the target's compile time, so building the binding also needs the C++26 toolchain. The `python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded`, `qt-expanded`, `qml-expanded`, `csharp-expanded`, `java-expanded` and `lua-expanded` targets instead **fully expand** every field, method, constructor and enumerator into explicit pybind11 / nanobind / N-API / embind / Qt / sol2 / member-pointer calls. Reflection runs once, on the generation host; the generated binding is ordinary C++ that builds with a stock compiler — a plain C++17/20 compiler, a stock emsdk, or stock Qt 6 (the host still needs C++26 to *run the generator*, the target does not). This pairs naturally with [out-of-line annotations](docs/OUT_OF_LINE_ANNOTATIONS.md) so the bound headers stay stock C++ too — see [`examples/geom-expanded`](examples/geom-expanded).
 
 ## Mini-MOC — Qt signals / slots / properties, without moc
 
@@ -266,7 +267,7 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 | `examples/manifest`        | Manifest-driven generation for `Person` (no class modification) |
 | `examples/annotate-manifest`| Out-of-line annotations from an external JSON file, wired by the manifest's `annotations` field ([details](docs/OUT_OF_LINE_ANNOTATIONS.md)) |
 | `examples/geom-lib`        | Manifest-driven bindings for a small geometry library (nested types, vectors) |
-| `examples/geom-expanded`   | Reflection-free `python-expanded` / `nanobind-expanded` / `node-expanded` / `wasm-expanded` / `qt-expanded` / `qml-expanded` bindings (stock compiler, stock emsdk, stock Qt) with out-of-line annotations |
+| `examples/geom-expanded`   | Reflection-free `python-expanded` / `nanobind-expanded` / `node-expanded` / `wasm-expanded` / `qt-expanded` / `qml-expanded` / `csharp-expanded` / `java-expanded` / `lua-expanded` bindings (stock compiler, stock emsdk, stock Qt, any Lua 5.1–5.4) with out-of-line annotations |
 | `examples/trampoline`      | Overriding C++ virtuals from Python — generated pybind11 trampolines from `virtual_spec` |
 | `examples/trampoline-node` | Overriding C++ virtuals from JavaScript — generated N-API trampolines from `virtual_spec` |
 | `examples/moc`             | Qt-flavoured meta-object demo on `mini_moc.h` (properties + signals) |

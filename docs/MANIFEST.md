@@ -259,6 +259,7 @@ the generated code builds with a stock compiler).
 | `csharp` | C-ABI shared lib + P/Invoke wrappers | `csharp-expanded` |
 | `java` | C-ABI + handle-backed FFM wrappers | `java-expanded` |
 | `julia` | CxxWrap.jl / jlcxx shared module | — |
+| `lua-expanded` | sol2 shared module, `require`-able (Lua 5.1–5.4 / LuaJIT) | expanded only |
 | `rest` | cpp-httplib JSON server + browser client | — |
 | `openapi` | OpenAPI 3.1 spec | text output |
 | `json` | nlohmann (de)serialization | text output |
