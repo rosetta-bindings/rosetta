@@ -115,6 +115,19 @@ namespace rosetta {
         // types, each cvref-stripped like any other GenType.
         bool                 is_callback = false;
         std::vector<GenType> callback_sig;
+
+        // Copyability of the (cvref-stripped) type, captured at reflection time.
+        // Every runtime backend copies at some boundary — pybind's automatic
+        // return policy copies an lvalue-ref return, embind's property getters
+        // and N-API's to_napi copy by construction/assignment — so emitters
+        // consult these to SKIP (or downgrade to read-only) what would otherwise
+        // be a hard compile error in the generated code. A class whose data API
+        // lives in non-copyable public members (e.g. GEO::Mesh::vertices holding
+        // a Mesh& back-reference) then binds cleanly as an opaque handle instead
+        // of breaking the build. True for non-class kinds; false when the type
+        // is incomplete at reflection time.
+        bool copy_constructible = true;
+        bool copy_assignable    = true;
     };
 
     /** @brief A numeric range constraint (rosetta::range annotation). */
@@ -141,6 +154,21 @@ namespace rosetta {
     struct GenParam {
         std::string name; // synthesized "argN" (parameter names aren't reflected)
         GenType     type;
+
+        // True when the parameter is declared as an lvalue reference (T& /
+        // const T&). A by-reference class parameter never copies — every
+        // runtime backend hands the wrapped object through — so it is bindable
+        // even for a non-copyable class; a by-VALUE class parameter copies and
+        // needs type.copy_constructible.
+        bool is_ref = false;
+
+        // True for a NON-const lvalue reference. For class kinds that's the
+        // mutable-receiver / out-parameter feature; for everything else
+        // (std::string&, index_t&, enum&) it's an out-parameter the node/wasm
+        // runtimes cannot express — their converted argument is a temporary,
+        // which cannot bind to a non-const reference — so those backends skip
+        // the member.
+        bool is_mutable_ref = false;
     };
 
     struct GenMethod {
@@ -170,6 +198,22 @@ namespace rosetta {
         // emitting a trampoline override it could not compile. Defaults true.
         bool sig_bindable = true;
 
+        // True when the method returns an lvalue reference. Combined with
+        // ret.copy_constructible this lets an emitter skip methods it would
+        // otherwise fail to compile (pybind's automatic policy COPIES an
+        // lvalue-ref return, e.g. GEO::Mesh::get_subelements_by_index()
+        // returning a non-copyable store&).
+        bool ret_is_ref = false;
+
+        // Extension method (manifest class "extensions"): a free function whose
+        // first parameter is `Cls&`, exposed as an instance method of Cls.
+        // `params` holds the parameters AFTER the receiver; `ext_qualified` is
+        // the fully-qualified C++ spelling for &fn; `ext_header` its #include.
+        // Backends that can only emit member pointers skip these.
+        bool        is_extension = false;
+        std::string ext_qualified;
+        std::string ext_header;
+
         // Every annotation on this method, type-erased (mirrors GenField). UI
         // backends query the ones they care about — e.g. rosetta::button /
         // rosetta::label — via find_annotation<A>(); the core names none of them.
@@ -190,6 +234,20 @@ namespace rosetta {
         GenType               ret;
         std::vector<GenParam> params;
         std::string           doc; // from the manifest, if any
+    };
+
+    /**
+     * @brief An extension method (manifest class "extensions"): a free function
+     * whose first parameter is `Cls&` (or `const Cls&`), exposed as an instance
+     * method of the bound class `cls`. This is how a library whose own members
+     * can't cross the boundary (raw-pointer accessors, attribute templates,
+     * overloaded helpers) gets a scriptable surface WITHOUT a hand-written
+     * wrapper class: the glue shrinks to stateless free functions and the
+     * scripts keep holding the real C++ objects.
+     */
+    struct GenExtension {
+        std::string cls; // the bound class, as spelled in the manifest ("GEO::Mesh")
+        GenFunction fn;  // the free function (first param = receiver)
     };
 
     /**
@@ -232,6 +290,12 @@ namespace rosetta {
         // allocate the abstract type and fail to compile).
         bool is_abstract = false;
 
+        // Whether T can be assigned to (copy OR move). The node runtime's
+        // parameterized-constructor path assigns the freshly built object into
+        // the Wrap's inner storage; for a non-assignable class (GEO::Mesh) only
+        // the default constructor is emitted there.
+        bool copy_or_move_assignable = true;
+
         // Exact C++ spellings of each constructor's parameter types, in the same
         // order as `ctors`. Parallel to `ctors` (which carries the neutral IR);
         // a backend that has to *spell* the constructor signature in emitted C++
@@ -260,6 +324,7 @@ namespace rosetta {
         std::filesystem::path    rosetta_include; // path to rosetta's include/
         std::vector<TargetSpec>  targets;         // backends + per-backend module name
         std::vector<GenFunction> functions;       // free functions to expose
+        std::vector<GenExtension> extensions;     // free functions exposed as class methods
 
         // Optional pointers to the C++26 / P2996 reflection toolchain, baked into
         // the *thin* backends' generated CMakeLists so reflection-driven targets

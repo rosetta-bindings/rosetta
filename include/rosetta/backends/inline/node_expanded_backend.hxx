@@ -69,6 +69,59 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             return true;
         }
 
+        // --- Copyability gates -------------------------------------------------
+        // The node runtime copies at two boundaries: to_napi builds a fresh
+        // wrapped object and copy-ASSIGNS into it (returns, field gets), and a
+        // by-value class parameter copy-CONSTRUCTS from the reference from_napi
+        // hands out. Where the copy is deleted the emitted line would not
+        // compile, so gate on the copyability captured in the IR (non-copyable
+        // classes — GEO::Mesh and its member stores — then bind as opaque
+        // handles reached through references only).
+
+        // OK as an input (parameter / setter side)?
+        inline bool nx_pass_ok(const GenParam &p) {
+            const GenType &t = p.type;
+            if (!nx_marshalable(t)) {
+                return false;
+            }
+            if (t.kind == "object") {
+                return p.is_ref || t.copy_constructible; // by-ref never copies
+            }
+            // A mutable reference to a NON-class type (std::string&, index_t&)
+            // is an out-parameter: from_napi hands back a temporary for these
+            // kinds, which cannot bind to a non-const reference.
+            if (p.is_mutable_ref) {
+                return false;
+            }
+            if (t.kind == "vector" && !t.element.empty()) {
+                const GenType &e = t.element.front();
+                if (e.kind == "object" && !e.copy_constructible) {
+                    return false; // from_napi push_back copies each element
+                }
+            }
+            return true;
+        }
+
+        // OK as an output (return / field get side, i.e. through to_napi)?
+        inline bool nx_ret_ok(const GenType &t) {
+            if (t.kind == "void") {
+                return true;
+            }
+            if (!nx_marshalable(t)) {
+                return false;
+            }
+            if (t.kind == "object") {
+                return t.copy_assignable; // to_napi: Wrap(...)->inner = v
+            }
+            if (t.kind == "vector" && !t.element.empty()) {
+                const GenType &e = t.element.front();
+                if (e.kind == "object" && !e.copy_assignable) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         // A range bound rendered as a `double` literal. set_field_ranged's Lo/Hi
         // are `double` non-type template params, and clang rejects an `int`
         // literal (e.g. 0) there in an explicit argument list — it must read as
@@ -83,11 +136,11 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         }
 
         inline bool nx_method_ok(const GenMethod &m) {
-            if (m.ret.kind != "void" && !nx_marshalable(m.ret)) {
+            if (!nx_ret_ok(m.ret)) {
                 return false;
             }
             for (const auto &p : m.params) {
-                if (!nx_marshalable(p.type)) {
+                if (!nx_pass_ok(p)) {
                     return false;
                 }
             }
@@ -108,9 +161,12 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             s += "        using This = " + th + ";\n";
             s += "        std::vector<Napi::ClassPropertyDescriptor<This>> props;\n";
 
-            // Fields → InstanceAccessor(getter, setter).
+            // Fields → InstanceAccessor(getter, setter). Both directions copy
+            // (get_field via to_napi, set_field via copy assignment), so a
+            // non-copy-assignable member object is skipped.
             for (const auto &f : k.fields) {
-                if (!nx_marshalable(f.type)) {
+                if (!nx_marshalable(f.type) || !nx_ret_ok(f.type) ||
+                    (f.type.kind == "object" && !f.type.copy_assignable)) {
                     continue;
                 }
                 const std::string mp  = "&" + self + "::" + f.name;
@@ -128,9 +184,16 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                      ">(\"" + f.name + "\"));\n";
             }
 
-            // Methods → InstanceMethod / StaticMethod.
+            // Methods → InstanceMethod / StaticMethod. Extension methods call
+            // their free function through ext_method (receiver = the wrapped
+            // object) instead of a member pointer.
             for (const auto &m : k.methods) {
                 if (!nx_method_ok(m)) {
+                    continue;
+                }
+                if (m.is_extension) {
+                    s += "        props.push_back(This::InstanceMethod<&This::ext_method<&" +
+                         m.ext_qualified + ">>(\"" + m.name + "\"));\n";
                     continue;
                 }
                 const std::string mp = "&" + self + "::" + m.name;
@@ -148,11 +211,15 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             s += "        rosetta::ctor_ref<" + self + ">().SuppressDestruct();\n";
 
             // Constructors → ctor_table entries on the held type, keyed by arity.
-            for (std::size_t i = 0; i < k.ctor_param_cpp.size(); ++i) {
+            // The Wrap ctor ASSIGNS the freshly built object into its inner
+            // storage, so a non-assignable class (GEO::Mesh) keeps only the
+            // default constructor.
+            for (std::size_t i = 0;
+                 k.copy_or_move_assignable && i < k.ctor_param_cpp.size(); ++i) {
                 const auto &ir = k.ctors[i];
                 bool        ok = true;
                 for (const auto &p : ir) {
-                    ok = ok && nx_marshalable(p.type);
+                    ok = ok && nx_pass_ok(p);
                 }
                 if (!ok) {
                     continue;
@@ -210,9 +277,9 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 body += node_expanded_class(k);
             }
             for (const auto &f : c.functions) {
-                bool ok = (f.ret.kind == "void" || nx_marshalable(f.ret));
+                bool ok = nx_ret_ok(f.ret);
                 for (const auto &p : f.params) {
-                    ok = ok && nx_marshalable(p.type);
+                    ok = ok && nx_pass_ok(p);
                 }
                 if (ok) {
                     body += "    exports.Set(\"" + f.name +
@@ -228,6 +295,11 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             auto add = [&](const std::string &h) { append_include(out, h); };
             for (const auto &k : c.classes) {
                 add(k.header);
+                for (const auto &m : k.methods) {
+                    if (m.is_extension && !m.ext_header.empty()) {
+                        add(m.ext_header); // the free function behind an extension method
+                    }
+                }
             }
             for (const auto &e : c.enums) {
                 add(e.header);

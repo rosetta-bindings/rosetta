@@ -66,6 +66,12 @@ namespace rosetta {
                 }
 
                 for (const auto &f : k.fields) {
+                    // Hidden from every runtime backend (non-copyable member
+                    // object, e.g. GEO::Mesh::vertices) — don't advertise it.
+                    if (f.type.kind == "object" &&
+                        !(f.type.copy_constructible && f.type.copy_assignable)) {
+                        continue;
+                    }
                     if (!f.doc.empty()) {
                         out += "        /** " + f.doc + " */\n";
                     }
@@ -74,6 +80,17 @@ namespace rosetta {
                 }
 
                 for (const auto &m : k.methods) {
+                    // Same visibility rule as the runtime backends: a
+                    // non-copyable class return (or by-value parameter) is
+                    // skipped there, so don't declare it here either.
+                    bool visible = !(m.ret.kind == "object" && !m.ret.copy_constructible);
+                    for (const auto &p : m.params) {
+                        visible = visible && !(p.type.kind == "object" && !p.is_ref &&
+                                               !p.type.copy_constructible);
+                    }
+                    if (!visible) {
+                        continue;
+                    }
                     if (!m.doc.empty()) {
                         out += "        /** " + m.doc + " */\n";
                     }

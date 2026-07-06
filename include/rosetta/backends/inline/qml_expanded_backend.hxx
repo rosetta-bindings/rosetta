@@ -223,6 +223,9 @@ target_link_libraries({{LIB}}_qml PRIVATE
                 s += qmlx_field(f);
             }
             for (const auto &m : k.methods) {
+                if (m.is_extension) {
+                    continue; // extensions: no member pointer
+                }
                 s += qmlx_method(k.name, m);
             }
             s += "}\n\n";

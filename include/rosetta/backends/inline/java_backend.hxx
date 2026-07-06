@@ -638,7 +638,7 @@ final class Rt {
 
             // Methods.
             for (const auto &m : k.methods) {
-                if (!jsonable_method(m)) {
+                if (m.is_extension || !jsonable_method(m)) { // extensions: no member pointer
                     continue;
                 }
                 const std::string sig   = java_param_sig(m.params);

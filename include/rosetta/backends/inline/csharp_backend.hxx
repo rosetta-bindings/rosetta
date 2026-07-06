@@ -430,7 +430,7 @@ those. Members using any other type are omitted from both sides.
 
             // Methods.
             for (const auto &m : k.methods) {
-                if (!jsonable_method(m)) {
+                if (m.is_extension || !jsonable_method(m)) { // extensions: no member pointer
                     continue;
                 }
                 const std::string sig    = cs_param_sig(m.params);

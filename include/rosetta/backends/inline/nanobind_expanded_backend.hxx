@@ -96,10 +96,15 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         }
 
         // One method as a chain segment. Overloads are already deduped by name in
-        // the walk, so &T::m is unambiguous.
+        // the walk, so &T::m is unambiguous. An extension method binds its free
+        // function instead — nanobind, like pybind, treats a free function whose
+        // first parameter is T& as an instance method.
         inline std::string nbx_method_segment(const GenClass &k, const GenMethod &m) {
-            const std::string mp = "&" + k.name + "::" + m.name;
             const std::string dq = nbx_doc_arg(m.doc);
+            if (m.is_extension) {
+                return ".def(\"" + m.name + "\", &" + m.ext_qualified + dq + ")";
+            }
+            const std::string mp = "&" + k.name + "::" + m.name;
             if (m.is_static) {
                 return ".def_static(\"" + m.name + "\", " + mp + dq + ")";
             }
@@ -124,9 +129,15 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 segs.push_back(".def(nb::init<>())");
             }
             for (const auto &f : k.fields) {
+                if (!px_field_ok(f)) {
+                    continue; // non-copyable member object (shared pybind gate)
+                }
                 segs.push_back(nbx_field_segment(k, f));
             }
             for (const auto &m : k.methods) {
+                if (!px_method_ok(m)) {
+                    continue; // signature the emitted line could not compile
+                }
                 segs.push_back(nbx_method_segment(k, m));
             }
 
@@ -147,6 +158,12 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 body += nbx_class(k);
             }
             for (const auto &f : c.functions) {
+                GenMethod probe; // free functions go through the same gates
+                probe.ret    = f.ret;
+                probe.params = f.params;
+                if (!px_method_ok(probe)) {
+                    continue;
+                }
                 body += "    m.def(\"" + f.name + "\", &" + f.qualified + nbx_doc_arg(f.doc) + ");\n";
             }
 
@@ -159,6 +176,11 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             auto add = [&](const std::string &h) { append_include(out, h); };
             for (const auto &k : c.classes) {
                 add(k.header);
+                for (const auto &m : k.methods) {
+                    if (m.is_extension && !m.ext_header.empty()) {
+                        add(m.ext_header); // the free function behind an extension method
+                    }
+                }
             }
             for (const auto &e : c.enums) {
                 add(e.header);

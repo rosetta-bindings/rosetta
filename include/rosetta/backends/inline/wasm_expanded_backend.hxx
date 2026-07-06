@@ -269,8 +269,42 @@ namespace rosetta_wx {
             if (m.ret.kind != "void" && !wx_marshalable(m.ret, c)) {
                 return false;
             }
+            // embind's toWireType COPIES a class return (also for an lvalue-ref
+            // return), so a non-copyable class return would not compile.
+            if (m.ret.kind == "object" && !m.ret.copy_constructible) {
+                return false;
+            }
             for (const auto &p : m.params) {
                 if (!wx_param_ok(p.type, c)) {
+                    return false;
+                }
+                // A by-value class parameter copy-constructs; by-ref never does.
+                if (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) {
+                    return false;
+                }
+                // Mutable ref to a NON-class type (std::string&, index_t&): an
+                // out-parameter — embind's converted argument is a temporary,
+                // which cannot bind to a non-const reference.
+                if (p.type.kind != "object" && p.is_mutable_ref) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Can this field ride an embind .property()? Both accessors copy
+        // (getter by value, setter by copy assignment), and the type must be
+        // registered.
+        inline bool wx_field_ok(const GenField &f, const GenContext &c) {
+            if (!wx_marshalable(f.type, c)) {
+                return false;
+            }
+            if (f.type.kind == "object") {
+                return f.type.copy_constructible && (f.is_readonly || f.type.copy_assignable);
+            }
+            if (f.type.kind == "vector" && !f.type.element.empty()) {
+                const GenType &e = f.type.element.front();
+                if (e.kind == "object" && !e.copy_constructible) {
                     return false;
                 }
             }
@@ -502,11 +536,21 @@ namespace rosetta_wx {
             }
 
             for (const auto &f : k.fields) {
+                if (!wx_field_ok(f, c)) {
+                    continue; // unmarshalable or non-copyable member object
+                }
                 segs.push_back(wx_field_segment(k, f));
             }
             for (const auto &m : k.methods) {
                 if (!wx_method_ok(m, c)) {
                     continue; // unmarshalable signature (e.g. std::function param)
+                }
+                // Extension method: bind the free function directly — embind
+                // treats a non-member whose first parameter is the class type
+                // (by ref) as an instance method.
+                if (m.is_extension) {
+                    segs.push_back(".function(\"" + m.name + "\", &" + m.ext_qualified + ")");
+                    continue;
                 }
                 if (wx_params_have_callback(m.params)) {
                     // A method taking a callback: bind a free-function-style lambda
@@ -581,10 +625,14 @@ namespace rosetta_wx {
                 body += wx_class(k, c);
             }
             for (const auto &f : c.functions) {
-                bool ok      = (f.ret.kind == "void" || wx_marshalable(f.ret, c));
+                bool ok = (f.ret.kind == "void" ||
+                           (wx_marshalable(f.ret, c) &&
+                            (f.ret.kind != "object" || f.ret.copy_constructible)));
                 bool raw_ptr = wx_type_has_raw_ptr(f.ret);
                 for (const auto &p : f.params) {
-                    ok      = ok && wx_marshalable(p.type, c);
+                    ok = ok && wx_marshalable(p.type, c) &&
+                         (p.type.kind != "object" || p.is_ref || p.type.copy_constructible) &&
+                         (p.type.kind == "object" || !p.is_mutable_ref);
                     raw_ptr = raw_ptr || wx_type_has_raw_ptr(p.type);
                 }
                 if (ok) {
@@ -608,6 +656,11 @@ namespace rosetta_wx {
             auto add = [&](const std::string &h) { append_include(out, h); };
             for (const auto &k : c.classes) {
                 add(k.header);
+                for (const auto &m : k.methods) {
+                    if (m.is_extension && !m.ext_header.empty()) {
+                        add(m.ext_header); // the free function behind an extension method
+                    }
+                }
             }
             for (const auto &e : c.enums) {
                 add(e.header);

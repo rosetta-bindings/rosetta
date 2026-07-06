@@ -567,6 +567,17 @@ endif()
             } else if constexpr (std::is_class_v<U>) {
                 g.kind   = "object";
                 g.object = class_name<U>();
+                // Copyability, so emitters can skip/downgrade what would not
+                // compile (see GenType). Guarded on completeness: traits on an
+                // incomplete type are ill-formed, and an incomplete type can't
+                // be copied anywhere either.
+                if constexpr (requires { sizeof(U); }) {
+                    g.copy_constructible = std::is_copy_constructible_v<U>;
+                    g.copy_assignable    = std::is_copy_assignable_v<U>;
+                } else {
+                    g.copy_constructible = false;
+                    g.copy_assignable    = false;
+                }
             } else {
                 g.kind = "unknown";
             }
@@ -592,7 +603,11 @@ endif()
             std::vector<GenParam> out;
             (out.push_back(GenParam{
                  "arg" + std::to_string(Is),
-                 type_descriptor<std::remove_cvref_t<typename[:std::meta::type_of(ps[Is]):]>>()}),
+                 type_descriptor<std::remove_cvref_t<typename[:std::meta::type_of(ps[Is]):]>>(),
+                 std::is_lvalue_reference_v<typename[:std::meta::type_of(ps[Is]):]>,
+                 std::is_lvalue_reference_v<typename[:std::meta::type_of(ps[Is]):]> &&
+                     !std::is_const_v<std::remove_reference_t<
+                         typename[:std::meta::type_of(ps[Is]):]>>}),
              ...);
             return out;
         }
@@ -713,11 +728,20 @@ endif()
                         gf.choices.push_back(cb.choices[i]);
                     }
                 }
-                // Default value: read the member from a default-built instance.
-                if constexpr (std::is_default_constructible_v<T>) {
+                // Default value: read the member from a default-built instance —
+                // but only for field kinds default_value_str can render (scalars,
+                // enums, strings). For anything else the instance would be built
+                // for nothing, and `T tmp{}` odr-uses T's constructor: the driver
+                // links no user library, so a header-declared ctor (GEO::Mesh)
+                // would break the generator link.
+                {
                     using F = std::remove_cvref_t<typename[:std::meta::type_of(Fld):]>;
-                    T tmp{};
-                    gf.default_value = default_value_str<F>(tmp.[:Fld:]);
+                    if constexpr (std::is_default_constructible_v<T> &&
+                                  (std::is_arithmetic_v<F> || std::is_enum_v<F> ||
+                                   std::is_same_v<F, std::string>)) {
+                        T tmp{};
+                        gf.default_value = default_value_str<F>(tmp.[:Fld:]);
+                    }
                 }
                 // Every annotation, type-erased — backends query what they want.
                 (gf.annotations.emplace_back(Anns), ...);
@@ -763,6 +787,8 @@ endif()
                 m.ret_cpp      = exact_spelling<std::meta::return_type_of(Fn)>();
                 m.param_cpp    = param_cpp_of<Fn>();
                 m.sig_bindable = sig_fn_bindable<Fn>();
+                m.ret_is_ref =
+                    std::is_lvalue_reference_v<typename[:std::meta::return_type_of(Fn):]>;
                 out.methods.push_back(std::move(m));
             }
         };
@@ -873,6 +899,8 @@ endif()
             }
             gc.is_default_constructible = std::is_default_constructible_v<T>;
             gc.is_abstract              = std::is_abstract_v<T>;
+            gc.copy_or_move_assignable =
+                std::is_copy_assignable_v<T> || std::is_move_assignable_v<T>;
             // Direct public bases as qualified names; the backend filters to the
             // ones actually bound before registering the relationship.
             {
@@ -1046,6 +1074,53 @@ namespace rosetta {
                 }
             }(),
             ...);
+
+        // Attach the extension methods (manifest class "extensions") to their
+        // classes: a free function whose first parameter is `Cls&` becomes an
+        // instance method of Cls in the IR, with the receiver dropped from the
+        // parameter list. Backends emit it as a method backed by the free
+        // function (ext_qualified) instead of a member pointer.
+        for (const GenExtension &ext : opt.extensions) {
+            GenClass *target = nullptr;
+            for (auto &k : classes) {
+                const std::string qualified =
+                    k.name_space.empty() ? k.name : k.name_space + "::" + k.name;
+                if (ext.cls == qualified || ext.cls == k.name) {
+                    target = &k;
+                    break;
+                }
+            }
+            if (target == nullptr) {
+                std::fprintf(stderr,
+                             "rosetta::generate: extension '%s' names unbound class '%s' — "
+                             "skipped\n",
+                             ext.fn.qualified.c_str(), ext.cls.c_str());
+                continue;
+            }
+            const bool self_ok = !ext.fn.params.empty() &&
+                                 ext.fn.params.front().type.kind == "object" &&
+                                 ext.fn.params.front().type.object == target->name &&
+                                 ext.fn.params.front().is_ref;
+            if (!self_ok) {
+                std::fprintf(stderr,
+                             "rosetta::generate: extension '%s' must take '%s&' as its first "
+                             "parameter — skipped\n",
+                             ext.fn.qualified.c_str(), ext.cls.c_str());
+                continue;
+            }
+            GenMethod m;
+            m.name          = ext.fn.name;
+            m.doc           = ext.fn.doc;
+            m.ret           = ext.fn.ret;
+            m.params        = {ext.fn.params.begin() + 1, ext.fn.params.end()};
+            m.is_extension  = true;
+            m.ext_qualified = ext.fn.qualified;
+            m.ext_header    = ext.fn.header;
+            target->methods.push_back(std::move(m));
+            // Refresh the class doc fragment so extension methods show up in
+            // the markdown/html output like any other method.
+            target->doc = gen_detail::class_markdown(*target);
+        }
 
         // Join the (possibly several) user include dirs into one string that
         // drops straight into each backend's target_include_directories(... PRIVATE)

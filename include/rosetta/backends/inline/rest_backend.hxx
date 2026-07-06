@@ -244,7 +244,7 @@ if(SPEC.functions.length){
                 s += "],\"methods\":[";
                 first = true;
                 for (const auto &m : k.methods) {
-                    if (!jsonable_method(m)) {
+                    if (m.is_extension || !jsonable_method(m)) { // the reflective server has no extensions
                         continue;
                     }
                     s += (first ? "" : ",");

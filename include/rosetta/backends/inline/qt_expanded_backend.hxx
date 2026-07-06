@@ -182,6 +182,9 @@ target_link_libraries({{LIB}}_qt PRIVATE Qt6::Widgets)
                 s += qtx_field(f);
             }
             for (const auto &m : k.methods) {
+                if (m.is_extension) {
+                    continue; // extensions: no member pointer
+                }
                 s += qtx_method(k.name, m);
             }
             s += "    return shell.root;\n}\n\n";

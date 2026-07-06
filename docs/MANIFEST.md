@@ -107,10 +107,56 @@ and ignored — handy since JSON has no comment syntax.
 | `name` | — | header basename | C++ type name, must be reachable after including `header`. May be namespace-qualified (`space::Vector3`). |
 | `annotations` | — | — | Path (relative to the manifest) to an out-of-line annotation JSON side-car, baked into `bindings.h` so the header stays clean. See [OUT_OF_LINE_ANNOTATIONS](OUT_OF_LINE_ANNOTATIONS.md). |
 | `doc` | — | — | A description string for the class (used by doc backends). |
+| `extensions` | — | `[]` | Free functions exposed as **instance methods** of this class. See [Extension methods](#extension-methods-extensions). |
 
 Inheritance, multiple constructors, enums, nested user types and
 `std::vector` members are discovered automatically — no entry needed per
 base class, just list the most-derived type you want bound.
+
+Members the emitted binding could not compile are **skipped** rather than
+fatal: a public field whose type is a non-copyable class (e.g. a member
+object holding a back-reference to its owner), a method returning a
+reference to such a type, or a by-value parameter of one. The class still
+binds — as an opaque handle plus whatever members do marshal — and
+[extension methods](#extension-methods-extensions) fill the gaps.
+
+---
+
+## Extension methods (`extensions`)
+
+Some libraries keep their real API where no binding generator can reach it:
+`GEO::Mesh`'s geometry lives behind public member objects with raw
+`double*` accessors, its I/O helpers are overloaded, its UV coordinates sit
+in an attribute template. Rather than hand-writing a wrapper *class*, list
+plain free functions — whose **first parameter is `Cls&` (or
+`const Cls&`)** — as `extensions` of the bound class; they appear to every
+backend as ordinary instance methods:
+
+```json
+"classes": [{
+  "name": "GEO::Mesh", "header": "geogram/mesh/mesh.h",
+  "extensions": [
+    { "name": "georo::set_surface", "header": "mesh_ext.h",
+      "doc": "Set vertices + triangles from flat arrays." },
+    { "name": "georo::vertices",    "header": "mesh_ext.h",
+      "doc": "Vertex coordinates as a flat array." }
+  ]
+}]
+```
+
+```py
+m = geogram.Mesh()
+m.set_surface(coords, triangles)   # calls georo::set_surface(m, ...)
+print(len(m.vertices()) // 3)
+```
+
+The receiver is dropped from the exposed signature; the remaining
+parameters and the return type marshal exactly like a free function's. The
+method name is the function's unqualified identifier. Supported by the
+`python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded`
+targets and all text backends (`typescript`, `markdown`, `html`); the thin
+(reflection-re-running) backends don't see them, and backends that can only
+emit member pointers (`qt`/`qml`/`csharp`/`java`) skip them.
 
 ---
 

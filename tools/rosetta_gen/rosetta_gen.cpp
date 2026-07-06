@@ -62,7 +62,12 @@
 //     ],                                            //   toolchain-specific)
 //     "classes": [
 //       { "name": "Model", "header": "Model.h",
-//         "annotations": "Model.ann.json" },        // optional out-of-line annotations
+//         "annotations": "Model.ann.json",          // optional out-of-line annotations
+//         "extensions": [                           // optional: free functions (first
+//           { "name": "ext::vertices",              //   param `Model&`) exposed as
+//             "header": "model_ext.h",              //   instance methods — glue for
+//             "doc": "..." }                        //   members that can't cross the
+//         ] },                                      //   boundary (raw ptrs, overloads)
 //       { "header": "Point.h" }                     // name derived from header stem
 //     ],
 //     "functions": [                                // optional: free (non-member) fns
@@ -112,16 +117,24 @@ static std::vector<fs::path> expand_glob(const fs::path &base, const std::string
     return out;
 }
 
-struct ClassEntry {
-    std::string name;
-    std::string header;
-    fs::path    annotations; // optional out-of-line annotation JSON (absolute); empty if none
-};
-
 struct FunctionEntry {
     std::string name;   // (optionally qualified) C++ function name, e.g. "api::add"
     std::string header; // header declaring it
     std::string doc;    // optional manifest doc string
+};
+
+struct ClassEntry {
+    std::string name;
+    std::string header;
+    fs::path    annotations; // optional out-of-line annotation JSON (absolute); empty if none
+
+    // Optional extension methods ("extensions"): free functions whose first
+    // parameter is `<name>&`, exposed as instance methods of the class. This
+    // is the escape hatch for a library whose own members can't cross the
+    // boundary (raw-pointer accessors, attribute templates, overloaded
+    // helpers): the glue shrinks to stateless free functions — no wrapper
+    // class — and scripts keep holding the real C++ objects.
+    std::vector<FunctionEntry> extensions;
 };
 
 struct TargetEntry {
@@ -249,6 +262,18 @@ static Manifest load(const fs::path &manifest_path) {
         if (c.contains("annotations")) {
             e.annotations =
                 fs::weakly_canonical(base / fs::path(c.at("annotations").get<std::string>()));
+        }
+        // `extensions` is optional: free functions (first parameter `Cls&`)
+        // exposed as instance methods of this class — same entry shape as
+        // "functions" (see ClassEntry::extensions).
+        if (c.contains("extensions")) {
+            for (const auto &x : c.at("extensions")) {
+                FunctionEntry xe;
+                xe.name   = x.at("name").get<std::string>();
+                xe.header = x.at("header").get<std::string>();
+                xe.doc    = x.contains("doc") ? x.at("doc").get<std::string>() : std::string{};
+                e.extensions.push_back(std::move(xe));
+            }
         }
         m.classes.push_back(std::move(e));
     }
@@ -453,6 +478,9 @@ static std::string render_bindings_h(const Manifest &m) {
     };
     for (const auto &c : m.classes) {
         include_once(c.header);
+        for (const auto &x : c.extensions) {
+            include_once(x.header); // the driver reflects ^^fn — it needs the declaration
+        }
     }
     for (const auto &f : m.functions) {
         include_once(f.header);
@@ -570,6 +598,25 @@ static std::string render_project_gen_cpp(const Manifest &m) {
                 << f.header << "\", \"" << f.doc << "\"),\n";
         }
         out << "    };\n";
+    }
+    // Extension methods (manifest class "extensions"): free functions attached
+    // to a bound class — generate() splices them into the class IR as methods.
+    {
+        bool any = false;
+        for (const auto &c : m.classes) {
+            any = any || !c.extensions.empty();
+        }
+        if (any) {
+            out << "    opt.extensions      = {\n";
+            for (const auto &c : m.classes) {
+                for (const auto &x : c.extensions) {
+                    out << "        {\"" << c.name << "\", rosetta::make_function<^^" << x.name
+                        << ">(\"" << x.name << "\", \"" << x.header << "\", \"" << x.doc
+                        << "\")},\n";
+                }
+            }
+            out << "    };\n";
+        }
     }
     out << "\n";
     out << "    rosetta::generate<";

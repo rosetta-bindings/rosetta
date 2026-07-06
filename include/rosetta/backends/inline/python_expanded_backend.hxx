@@ -115,6 +115,11 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             auto add = [&](const std::string &h) { append_include(s, h); };
             for (const auto &k : c.classes) {
                 add(k.header);
+                for (const auto &m : k.methods) {
+                    if (m.is_extension && !m.ext_header.empty()) {
+                        add(m.ext_header); // the free function behind an extension method
+                    }
+                }
             }
             for (const auto &e : c.enums) {
                 add(e.header);
@@ -123,6 +128,51 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 add(f.header);
             }
             return s;
+        }
+
+        // --- Marshalling gates -------------------------------------------------
+        // pybind copies at several boundaries: def_readwrite's setter
+        // copy-assigns, a by-value class parameter copy-constructs, and the
+        // automatic return policy COPIES an lvalue-ref return. Where the copy
+        // is deleted the emitted line would not compile, so gate on the
+        // copyability captured in the IR. A class whose data API lives in
+        // non-copyable public members (GEO::Mesh) then binds as an opaque
+        // handle instead of breaking the build.
+
+        // Can this type ride a def_readwrite / vector caster (which copy)?
+        inline bool px_copyable(const GenType &t) {
+            if (t.kind == "object") {
+                return t.copy_constructible && t.copy_assignable;
+            }
+            if (t.kind == "vector") {
+                return t.element.empty() || px_copyable(t.element.front());
+            }
+            return true;
+        }
+
+        inline bool px_field_ok(const GenField &f) {
+            return px_copyable(f.type);
+        }
+
+        inline bool px_method_ok(const GenMethod &m) {
+            // Lvalue-ref class return: policy `automatic` copies it; a by-value
+            // class return needs copy/move too (copy_constructible is the
+            // conservative proxy for both).
+            if (m.ret.kind == "object" && !m.ret.copy_constructible) {
+                return false;
+            }
+            if (m.ret.kind == "vector" && !px_copyable(m.ret)) {
+                return false;
+            }
+            for (const auto &p : m.params) {
+                if (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) {
+                    return false; // by-value class parameter copy-constructs
+                }
+                if (p.type.kind == "vector" && !px_copyable(p.type)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         // Explicit pybind for one enum: py::enum_<E>(m,"E").value("A", E::A)...;
@@ -165,10 +215,15 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         }
 
         // Explicit pybind for one method. Overloads are already deduped by name
-        // in the walk, so the bare &T::m member pointer is unambiguous.
+        // in the walk, so the bare &T::m member pointer is unambiguous. An
+        // extension method binds its free function instead — pybind treats a
+        // free function whose first parameter is T& as an instance method.
         inline std::string expanded_method(const GenClass &k, const GenMethod &m) {
-            const std::string mp = "&" + k.name + "::" + m.name;
             const std::string dq = doc_arg(m.doc);
+            if (m.is_extension) {
+                return "    c.def(\"" + m.name + "\", &" + m.ext_qualified + dq + ");\n";
+            }
+            const std::string mp = "&" + k.name + "::" + m.name;
             if (m.is_static) {
                 return "    c.def_static(\"" + m.name + "\", " + mp + dq + ");\n";
             }
@@ -224,9 +279,15 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             };
             s += indent(expanded_ctors(k));
             for (const auto &f : k.fields) {
+                if (!px_field_ok(f)) {
+                    continue; // non-copyable member object — see px_copyable
+                }
                 s += indent(expanded_field(k, f));
             }
             for (const auto &m : k.methods) {
+                if (!px_method_ok(m)) {
+                    continue; // signature the emitted pybind line could not compile
+                }
                 s += indent(expanded_method(k, m));
             }
             s += "    }\n";
@@ -242,6 +303,12 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 body += expanded_class(k);
             }
             for (const auto &f : c.functions) {
+                GenMethod probe; // free functions go through the same gates
+                probe.ret    = f.ret;
+                probe.params = f.params;
+                if (!px_method_ok(probe)) {
+                    continue;
+                }
                 body += "    m.def(\"" + f.name + "\", &" + f.qualified + doc_arg(f.doc) + ");\n";
             }
 

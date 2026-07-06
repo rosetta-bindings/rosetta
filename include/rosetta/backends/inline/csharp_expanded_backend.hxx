@@ -164,7 +164,7 @@ ROSETTA_CS_EXPORT void rosetta_csharp_free(char *p) { std::free(p); }
             // Methods → call (instance) / call_function (static; a static member
             // is a plain function pointer).
             for (const auto &m : k.methods) {
-                if (!jsonable_method(m)) {
+                if (m.is_extension || !jsonable_method(m)) { // extensions: no member pointer
                     continue;
                 }
                 const std::string mp = "&" + t + "::" + m.name;

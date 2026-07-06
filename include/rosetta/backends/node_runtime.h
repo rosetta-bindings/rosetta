@@ -227,11 +227,20 @@ namespace rosetta {
             if constexpr (!std::is_same_v<T, Tramp>) {
                 inner.__rosetta_set_self(this->Value());
             }
-            auto &tbl = ctor_table<Tramp>();
-            auto  it  = tbl.find(info.Length());
-            if (it != tbl.end()) {
-                static_cast<T &>(inner) = it->second(info);
-            } else if (info.Length() > 0) {
+            // The parameterized-constructor path ASSIGNS the freshly built
+            // object into `inner`. For a non-assignable class (GEO::Mesh) the
+            // statement itself would not compile — the emitter registers no
+            // ctor_table entries for such a class, so compile the whole path
+            // out and keep only the default constructor.
+            if constexpr (std::is_copy_assignable_v<T> || std::is_move_assignable_v<T>) {
+                auto &tbl = ctor_table<Tramp>();
+                auto  it  = tbl.find(info.Length());
+                if (it != tbl.end()) {
+                    static_cast<T &>(inner) = it->second(info);
+                    return;
+                }
+            }
+            if (info.Length() > 0) {
                 throw Napi::TypeError::New(info.Env(), "no matching constructor for " +
                                                            std::to_string(info.Length()) +
                                                            " argument(s)");
@@ -270,12 +279,36 @@ namespace rosetta {
                                          std::make_index_sequence<fn_traits<decltype(MFP)>::arity>{});
         }
 
+        // Extension method: a FREE function whose first parameter is `T&` (or
+        // `const T&`), exposed as an instance method — the wrapped object is
+        // passed as the receiver and info[i] maps to parameter i+1.
+        template <auto FP> Napi::Value ext_method(const Napi::CallbackInfo &info) {
+            return ext_method_impl<FP>(
+                info, std::make_index_sequence<fn_traits<decltype(FP)>::arity - 1>{});
+        }
+
         template <auto FP> static Napi::Value call_static(const Napi::CallbackInfo &info) {
             return call_static_impl<FP>(info,
                                         std::make_index_sequence<fn_traits<decltype(FP)>::arity>{});
         }
 
       private:
+        template <auto FP, std::size_t... Is>
+        Napi::Value ext_method_impl(const Napi::CallbackInfo &info, std::index_sequence<Is...>) {
+            using FT = fn_traits<decltype(FP)>;
+            using R  = typename FT::ret;
+            T &self  = static_cast<T &>(inner);
+            if constexpr (std::is_void_v<R>) {
+                (*FP)(self, from_napi<std::remove_cvref_t<typename FT::template arg<Is + 1>>>(
+                                info[Is])...);
+                return info.Env().Undefined();
+            } else {
+                R r = (*FP)(self, from_napi<std::remove_cvref_t<typename FT::template arg<Is + 1>>>(
+                                      info[Is])...);
+                return to_napi(info.Env(), r);
+            }
+        }
+
         template <auto MFP, std::size_t... Is>
         Napi::Value call_method_impl(const Napi::CallbackInfo &info, std::index_sequence<Is...>) {
             using FT = fn_traits<decltype(MFP)>;
