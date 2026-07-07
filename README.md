@@ -20,11 +20,26 @@
   <img src="https://img.shields.io/badge/Clang%20%7C%20MSVC-tracking-lightgrey.svg" alt="Clang | MSVC: tracking">
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/bindings-Python%20%7C%20Node%20%7C%20Wasm%20%7C%20TypeScript%20%7C%20Lua%20%7C%20Qt%20%7C%20QML%20%7C%20Json%20%7C%20Html%20%7C%20REST%20%7C%20Julia%20%7C%20OpenAPI%20%7C%20Markdown%20%7C%20ParaView%20%7C%20Csharp%20%7C%20Java-green.svg" alt="Bindings">
+</p>
+
 A C++26 reflection playground with **25 generator backends** — Python (pybind11 / nanobind), Node, WebAssembly, Qt, QML, REST, Julia, Lua, OpenAPI, JSON, TypeScript, C#, Java, Markdown, HTML, ParaView... bindings for **your existing classes — without modifying them**. Point rosetta at a header via a small [manifest.json](./docs/MANIFEST.md), run one tool, get per-language binding projects out.
 
 > **Your target compiler doesn't support reflection?** Generate the expanded binding once on a Linux or macOS host with a C++26 / P2996 compiler — e.g. the [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) fork — then ship and build the generated sources anywhere with a stock toolchain (plain Clang / GCC / MSVC, or a stock emsdk for WebAssembly). No reflection is needed on the target (see the **expanded** backends below).
 
 Annotations (`doc`, `range`, `readonly`, …) are an *opt-in* enrichment, not a requirement: add them where you want docstrings, validation, or UI hints; leave the rest of the class alone. Reflection does the work either way.
+
+## Rosetta in the wild
+
+Real libraries bound with rosetta — each from a single `manifest.json`, no hand-written wrappers:
+
+| Project | Bound library | Targets |
+|---|---|---|
+| [pmp-rosetta](https://github.com/rosetta-bindings/pmp-rosetta) | [PMP](https://www.pmp-library.org) — the Polygon Mesh Processing library (remeshing, smoothing, subdivision, decimation) | Python, Node.js, WebAssembly, TypeScript |
+| [geogram-rosetta](https://github.com/rosetta-bindings/geogram-rosetta) | [geogram](https://github.com/BrunoLevy/geogram) — Bruno Lévy's geometry-processing library (reconstruction, remeshing, parameterization, booleans/CSG) | Python, Node.js, WebAssembly, TypeScript, Lua |
+| [arch-rosetta](https://github.com/rosetta-bindings/arch-rosetta) | Arch — a 3-D boundary-element (BEM) geomechanics code | Python, Node.js, WebAssembly, TypeScript |
+| [cassini-rosetta](https://github.com/rosetta-bindings/cassini-rosetta) *(private)* | Cassini — FEM geomechanical restoration, bound through a single high-level C++ facade | Python, Node.js, WebAssembly, TypeScript |
 
 ## Features
 
