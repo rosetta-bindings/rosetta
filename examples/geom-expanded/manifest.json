@@ -18,7 +18,9 @@
         { "lang": "qml-expanded",    "name": "geom" },
         { "lang": "csharp-expanded", "name": "csgeom" },
         { "lang": "java-expanded",   "name": "jvgeom" },
-        { "lang": "lua-expanded",    "name": "luageom" }
+        { "lang": "lua-expanded",    "name": "luageom" },
+        { "lang": "julia-expanded",  "name": "jlgeom" },
+        { "lang": "imgui-expanded",  "name": "geom" }
     ],
 
     "classes": [

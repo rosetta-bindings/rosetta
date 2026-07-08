@@ -1,7 +1,6 @@
 # `manifest.json` — the rosetta manifest
 
-The **manifest** is the single hand-written file that drives rosetta. You point it at your existing C++ headers, list the languages you want bindings
-for, and `rosetta_gen` does the rest. Your class definitions are never modified.
+The **manifest** is the single hand-written file that drives rosetta. You point it at your existing C++ headers, list the languages you want bindings for, and `rosetta_gen` does the rest. Your class definitions are never modified.
 
 It answers three questions for the framework:
 
@@ -9,7 +8,7 @@ It answers three questions for the framework:
 2. **What** classes / free functions should be bound?
 3. **Which** language backends (targets) should be emitted?
 
-Everything else — fields, methods, constructors, enums, inheritance — is discovered by C++26 reflection from the headers themselves. You declare *what* to bind, never *how*.
+Everything else — fields, methods, constructors, enums, inheritance — is discovered by C++26 reflection from the headers themselves. You declare *__what__* to bind, never *__how__*.
 
 ---
 
@@ -82,15 +81,13 @@ cmake --build path/to/generated/build
 | `cpp26_cc` | — | `${cpp26_root}/bin/clang` | C compiler (name or path). |
 | `cpp26_lib` | — | `${cpp26_root}/lib` | Directory holding the fork's `libc++` / `libc++abi` (`-L` / rpath). |
 
-Keys beginning with `//` (e.g. `"//1"`, `"//note"`) are treated as comments
-and ignored — handy since JSON has no comment syntax.
+Keys beginning with `//` (e.g. `"//1"`, `"//note"`) are treated as comments and ignored — handy since JSON has no comment syntax.
 
 ---
 
 ## Classes
 
-`classes` is an array of per-class entries. Each binds one C++ type
-(`class`, `struct`, or `enum`).
+`classes` is an array of per-class entries. Each binds one C++ type (`class`, `struct`, or `enum`).
 
 ```json
 "classes": [
@@ -109,28 +106,15 @@ and ignored — handy since JSON has no comment syntax.
 | `doc` | — | — | A description string for the class (used by doc backends). |
 | `extensions` | — | `[]` | Free functions exposed as **instance methods** of this class. See [Extension methods](#extension-methods-extensions). |
 
-Inheritance, multiple constructors, enums, nested user types and
-`std::vector` members are discovered automatically — no entry needed per
-base class, just list the most-derived type you want bound.
+Inheritance, multiple constructors, enums, nested user types and `std::vector` members are discovered automatically — no entry needed per base class, just list the most-derived type you want bound.
 
-Members the emitted binding could not compile are **skipped** rather than
-fatal: a public field whose type is a non-copyable class (e.g. a member
-object holding a back-reference to its owner), a method returning a
-reference to such a type, or a by-value parameter of one. The class still
-binds — as an opaque handle plus whatever members do marshal — and
-[extension methods](#extension-methods-extensions) fill the gaps.
+Members the emitted binding could not compile are **skipped** rather than fatal: a public field whose type is a non-copyable class (e.g. a member object holding a back-reference to its owner), a method returning a reference to such a type, or a by-value parameter of one. The class still binds — as an opaque handle plus whatever members do marshal — and [extension methods (#extension-methods-extensions) fill the gaps.
 
 ---
 
 ## Extension methods (`extensions`)
 
-Some libraries keep their real API where no binding generator can reach it:
-`GEO::Mesh`'s geometry lives behind public member objects with raw
-`double*` accessors, its I/O helpers are overloaded, its UV coordinates sit
-in an attribute template. Rather than hand-writing a wrapper *class*, list
-plain free functions — whose **first parameter is `Cls&` (or
-`const Cls&`)** — as `extensions` of the bound class; they appear to every
-backend as ordinary instance methods:
+Some libraries keep their real API where no binding generator can reach it: `GEO::Mesh`'s geometry lives behind public member objects with raw `double*` accessors, its I/O helpers are overloaded, its UV coordinates sit in an attribute template. Rather than hand-writing a wrapper *class*, list plain free functions — whose **first parameter is `Cls&` (or `const Cls&`)** — as `extensions` of the bound class; they appear to every backend as ordinary instance methods:
 
 ```json
 "classes": [{
@@ -150,30 +134,19 @@ m.set_surface(coords, triangles)   # calls georo::set_surface(m, ...)
 print(len(m.vertices()) // 3)
 ```
 
-The receiver is dropped from the exposed signature; the remaining
-parameters and the return type marshal exactly like a free function's. The
-method name is the function's unqualified identifier. Supported by the
-`python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded`
-targets and all text backends (`typescript`, `markdown`, `html`); the thin
-(reflection-re-running) backends don't see them, and backends that can only
-emit member pointers (`qt`/`qml`/`csharp`/`java`) skip them.
+The receiver is dropped from the exposed signature; the remaining parameters and the return type marshal exactly like a free function's. The method name is the function's unqualified identifier. Supported by the `python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded` targets and all text backends (`typescript`, `markdown`, `html`); the thin (reflection-re-running) backends don't see them, and backends that can only emit member pointers (`qt`/`qml`/`csharp`/`java`) skip them.
 
 ---
 
 ## Multiple include directories
 
-When your headers don't all live under a single root, give `user_include`
-an **array** of directories instead of a single string:
+When your headers don't all live under a single root, give `user_include` an **array** of directories instead of a single string:
 
 ```json
 "user_include": ["./geom", "../shared/include", "/opt/thirdparty/include"]
 ```
 
-Each entry follows the same resolution rules as the single-string form
-(relative to the manifest, or absolute). Every directory is added to the
-generated bindings' include path, so a class `header` is resolved against
-**all** of them — the first directory that contains the file wins, exactly
-like a compiler's `-I` search order. The array must not be empty.
+Each entry follows the same resolution rules as the single-string form (relative to the manifest, or absolute). Every directory is added to the generated bindings' include path, so a class `header` is resolved against **all** of them — the first directory that contains the file wins, exactly like a compiler's `-I` search order. The array must not be empty.
 
 The single-string form is just the one-directory shorthand:
 
@@ -185,8 +158,7 @@ The single-string form is just the one-directory shorthand:
 
 ## Functions
 
-`functions` binds **free (non-member)** functions without editing your
-headers. Each entry:
+`functions` binds **free (non-member)** functions without editing your headers. Each entry:
 
 ```json
 "functions": [
@@ -225,15 +197,9 @@ See [FREE_FUNCTIONS](FREE_FUNCTIONS.md) for details.
   ]
   ```
 
-`name` is optional in the object form too (defaults to `module_name`). One
-generator emits a **single combined module per target** exposing every class.
+`name` is optional in the object form too (defaults to `module_name`). One generator emits a **single combined module per target** exposing every class.
 
-The object form also accepts **`link_options`** — extra linker flags applied
-to *this target only*, emitted as `target_link_options(... PRIVATE ...)` in
-the generated project. Per-target (unlike `compile_definitions`) because link
-flags are toolchain-specific — e.g. geogram's `GEO::initialize()` mounts the
-host filesystem with NODEFS under Node, which needs emscripten's nodefs
-library on the **wasm** link line and would break a native link:
+The object form also accepts **`link_options`** — extra linker flags applied to *this target only*, emitted as `target_link_options(... PRIVATE ...)` in the generated project. Per-target (unlike `compile_definitions`) because link flags are toolchain-specific — e.g. geogram's `GEO::initialize()` mounts the host filesystem with NODEFS under Node, which needs emscripten's nodefs library on the **wasm** link line and would break a native link:
 
 ```json
 "targets": [
@@ -244,9 +210,7 @@ library on the **wasm** link line and would break a native link:
 
 ### Available `lang` values
 
-Thin (reflection re-runs at the target's compile time — needs the C++26
-toolchain to build) and **expanded** (reflection runs once on the host;
-the generated code builds with a stock compiler).
+Thin (reflection re-runs at the target's compile time — needs the C++26 toolchain to build) and **expanded** (reflection runs once on the host; the generated code builds with a stock compiler).
 
 | `lang` | Output | Expanded variant |
 |---|---|---|
@@ -255,10 +219,11 @@ the generated code builds with a stock compiler).
 | `node` | N-API native addon | `node-expanded` |
 | `wasm` | Emscripten / embind module | `wasm-expanded` |
 | `qt` | Qt Widgets property/method inspector | `qt-expanded` |
+| `imgui-expanded` | Dear ImGui inspector app (GLFW + OpenGL3, auto-fetched) | expanded only |
 | `qml` | QML / QtQuick inspector | `qml-expanded` |
 | `csharp` | C-ABI shared lib + P/Invoke wrappers | `csharp-expanded` |
 | `java` | C-ABI + handle-backed FFM wrappers | `java-expanded` |
-| `julia` | CxxWrap.jl / jlcxx shared module | — |
+| `julia` | CxxWrap.jl / jlcxx shared module | `julia-expanded` (adds `std::vector` support) |
 | `lua-expanded` | sol2 shared module, `require`-able (Lua 5.1–5.4 / LuaJIT) | expanded only |
 | `rest` | cpp-httplib JSON server + browser client | — |
 | `openapi` | OpenAPI 3.1 spec | text output |
@@ -268,25 +233,15 @@ the generated code builds with a stock compiler).
 | `html` | styled API reference page | text output |
 | `paraview` | ParaView Server Manager plugin XML | text output |
 
-The text-only outputs (`markdown`, `html`, `json`, `typescript`, `openapi`,
-`paraview`) don't compile anything, so the C++26-vs-stock distinction
-doesn't apply — they're produced directly.
+The text-only outputs (`markdown`, `html`, `json`, `typescript`, `openapi`, `paraview`) don't compile anything, so the C++26-vs-stock distinction doesn't apply — they're produced directly.
 
-> **Why expanded?** If your *target* compiler doesn't support reflection,
-> use the `-expanded` variants: generate once on a C++26 / P2996 host, then
-> ship and build the generated sources anywhere with a stock toolchain
-> (plain Clang / GCC / MSVC, stock emsdk, stock Qt 6). The generator host
-> still needs C++26; the target does not. Pairs naturally with out-of-line
-> annotations so the bound headers stay stock C++ too. See
-> [`examples/geom-expanded`](../examples/geom-expanded).
+> **Why expanded?** If your *target* compiler doesn't support reflection, use the `-expanded` variants: generate once on a C++26 / P2996 host, then ship and build the generated sources anywhere with a stock toolchain (plain Clang / GCC / MSVC, stock emsdk, stock Qt 6). The generator host still needs C++26; the target does not. Pairs naturally with out-of-line annotations so the bound headers stay stock C++ too. See [`examples/geom-expanded`](../examples/geom-expanded).
 
 ---
 
 ## Linking an external library (`user_lib`)
 
-Use `user_lib` when your bound headers only **declare** the API and the
-definitions live in a separately-compiled library (`.so` / `.dylib` / `.a`).
-rosetta links the generated bindings against it and sets up rpath.
+Use `user_lib` when your bound headers only **declare** the API and the definitions live in a separately-compiled library (`.so` / `.dylib` / `.a`). rosetta links the generated bindings against it and sets up rpath.
 
 ```json
 "user_lib": {
@@ -302,17 +257,13 @@ rosetta links the generated bindings against it and sets up rpath.
 | `dir` | ✅ | — | Directory holding the library (relative to the manifest; used for `-L` / rpath). |
 | `link` | — | `"shared"` | `"shared"` (default), `"static"`, or `"dynamic"` (alias of `"shared"`). The *preferred* form, with fallback to whichever is actually built. |
 
-`wasm` targets are **always** static — a native `.dylib` / `.so` cannot
-enter a wasm module. The native `python` / `node` targets honor `link`. See
-[`examples/dynamic-lib`](../examples/dynamic-lib).
+`wasm` targets are **always** static — a native `.dylib` / `.so` cannot enter a wasm module. The native `python` / `node` targets honor `link`. See [`examples/dynamic-lib`](../examples/dynamic-lib).
 
 ---
 
 ## Compiling user sources (`user_sources`)
 
-Use `user_sources` when your bound headers only **declare** the API and the
-definitions live in `.cpp` files you want **compiled straight into the
-binding** — rather than linked from a pre-built [`user_lib`](#linking-an-external-library-user_lib).
+Use `user_sources` when your bound headers only **declare** the API and the definitions live in `.cpp` files you want **compiled straight into the binding** — rather than linked from a pre-built [`user_lib` (#linking-an-external-library-user_lib).
 
 ```json
 "user_sources": [
@@ -321,10 +272,7 @@ binding** — rather than linked from a pre-built [`user_lib`](#linking-an-exter
 ]
 ```
 
-It is always a **list of paths**, each relative to the manifest (or
-absolute). Every compiled backend adds them to its binding target via
-`target_sources(...)`, so they build with the same include path and flags as
-the generated binding. A single string is accepted as a one-element list.
+It is always a **list of paths**, each relative to the manifest (or absolute). Every compiled backend adds them to its binding target via `target_sources(...)`, so they build with the same include path and flags as the generated binding. A single string is accepted as a one-element list.
 
 Each entry may be a **shell glob**, expanded at generation time:
 
@@ -332,21 +280,11 @@ Each entry may be a **shell glob**, expanded at generation time:
 "user_sources": ["./extern/pmp/src/pmp/algorithms/*.cpp"]
 ```
 
-`*`, `?` and `[...]` are supported within a path component (POSIX glob — not
-recursive `**`). Matches are sorted for reproducible output, and the final
-list is de-duplicated, so mixing a literal path with a glob that also covers
-it is safe. A pattern that matches nothing emits a warning and is skipped.
-Because globs expand when `rosetta_gen` runs, **re-run it after adding or
-removing matching files**.
+`*`, `?` and `[...]` are supported within a path component (POSIX glob — not recursive `**`). Matches are sorted for reproducible output, and the final list is de-duplicated, so mixing a literal path with a glob that also covers it is safe. A pattern that matches nothing emits a warning and is skipped. Because globs expand when `rosetta_gen` runs, **re-run it after adding or removing matching files**.
 
-`user_sources` and `user_lib` are independent — use either, or both. The
-text-only backends (`markdown`, `html`, `json`, `typescript`, `openapi`,
-`paraview`) compile nothing and ignore it.
+`user_sources` and `user_lib` are independent — use either, or both. The text-only backends (`markdown`, `html`, `json`, `typescript`, `openapi`, `paraview`) compile nothing and ignore it.
 
-Entries may also be **C sources** (`.c`) — e.g. a third-party library's
-vendored dependencies (zlib, rply, libMeshb, OpenNL…). When any `.c` file is
-listed, the generated CMakeLists calls `enable_language(C)` automatically so
-they compile alongside the C++ binding:
+Entries may also be **C sources** (`.c`) — e.g. a third-party library's vendored dependencies (zlib, rply, libMeshb, OpenNL…). When any `.c` file is listed, the generated CMakeLists calls `enable_language(C)` automatically so they compile alongside the C++ binding:
 
 ```json
 "user_sources": [
@@ -360,9 +298,7 @@ they compile alongside the C++ binding:
 
 ## Preprocessor definitions (`compile_definitions`)
 
-Use `compile_definitions` to pass preprocessor switches to the build — most
-commonly a third-party library's configuration macros. Each entry is `"NAME"`
-or `"NAME=VALUE"`:
+Use `compile_definitions` to pass preprocessor switches to the build — most commonly a third-party library's configuration macros. Each entry is `"NAME"` or `"NAME=VALUE"`:
 
 ```json
 "compile_definitions": [
@@ -371,22 +307,14 @@ or `"NAME=VALUE"`:
 ]
 ```
 
-(This geogram example selects the vendored libMeshb / rply / zlib over system
-libraries, and compiles the HLBFGS optimizer in — required by the Newton
-iterations of CVT remeshing.)
+(This geogram example selects the vendored libMeshb / rply / zlib over system libraries, and compiles the HLBFGS optimizer in — required by the Newton iterations of CVT remeshing.)
 
-The definitions are emitted as `target_compile_definitions(... PRIVATE ...)`
-in **two** places, so the whole pipeline sees a consistent configuration:
+The definitions are emitted as `target_compile_definitions(... PRIVATE ...)` in **two** places, so the whole pipeline sees a consistent configuration:
 
-- the **generator driver** — it includes the bound headers for the reflection
-  walk, which must see the same preprocessor state the bindings will be built
-  with;
-- **every compiled binding target** — where they reach the bound headers and
-  the [`user_sources`](#compiling-user-sources-user_sources) alike.
+- the **generator driver** — it includes the bound headers for the reflection walk, which must see the same preprocessor state the bindings will be built with;
+- **every compiled binding target** — where they reach the bound headers and the [`user_sources`](#compiling-user-sources-user_sources) alike.
 
-A single string is accepted as a one-element list. The text-only backends
-(`markdown`, `html`, `json`, `typescript`, `openapi`, `paraview`) compile
-nothing and ignore it.
+A single string is accepted as a one-element list. The text-only backends (`markdown`, `html`, `json`, `typescript`, `openapi`, `paraview`) compile nothing and ignore it.
 
 ---
 
@@ -419,8 +347,7 @@ nothing and ignore it.
   ],
 
   "classes": [
-    { "doc": "the top-level model", "name": "Model", "header": "Model.h",
-      "annotations": "Model.ann.json" },
+    { "doc": "the top-level model", "name": "Model", "header": "Model.h", "annotations": "Model.ann.json" },
     { "header": "Point.h" },
     { "header": "Surface.h" },
     { "header": "Triangle.h" },
@@ -434,9 +361,7 @@ nothing and ignore it.
 }
 ```
 
-The `cpp26_*` fields point at the **C++26 / P2996 reflection compiler** used
-to build the thin backends. They are all optional — omit them and rosetta
-uses these defaults:
+The `cpp26_*` fields point at the **C++26 / P2996 reflection compiler** used to build the thin backends. They are all optional — omit them and rosetta uses these defaults:
 
 | Field | Default |
 |---|---|
@@ -445,27 +370,14 @@ uses these defaults:
 | `cpp26_cc` | `${cpp26_root}/bin/clang` |
 | `cpp26_lib` | `${cpp26_root}/lib` |
 
-If your [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996)
-build lives elsewhere, set `cpp26_root` alone — `cpp26_cxx` / `cpp26_cc` /
-`cpp26_lib` all derive from it. Override the individual ones only when the
-compiler binaries or the `libc++` / `libc++abi` directory sit outside the
-usual `bin/` and `lib/` layout. `$ENV{HOME}` is expanded by CMake at
-configure time, so the path stays portable across machines. These only
-affect the *thin* backends — the `-expanded` and text targets build with a
-stock compiler and ignore them.
+If your [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) build lives elsewhere, set `cpp26_root` alone — `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` all derive from it. Override the individual ones only when the compiler binaries or the `libc++` / `libc++abi` directory sit outside the usual `bin/` and `lib/` layout. `$ENV{HOME}` is expanded by CMake at configure time, so the path stays portable across machines. These only affect the *thin* backends — the `-expanded` and text targets build with a stock compiler and ignore them.
 
 ---
 
 ## Common gotchas
 
-- **Paths are relative to the manifest file.** Move it and re-run
-  `rosetta_gen`.
+- **Paths are relative to the manifest file.** Move it and re-run `rosetta_gen`.
 - A class missing from `classes[]` is **invisible** to the bindings.
-- A bare-string target reuses `module_name`; if two object-form targets
-  share a `name`, they share a module name — usually intended (one module
-  per language), but watch for collisions across languages that write to
-  the same directory.
-- Comments must be valid JSON: use `"//"`-prefixed keys, not `//` line
-  comments.
-- The generator host always needs the C++26 / P2996 toolchain; only the
-  `-expanded` and text targets build on a stock compiler afterwards.
+- A bare-string target reuses `module_name`; if two object-form targets share a `name`, they share a module name — usually intended (one module per language), but watch for collisions across languages that write to the same directory.
+- Comments must be valid JSON: use `"//"`-prefixed keys, not `//` line comments.
+- The generator host always needs the C++26 / P2996 toolchain; only the `-expanded` and text targets build on a stock compiler afterwards.

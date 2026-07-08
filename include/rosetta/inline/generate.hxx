@@ -995,10 +995,12 @@ endif()
 #include <rosetta/backends/python_expanded_backend.h>
 #include <rosetta/backends/csharp_expanded_backend.h>
 #include <rosetta/backends/java_expanded_backend.h>
+#include <rosetta/backends/julia_expanded_backend.h>
 #include <rosetta/backends/lua_expanded_backend.h>
 #include <rosetta/backends/nanobind_expanded_backend.h>
 #include <rosetta/backends/node_expanded_backend.h>
 #include <rosetta/backends/qt_expanded_backend.h>
+#include <rosetta/backends/imgui_expanded_backend.h>
 #include <rosetta/backends/qml_expanded_backend.h>
 #include <rosetta/backends/rest_backend.h>
 #include <rosetta/backends/typescript_backend.h>
@@ -1019,8 +1021,10 @@ namespace rosetta {
             m["node"]            = std::make_shared<gen_detail::NodeBackend>();
             m["node-expanded"]   = std::make_shared<gen_detail::NodeExpandedBackend>();
             m["qt-expanded"]     = std::make_shared<gen_detail::QtExpandedBackend>();
+            m["imgui-expanded"]  = std::make_shared<gen_detail::ImGuiExpandedBackend>();
             m["qml-expanded"]    = std::make_shared<gen_detail::QmlExpandedBackend>();
             m["julia"]           = std::make_shared<gen_detail::JuliaBackend>();
+            m["julia-expanded"]  = std::make_shared<gen_detail::JuliaExpandedBackend>();
             m["lua-expanded"]    = std::make_shared<gen_detail::LuaExpandedBackend>();
             m["rest"]            = std::make_shared<gen_detail::RestBackend>();
             m["wasm"]            = std::make_shared<gen_detail::WasmBackend>();

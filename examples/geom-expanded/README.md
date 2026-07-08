@@ -2,7 +2,7 @@
 
 A variant of [`../geom-lib`](../geom-lib) whose generated bindings **build with a
 stock toolchain** — no clang-p2996, no reflection, (almost) no rosetta headers on
-the machine that compiles the binding. It ships nine such targets:
+the machine that compiles the binding. It ships eleven such targets:
 
 - **`python-expanded`** → a pybind11 module that builds with a stock **C++17** compiler.
 - **`nanobind-expanded`** → a [nanobind](https://github.com/wjakob/nanobind) module
@@ -30,6 +30,22 @@ the machine that compiles the binding. It ships nine such targets:
   the exact one), a Lua function converts natively into a `std::function`
   callback parameter, and the out-of-line `range` on `Triangle.a/b/c` validates
   at run time.
+- **`julia-expanded`** → a CxxWrap / jlcxx module (stock **C++20** + Julia with
+  the CxxWrap package) loaded via a generated `jlgeom.jl` wrapper. Because it
+  builds against the stock libc++ — not the fork's — `<jlcxx/stl.hpp>` compiles
+  and **`std::vector` crosses the boundary** (members, parameters, returns,
+  including vectors of bound classes), which the thin `julia` target must skip.
+  A plain Julia `Vector` works wherever C++ wants a vector (a zero-copy
+  `ArrayRef` overload is generated beside the exact one); fields follow Julia's
+  convention (`x(p)` / `x!(p, v)`), and the `range` annotation validates in the
+  generated setter.
+
+- **`imgui-expanded`** → a Dear ImGui inspector app (stock **C++17**; ImGui and
+  GLFW are fetched automatically at configure time) — the immediate-mode
+  counterpart of `qt-expanded`. One tab per class; ranged fields become
+  clamping sliders (`Triangle.a/b/c`), enums become combos, docs become "(?)"
+  tooltips, and scalar methods get a call button. `ROSETTA_IMGUI_FRAMES=N`
+  auto-exits after N frames (smoke tests).
 
 Two things make the stock-toolchain targets possible:
 
@@ -127,7 +143,27 @@ System.Console.WriteLine(t.kind);   // enum, marshalled as its integer value
 At run time the .NET loader must find `libcsgeom.*` (e.g.
 `DYLD_LIBRARY_PATH=bindings/csharp-expanded/build` on macOS, `LD_LIBRARY_PATH=…` on Linux).
 
-### 3g. Lua — sol2 module (stock C++17 + Lua 5.1–5.4 / LuaJIT)
+### 3g. Dear ImGui — inspector app (stock C++17, deps auto-fetched)
+```sh
+cmake -S bindings/imgui-expanded -B bindings/imgui-expanded/build
+cmake --build bindings/imgui-expanded/build -j
+./bindings/imgui-expanded/build/geom_imgui          # opens the inspector window
+ROSETTA_IMGUI_FRAMES=5 ./bindings/imgui-expanded/build/geom_imgui  # smoke test
+```
+
+### 3h. Julia — jlcxx module (stock C++20 + CxxWrap.jl)
+```sh
+# needs Julia with CxxWrap installed:  julia -e 'using Pkg; Pkg.add("CxxWrap")'
+cmake -S bindings/julia-expanded -B bindings/julia-expanded/build
+cmake --build bindings/julia-expanded/build -j
+#   -> bindings/julia-expanded/libjlgeom.dylib + jlgeom.jl (the loader module)
+julia example_julia.jl
+```
+
+Unlike the thin `julia` target, `std::vector` is fully bound here (`getPoints`,
+`getSurfaces`, vector-taking constructors — see the note in the main README).
+
+### 3i. Lua — sol2 module (stock C++17 + Lua 5.1–5.4 / LuaJIT)
 ```sh
 # sol2 is fetched automatically at configure time; on macOS `brew install lua@5.4`
 # (sol2 does not support Lua 5.5 yet — the generated CMake prefers a 5.4 install)
@@ -162,6 +198,8 @@ DYLD_LIBRARY_PATH=bindings/csharp-expanded/build dotnet run --project run # csha
 # lua-expanded (luageom — tables, callbacks, range). Use the SAME Lua version
 # the module was built against (Homebrew's plain `lua` is 5.5 — unsupported):
 /opt/homebrew/opt/lua@5.4/bin/lua example_lua.lua
+
+julia   example_julia.jl      # julia-expanded     (jlgeom — std::vector fully bound)
 ```
 
 [`example_csharp.cs`](example_csharp.cs) covers the **csharp-expanded** target
