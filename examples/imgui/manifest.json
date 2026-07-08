@@ -1,0 +1,22 @@
+{
+    "//1": "Dear ImGui inspector for the Algo demo class. Algo.h here is the",
+    "//2": "STOCK-C++ variant of ../Algo.h: no inline [[=rosetta::...]]",
+    "//3": "annotations — every doc / range / combobox lives in Algo.ann.json,",
+    "//4": "so the generated inspector builds with a stock C++20 compiler",
+    "//5": "(Dear ImGui and GLFW are fetched automatically by its CMake).",
+
+    "user_include": ".",
+    "rosetta_include": "../../include",
+    "generator_name": "algo_imgui_gen",
+    "module_name": "algo",
+
+    "targets": [
+        { "lang": "imgui-expanded", "name": "algo" },
+        { "lang": "qt-expanded",    "name": "algo" },
+        { "lang": "qml-expanded",   "name": "algo" }
+    ],
+
+    "classes": [
+        { "name": "Algo", "header": "Algo.h", "annotations": "Algo.ann.json" }
+    ]
+}

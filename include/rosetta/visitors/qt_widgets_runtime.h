@@ -15,11 +15,15 @@
 
 #pragma once
 
+#include <QButtonGroup>
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QDoubleValidator>
+#include <QFileDialog>
 #include <QFormLayout>
+#include <QRadioButton>
 #include <QHBoxLayout>
 #include <QIntValidator>
 #include <QLabel>
@@ -43,7 +47,17 @@ namespace rosetta {
 
         // Widget hint, mirroring rosetta::widget::* — passed as a plain int so
         // the runtime needs no rosetta headers.
-        enum Hint { H_NONE = 0, H_SPIN, H_SLIDER, H_CHECKBOX, H_TEXTFIELD };
+        enum Hint {
+            H_NONE = 0,
+            H_SPIN,
+            H_SLIDER,
+            H_CHECKBOX,
+            H_TEXTFIELD,
+            H_COLOR,     // string "#rrggbb" -> swatch button + QColorDialog
+            H_MULTILINE, // string -> QTextEdit
+            H_RADIO,     // combobox choices -> QRadioButton group
+            H_FILE,      // string path -> line edit + QFileDialog browse
+        };
 
         // ---- value <-> QVariant (scalars + std::string), reflection-free ----
 
@@ -127,7 +141,30 @@ namespace rosetta {
             std::function<void(std::function<void()>)> wire_commit;
 
             if constexpr (std::is_same_v<F, std::string>) {
-                if (!choices.isEmpty()) {
+                if (!choices.isEmpty() && hint == H_RADIO) {
+                    // combobox choices as a radio-button group (widget::radio).
+                    auto *wrap = new QWidget();
+                    auto *whb  = new QHBoxLayout(wrap);
+                    whb->setContentsMargins(0, 0, 0, 0);
+                    auto *group = new QButtonGroup(wrap);
+                    for (const QString &choice : choices) {
+                        auto *rb = new QRadioButton(choice);
+                        rb->setChecked(choice == QString::fromStdString(initial));
+                        rb->setEnabled(!ro);
+                        group->addButton(rb);
+                        whb->addWidget(rb);
+                    }
+                    whb->addStretch(1);
+                    editor      = wrap;
+                    read_editor = [group] {
+                        auto *b = group->checkedButton();
+                        return QVariant(b ? b->text() : QString{});
+                    };
+                    wire_commit = [group](std::function<void()> c) {
+                        QObject::connect(group, &QButtonGroup::buttonClicked, group,
+                                         [c](QAbstractButton *) { c(); });
+                    };
+                } else if (!choices.isEmpty()) {
                     auto *box = new QComboBox();
                     box->addItems(choices);
                     const int idx = box->findText(QString::fromStdString(initial));
@@ -137,6 +174,64 @@ namespace rosetta {
                     read_editor = [box] { return QVariant(box->currentText()); };
                     wire_commit = [box](std::function<void()> c) {
                         QObject::connect(box, &QComboBox::activated, box, [c](int) { c(); });
+                    };
+                } else if (hint == H_COLOR) {
+                    // "#rrggbb" string as a swatch button opening QColorDialog
+                    // (widget::color). The button background previews the value.
+                    auto *btn = new QPushButton(QString::fromStdString(initial));
+                    auto  set_swatch = [btn](const QString &hex) {
+                        btn->setText(hex);
+                        btn->setStyleSheet(QStringLiteral("background:%1;").arg(hex));
+                    };
+                    set_swatch(QString::fromStdString(initial));
+                    btn->setEnabled(!ro);
+                    editor      = btn;
+                    read_editor = [btn] { return QVariant(btn->text()); };
+                    wire_commit = [btn, set_swatch](std::function<void()> c) {
+                        QObject::connect(btn, &QPushButton::clicked, btn, [btn, set_swatch, c] {
+                            const QColor picked = QColorDialog::getColor(
+                                QColor(btn->text()), btn);
+                            if (picked.isValid()) {
+                                set_swatch(picked.name());
+                                c();
+                            }
+                        });
+                    };
+                } else if (hint == H_MULTILINE) {
+                    // Multi-line text area (widget::multiline); commits on
+                    // focus-out via an event filter — QTextEdit has no
+                    // editingFinished.
+                    auto *te = new QTextEdit(QString::fromStdString(initial));
+                    te->setMaximumHeight(96);
+                    te->setReadOnly(ro);
+                    editor      = te;
+                    read_editor = [te] { return QVariant(te->toPlainText()); };
+                    wire_commit = [te](std::function<void()> c) {
+                        QObject::connect(te, &QTextEdit::textChanged, te, c);
+                    };
+                } else if (hint == H_FILE) {
+                    // Path string: line edit + "…" browse button (widget::file).
+                    auto *wrap = new QWidget();
+                    auto *whb  = new QHBoxLayout(wrap);
+                    whb->setContentsMargins(0, 0, 0, 0);
+                    auto *le = new QLineEdit(QString::fromStdString(initial));
+                    le->setReadOnly(ro);
+                    auto *browse = new QPushButton(QStringLiteral("…"));
+                    browse->setMaximumWidth(32);
+                    browse->setEnabled(!ro);
+                    whb->addWidget(le, 1);
+                    whb->addWidget(browse);
+                    editor      = wrap;
+                    read_editor = [le] { return QVariant(le->text()); };
+                    wire_commit = [le, browse](std::function<void()> c) {
+                        QObject::connect(le, &QLineEdit::editingFinished, le, c);
+                        QObject::connect(browse, &QPushButton::clicked, le, [le, c] {
+                            const QString picked = QFileDialog::getOpenFileName(le);
+                            if (!picked.isEmpty()) {
+                                le->setText(picked);
+                                c();
+                            }
+                        });
                     };
                 } else {
                     auto *le = new QLineEdit(QString::fromStdString(initial));

@@ -37,14 +37,15 @@ struct Widget {
 };
 ```
 
-`widget.ann.json` — keys are member identifiers; each value object may carry any of `doc` (string), `range` (`[lo, hi]`), `readonly` (bool), `combobox` (string array):
+`widget.ann.json` — keys are member identifiers (fields **or methods**); each value object may carry any of `doc` (string), `range` (`[lo, hi]`, scientific notation ok), `readonly` (bool), `combobox` (string array), `label` (display-name override, string), `button` (call-button caption for a method, string), `widget` (UI hint: `"slider"`, `"spin"`, `"checkbox"`, `"textfield"`, `"color"`, `"multiline"`, `"radio"` or `"file"`) — the full inline annotation set:
 
 ```json
 {
-  "title": { "doc": "The widget title" },
-  "count": { "doc": "Visible items", "range": [0, 100] },
+  "title": { "doc": "The widget title", "label": "Title" },
+  "count": { "doc": "Visible items", "range": [0, 100], "widget": "slider" },
   "id":    { "readonly": true },
-  "mode":  { "combobox": ["fast", "slow"] }
+  "mode":  { "combobox": ["fast", "slow"] },
+  "run":   { "doc": "Run the thing", "button": "Run" }
 }
 ```
 

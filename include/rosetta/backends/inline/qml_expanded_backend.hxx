@@ -97,6 +97,14 @@ target_link_libraries({{LIB}}_qml PRIVATE
                 w = "textfield";
             else if (find_annotation<rosetta::widget::spin_tag>(anns))
                 w = "spin";
+            else if (find_annotation<rosetta::widget::color_tag>(anns))
+                w = "color";
+            else if (find_annotation<rosetta::widget::multiline_tag>(anns))
+                w = "multiline";
+            else if (find_annotation<rosetta::widget::radio_tag>(anns))
+                w = "radio";
+            else if (find_annotation<rosetta::widget::file_tag>(anns))
+                w = "file";
             return w.empty() ? "QString{}" : qtx_qstr(w);
         }
 

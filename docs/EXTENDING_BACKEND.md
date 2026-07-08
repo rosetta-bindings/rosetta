@@ -1,6 +1,6 @@
 # Extending Rosetta with a new backend (Lua example)
 
-Rosetta ships four backends — `python`, `node`, `rest`, `wasm` — but the
+Rosetta ships several backends — `python`, `node`, `rest`, `wasm`, `...` — but the
 generator is **open for extension**: you can teach it a new target language
 without editing `rosetta::generate` or any core file. This guide adds a
 `lua` backend as a worked example.

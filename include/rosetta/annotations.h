@@ -152,11 +152,34 @@ namespace rosetta {
         struct textfield_tag {
             bool operator==(const textfield_tag &) const = default;
         };
+        // A string field holding a "#rrggbb" hex color — rendered as a color
+        // picker / swatch by the UI backends.
+        struct color_tag {
+            bool operator==(const color_tag &) const = default;
+        };
+        // A string field edited as a multi-line text area.
+        struct multiline_tag {
+            bool operator==(const multiline_tag &) const = default;
+        };
+        // Render the field's combobox{} choices as a radio-button group
+        // instead of a drop-down (pair it with rosetta::combobox).
+        struct radio_tag {
+            bool operator==(const radio_tag &) const = default;
+        };
+        // A string field holding a file path — text entry plus a browse
+        // button opening the platform file dialog.
+        struct file_tag {
+            bool operator==(const file_tag &) const = default;
+        };
 
         inline constexpr spin_tag      spin{};
         inline constexpr slider_tag    slider{};
         inline constexpr checkbox_tag  checkbox{};
         inline constexpr textfield_tag textfield{};
+        inline constexpr color_tag     color{};
+        inline constexpr multiline_tag multiline{};
+        inline constexpr radio_tag     radio{};
+        inline constexpr file_tag      file{};
 
     } // namespace widget
 

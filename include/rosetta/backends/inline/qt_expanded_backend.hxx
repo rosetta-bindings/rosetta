@@ -52,6 +52,14 @@ target_link_libraries({{LIB}}_qt PRIVATE Qt6::Widgets)
                 return "rosetta::qtw::H_TEXTFIELD";
             if (find_annotation<rosetta::widget::spin_tag>(anns))
                 return "rosetta::qtw::H_SPIN";
+            if (find_annotation<rosetta::widget::color_tag>(anns))
+                return "rosetta::qtw::H_COLOR";
+            if (find_annotation<rosetta::widget::multiline_tag>(anns))
+                return "rosetta::qtw::H_MULTILINE";
+            if (find_annotation<rosetta::widget::radio_tag>(anns))
+                return "rosetta::qtw::H_RADIO";
+            if (find_annotation<rosetta::widget::file_tag>(anns))
+                return "rosetta::qtw::H_FILE";
             return "rosetta::qtw::H_NONE";
         }
 

@@ -22,6 +22,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Window
 
@@ -106,7 +107,12 @@ ApplicationWindow {
                             id: editorLoader
                             Layout.fillWidth: true
                             sourceComponent: {
+                                if (modelData.widget === "radio"
+                                    && modelData.hasChoices)         return radioEditor;
                                 if (modelData.hasChoices)            return comboEditor;
+                                if (modelData.widget === "color")    return colorEditor;
+                                if (modelData.widget === "multiline")return multilineEditor;
+                                if (modelData.widget === "file")     return fileEditor;
                                 if (modelData.widget === "slider"
                                     && modelData.hasRange)           return sliderEditor;
                                 if (modelData.widget === "checkbox") return boolEditor;
@@ -196,6 +202,101 @@ ApplicationWindow {
                                     onActivated: {
                                         editorLoader.currentValue = model[currentIndex];
                                         commit(model[currentIndex]);
+                                    }
+                                }
+                            }
+                            Component {
+                                id: radioEditor
+                                Row {
+                                    spacing: 10
+                                    Repeater {
+                                        model: editorLoader.fieldInfo.choices
+                                        delegate: RadioButton {
+                                            text: modelData
+                                            checked: modelData === editorLoader.currentValue
+                                            enabled: !editorLoader.fieldInfo.readonly
+                                            onClicked: {
+                                                editorLoader.currentValue = text;
+                                                commit(text);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Component {
+                                id: colorEditor
+                                RowLayout {
+                                    spacing: 8
+                                    Rectangle {
+                                        width: 48; height: 24; radius: 4
+                                        border.color: "#666"
+                                        color: editorLoader.currentValue || "#000000"
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            enabled: !editorLoader.fieldInfo.readonly
+                                            onClicked: colorDlg.open()
+                                        }
+                                    }
+                                    Label {
+                                        text: editorLoader.currentValue || ""
+                                        color: "#bbb"
+                                    }
+                                    ColorDialog {
+                                        id: colorDlg
+                                        selectedColor: editorLoader.currentValue || "#000000"
+                                        onAccepted: {
+                                            var hex = selectedColor.toString();
+                                            editorLoader.currentValue = hex;
+                                            commit(hex);
+                                        }
+                                    }
+                                }
+                            }
+                            Component {
+                                id: multilineEditor
+                                Frame {
+                                    padding: 0
+                                    implicitHeight: 90
+                                    TextArea {
+                                        anchors.fill: parent
+                                        text: editorLoader.currentValue !== undefined
+                                              ? editorLoader.currentValue : ""
+                                        enabled: !editorLoader.fieldInfo.readonly
+                                        wrapMode: TextEdit.Wrap
+                                        onTextChanged: editorLoader.currentValue = text
+                                        // TextArea has no editingFinished — commit on focus-out
+                                        onActiveFocusChanged: {
+                                            if (!activeFocus) commit(text);
+                                        }
+                                    }
+                                }
+                            }
+                            Component {
+                                id: fileEditor
+                                RowLayout {
+                                    spacing: 8
+                                    TextField {
+                                        Layout.fillWidth: true
+                                        text: editorLoader.currentValue !== undefined
+                                              ? editorLoader.currentValue : ""
+                                        enabled: !editorLoader.fieldInfo.readonly
+                                        onTextChanged: editorLoader.currentValue = text
+                                        onEditingFinished: commit(text)
+                                    }
+                                    Button {
+                                        text: "…"
+                                        implicitWidth: 36
+                                        enabled: !editorLoader.fieldInfo.readonly
+                                        onClicked: fileDlg.open()
+                                    }
+                                    FileDialog {
+                                        id: fileDlg
+                                        onAccepted: {
+                                            var p = String(selectedFile)
+                                                    .replace(/^file:\/\//, "");
+                                            editorLoader.currentValue = p;
+                                            commit(p);
+                                        }
                                     }
                                 }
                             }

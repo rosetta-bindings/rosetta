@@ -40,7 +40,7 @@ the machine that compiles the binding. It ships eleven such targets:
   convention (`x(p)` / `x!(p, v)`), and the `range` annotation validates in the
   generated setter.
 
-- **`imgui-expanded`** → a Dear ImGui inspector app (stock **C++17**; ImGui and
+- **`imgui-expanded`** → a Dear ImGui inspector app (stock **C++20**; ImGui and
   GLFW are fetched automatically at configure time) — the immediate-mode
   counterpart of `qt-expanded`. One tab per class; ranged fields become
   clamping sliders (`Triangle.a/b/c`), enums become combos, docs become "(?)"
@@ -143,7 +143,7 @@ System.Console.WriteLine(t.kind);   // enum, marshalled as its integer value
 At run time the .NET loader must find `libcsgeom.*` (e.g.
 `DYLD_LIBRARY_PATH=bindings/csharp-expanded/build` on macOS, `LD_LIBRARY_PATH=…` on Linux).
 
-### 3g. Dear ImGui — inspector app (stock C++17, deps auto-fetched)
+### 3g. Dear ImGui — inspector app (stock C++20, deps auto-fetched)
 ```sh
 cmake -S bindings/imgui-expanded -B bindings/imgui-expanded/build
 cmake --build bindings/imgui-expanded/build -j

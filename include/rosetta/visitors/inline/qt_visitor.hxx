@@ -1,11 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
 // SPDX-License-Identifier: UNLICENSED
 
+#include <QButtonGroup>
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QDoubleValidator>
+#include <QFileDialog>
 #include <QFormLayout>
+#include <QRadioButton>
 #include <QHBoxLayout>
 #include <QIntValidator>
 #include <QLabel>
@@ -171,6 +175,10 @@ namespace rosetta {
         constexpr bool want_slider    = ann::has<widget::slider_tag>(Anns...);
         constexpr bool want_checkbox  = ann::has<widget::checkbox_tag>(Anns...);
         constexpr bool want_textfield = ann::has<widget::textfield_tag>(Anns...);
+        constexpr bool want_color     = ann::has<widget::color_tag>(Anns...);
+        constexpr bool want_multiline = ann::has<widget::multiline_tag>(Anns...);
+        constexpr bool want_radio     = ann::has<widget::radio_tag>(Anns...);
+        constexpr bool want_file      = ann::has<widget::file_tag>(Anns...);
         constexpr auto lbl            = ann::get_or<label>(label{""}, Anns...);
         const QString  qname          = QString::fromUtf8(name);
         const QString  qdisplay       = (lbl.text[0] != '\0') ? QString::fromUtf8(lbl.text) : qname;
@@ -187,7 +195,31 @@ namespace rosetta {
         std::function<QVariant()>                  read_editor;
         std::function<void(std::function<void()>)> wire_commit;
 
-        if constexpr (has_cb && std::is_same_v<F, std::string>) {
+        if constexpr (has_cb && want_radio && std::is_same_v<F, std::string>) {
+            // combobox choices as a radio-button group (widget::radio).
+            auto *wrap = new QWidget();
+            auto *whb  = new QHBoxLayout(wrap);
+            whb->setContentsMargins(0, 0, 0, 0);
+            auto         *group   = new QButtonGroup(wrap);
+            const QString current = QString::fromStdString(tgt->[:Fld:]);
+            for (std::size_t i = 0; i < cb.count; ++i) {
+                auto *rb = new QRadioButton(QString::fromUtf8(cb.choices[i]));
+                rb->setChecked(rb->text() == current);
+                rb->setEnabled(!ro);
+                group->addButton(rb);
+                whb->addWidget(rb);
+            }
+            whb->addStretch(1);
+            editor      = wrap;
+            read_editor = [group] {
+                auto *b = group->checkedButton();
+                return QVariant(b ? b->text() : QString{});
+            };
+            wire_commit = [group](std::function<void()> commit) {
+                QObject::connect(group, &QButtonGroup::buttonClicked, group,
+                                 [commit](QAbstractButton *) { commit(); });
+            };
+        } else if constexpr (has_cb && std::is_same_v<F, std::string>) {
             auto *box = new QComboBox();
             for (std::size_t i = 0; i < cb.count; ++i) {
                 box->addItem(QString::fromUtf8(cb.choices[i]));
@@ -200,6 +232,60 @@ namespace rosetta {
             read_editor = [box] { return QVariant(box->currentText()); };
             wire_commit = [box](std::function<void()> commit) {
                 QObject::connect(box, &QComboBox::activated, box, [commit](int) { commit(); });
+            };
+        } else if constexpr (want_color && std::is_same_v<F, std::string>) {
+            // "#rrggbb" string as a swatch button opening QColorDialog.
+            auto *btn        = new QPushButton(QString::fromStdString(tgt->[:Fld:]));
+            auto  set_swatch = [btn](const QString &hex) {
+                btn->setText(hex);
+                btn->setStyleSheet(QStringLiteral("background:%1;").arg(hex));
+            };
+            set_swatch(QString::fromStdString(tgt->[:Fld:]));
+            btn->setEnabled(!ro);
+            editor      = btn;
+            read_editor = [btn] { return QVariant(btn->text()); };
+            wire_commit = [btn, set_swatch](std::function<void()> commit) {
+                QObject::connect(btn, &QPushButton::clicked, btn, [btn, set_swatch, commit] {
+                    const QColor picked = QColorDialog::getColor(QColor(btn->text()), btn);
+                    if (picked.isValid()) {
+                        set_swatch(picked.name());
+                        commit();
+                    }
+                });
+            };
+        } else if constexpr (want_multiline && std::is_same_v<F, std::string>) {
+            // Multi-line text area (widget::multiline).
+            auto *te = new QTextEdit(QString::fromStdString(tgt->[:Fld:]));
+            te->setMaximumHeight(96);
+            te->setReadOnly(ro);
+            editor      = te;
+            read_editor = [te] { return QVariant(te->toPlainText()); };
+            wire_commit = [te](std::function<void()> commit) {
+                QObject::connect(te, &QTextEdit::textChanged, te, commit);
+            };
+        } else if constexpr (want_file && std::is_same_v<F, std::string>) {
+            // Path string: line edit + "…" browse button (widget::file).
+            auto *wrap = new QWidget();
+            auto *whb  = new QHBoxLayout(wrap);
+            whb->setContentsMargins(0, 0, 0, 0);
+            auto *le = new QLineEdit(QString::fromStdString(tgt->[:Fld:]));
+            le->setReadOnly(ro);
+            auto *browse = new QPushButton(QStringLiteral("…"));
+            browse->setMaximumWidth(32);
+            browse->setEnabled(!ro);
+            whb->addWidget(le, 1);
+            whb->addWidget(browse);
+            editor      = wrap;
+            read_editor = [le] { return QVariant(le->text()); };
+            wire_commit = [le, browse](std::function<void()> commit) {
+                QObject::connect(le, &QLineEdit::editingFinished, le, commit);
+                QObject::connect(browse, &QPushButton::clicked, le, [le, commit] {
+                    const QString picked = QFileDialog::getOpenFileName(le);
+                    if (!picked.isEmpty()) {
+                        le->setText(picked);
+                        commit();
+                    }
+                });
             };
         } else if constexpr (want_slider && std::is_integral_v<F> && has_rng) {
             auto *wrap = new QWidget();

@@ -40,18 +40,10 @@ A C++26 reflection playground with **27 generator backends** — Python (pybind1
 
 Annotations (`doc`, `range`, `readonly`, …) are an *opt-in* enrichment, not a requirement: add them where you want docstrings, validation, or UI hints; leave the rest of the class alone. Reflection does the work either way.
 
-## Rosetta in the wild
-
-Real libraries bound with rosetta — each from a single `manifest.json`, no hand-written wrappers:
-
-| Project | Bound library | Targets |
-|---|---|---|
-| [pmp-rosetta](https://github.com/rosetta-bindings/pmp-rosetta) | [PMP](https://www.pmp-library.org) — the Polygon Mesh Processing library (remeshing, smoothing, subdivision, decimation) | Python, Node.js, WebAssembly, TypeScript |
-| [geogram-rosetta](https://github.com/rosetta-bindings/geogram-rosetta) | [geogram](https://github.com/BrunoLevy/geogram) — Bruno Lévy's geometry-processing library (reconstruction, remeshing, parameterization, booleans/CSG) | Python, Node.js, WebAssembly, TypeScript, Lua |
-| [arch-rosetta](https://github.com/rosetta-bindings/arch-rosetta) | Arch — a 3-D boundary-element (BEM) geomechanics code | Python, Node.js, WebAssembly, TypeScript |
-| [cassini-rosetta](https://github.com/rosetta-bindings/cassini-rosetta) *(private)* | Cassini — FEM geomechanical restoration, bound through a single high-level C++ facade | Python, Node.js, WebAssembly, TypeScript |
-
 ## Features
+
+<details>
+<summary>Fields, methods, inheritance, constructors, enums, free functions, <code>std::vector</code> — discovered by reflection; opt-in annotations enrich, inline or out of line <i>(expand)</i></summary>
 
 Everything below is discovered by **reflection** from your unmodified headers — you declare *what* to bind in [manifest.json](./docs/MANIFEST.md), never *how*.
 
@@ -66,7 +58,7 @@ Everything below is discovered by **reflection** from your unmodified headers �
 - **Nested user types & `std::vector`** — `Surface` returning `Point`/`Triangle`, vector members, etc. are marshalled across the language boundary.
 - Members a backend can't marshal (e.g. `std::function` params) are **skipped**, not fatal.
 
-**Opt-in annotations** (enrich without intruding — see [annotations](docs/OTHER_ANNOTATIONS.md))
+**Opt-in annotations** (enrich without intruding — see the [annotation reference](docs/ANNOTATIONS.md))
 
 - `doc{"..."}` — docstrings / generated reference text.
 - `readonly` — read-only property (write is rejected per backend).
@@ -88,7 +80,9 @@ constexpr std::string_view rosetta::ann_json_source<MyClass> =
 
 In a manifest-driven build you don't write that by hand: add an `"annotations": "Type.ann.json"` field to the class in `manifest.json` and rosetta bakes the external file in for you. Either way the metadata is merged with any inline annotations and reaches every backend (Python, Node, REST, OpenAPI, …) — see [out-of-line annotations](docs/OUT_OF_LINE_ANNOTATIONS.md).
 
-**Backends** (one combined module per target, from a single generator)
+</details>
+
+## Backends (one combined module per target, from a single generator)
 
 | # | Target | C++26 | C++20 |
 |---|---|:---:|:---:|
@@ -130,6 +124,9 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 
 ## Mini-MOC — Qt signals / slots / properties, without moc
 
+<details>
+<summary>A header-only, <b>moc-less</b> take on signals/slots/properties, built on reflection + annotations — annotate members, <code>connect&lt;"sig","slot"&gt;</code>, done <i>(expand)</i></summary>
+
 Beyond binding generation, rosetta ships [`mini_moc.h`](include/rosetta/mini_moc.h): a header-only, **moc-less** reimagining of Qt's signals/slots/properties built directly on C++26 reflection (P2996) + annotations (P3394). No code generator, no separate compile step — just annotate members and connect them.
 
 You mark members with annotations and reach them through three free functions:
@@ -167,7 +164,12 @@ moc::get<"age">(p);                          // -> 30
 
 See the [`examples/moc`](examples/moc) demo and the test suite in [`tests/moc.cpp`](tests/moc.cpp).
 
+</details>
+
 ## Status
+
+<details>
+<summary>Prototype — tracks P2996 / P3394 / P3294; <b>clang-p2996 today</b>, EDG the likely next target <i>(expand)</i></summary>
 
 Prototype. Tracks the in-flight C++26 reflection papers:
 
@@ -187,14 +189,23 @@ No mainline compiler ships these proposals yet, but other front-ends are impleme
 
 Annotations (P3394) and token injection (P3294) are newer and currently exist only in the clang-p2996 fork, so full-feature builds remain fork-only for now.
 
+</details>
+
 ## Requirements
+
+<details>
+<summary>A clang-p2996 build, CMake 3.28+, and the fork's reflection flags <i>(expand)</i></summary>
 
 - A clang-p2996 build at `$HOME/devs/c++/clang-p2996/build` (or override `CLANG_P2996_ROOT` when invoking cmake).
 - CMake 3.28+, Ninja or Make.
 - C++26 mode with the fork's flags: `-freflection -freflection-latest -fexperimental-library`. Annotation-using code also needs `-fannotation-attributes`.
 
+</details>
 
 ## Build the test suite
+
+<details>
+<summary><code>cd tests && cmake -B build && cmake --build build</code> — each test is a self-contained binary <i>(expand)</i></summary>
 
 ```bash
 cd tests
@@ -208,7 +219,12 @@ cmake --build build
 
 Each test is self-contained; pick by name (see `tests/CMakeLists.txt`).
 
+</details>
+
 ## A taste — bind your existing library
+
+<details>
+<summary>An untouched <code>person.h</code> + a small <code>manifest.json</code> → Python and Node modules in four commands <i>(expand)</i></summary>
 
 You have this header. Don't change it:
 
@@ -266,7 +282,12 @@ Result: `bindings/{python,node}/` — each a self-contained CMake project exposi
 
 The full walkthrough is in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md); every manifest field is documented in [`docs/MANIFEST.md`](./docs/MANIFEST.md); the `binding_info<T>` trait and the layered tooling model are in [`docs/GENERATE.md`](./docs/GENERATE.md). The worked examples live in `examples/manifest/` and `examples/geom-lib/`.
 
+</details>
+
 ## Extending a generated binding in C++
+
+<details>
+<summary>Add a hand-written registration block <b>beside</b> the generated source — regeneration never clobbers your extensions <i>(expand)</i></summary>
 
 Everything under `bindings/` is regenerated output — never edit it. When the stock binding misses something you need (a helper the walker skips, such as an overloaded free function; a custom view over a type that isn't bound; a typed-array export for a renderer), add it in a **separate hand-written C++ file** and compile it *alongside* the generated source, from a small build of your own that lives outside `bindings/`. The binding frameworks accept several registration blocks per module, so your file simply contributes a second one — nothing generated is touched, and regenerating the bindings never clobbers your extensions.
 
@@ -287,7 +308,12 @@ EMSCRIPTEN_BINDINGS(pmp_viz) { // second block; the generated one keeps its own
 
 Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BINDINGS` blocks in one module. Backends with a single module entry point (pybind11's `PYBIND11_MODULE`, N-API's `NODE_API_MODULE`) can't add a second block to the *same* module — there, ship your extras as a small companion module built the same way (it sees the same user headers and links the same library), and import/require both.
 
+</details>
+
 ## Examples
+
+<details>
+<summary><b>17 worked examples</b> — manifest-driven, expanded targets, trampolines, mini-moc, the three UI inspectors, hand-written references <i>(expand)</i></summary>
 
 | Path                       | What it shows                                       |
 |----------------------------|-----------------------------------------------------|
@@ -302,23 +328,46 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 | `examples/paraview`        | ParaView plugin property-panel XML from an annotated `vtkThreshold` spec (every backend feature) |
 | `examples/qt`              | Building a Qt widget form from a reflected struct   |
 | `examples/qml`             | Exposing a reflected C++ object to QML              |
+| `examples/imgui`           | Dear ImGui inspector for `Algo` with out-of-line annotations (`Algo.ann.json`: `doc` / `range` / `combobox`) — builds with a stock C++20 compiler, deps auto-fetched |
 | `examples/bindings/python` | Hand-written pybind11 backend (reference)           |
 | `examples/bindings/node`   | Hand-written N-API backend (reference)              |
 | `examples/bindings/julia`  | Hand-written CxxWrap/jlcxx backend (reference, requires CxxWrap.jl) |
 | `examples/bindings/rest`   | Hand-written HTTP/REST backend (reference)          |
 | `examples/bindings/web`    | Hand-written WebAssembly backend (requires reflection-aware emsdk) |
 
+</details>
+
+## Rosetta in the wild
+
+<details>
+<summary>Real libraries bound with rosetta — <b>PMP, geogram, Arch, Cassini</b> — each from a single <code>manifest.json</code>, no hand-written wrappers <i>(expand)</i></summary>
+
+| Project | Bound library | Targets |
+|---|---|---|
+| [pmp-rosetta](https://github.com/rosetta-bindings/pmp-rosetta) | [PMP](https://www.pmp-library.org) — the Polygon Mesh Processing library (remeshing, smoothing, subdivision, decimation) | Python, Node.js, WebAssembly, TypeScript |
+| [geogram-rosetta](https://github.com/rosetta-bindings/geogram-rosetta) | [geogram](https://github.com/BrunoLevy/geogram) — Bruno Lévy's geometry-processing library (reconstruction, remeshing, parameterization, booleans/CSG) | Python, Node.js, WebAssembly, TypeScript, Lua |
+| [arch-rosetta](https://github.com/rosetta-bindings/arch-rosetta) | Arch — a 3-D boundary-element (BEM) geomechanics code | Python, Node.js, WebAssembly, TypeScript |
+| [cassini-rosetta](https://github.com/rosetta-bindings/cassini-rosetta) *(private)* | Cassini — FEM geomechanical restoration, bound through a single high-level C++ facade | Python, Node.js, WebAssembly, TypeScript |
+
+</details>
+
 ## Design notes
+
+<details>
+<summary>Quick start, the manifest / generate / annotation references, and the todo list <i>(expand)</i></summary>
 
 - [Quick start](docs/QUICKSTART.md) — five-step guide to generating bindings for an existing library
 - [Extending](docs/EXTENDING_BACKEND.md) — how to extend the rosetta backend
-<br><br>
 - [Manifest](docs/MANIFEST.md) — complete reference for `manifest.json`: every field, target and option
+- [Annotations](docs/ANNOTATIONS.md) — the full annotation reference (doc / range / readonly / combobox / label / button / widget hints, inline & out-of-line)
+<br><br>
 - [Generate](docs/GENERATE.md) — full reference for `rosetta::generate`, the manifest schema, and the tool layering
 - [Free functions](docs/FREE_FUNCTIONS.md) — sketch for reflecting namespace-scope functions
-- [Other annotations](docs/OTHER_ANNOTATIONS.md) — proposed annotation kinds beyond the current three
+- [Other annotations](docs/OTHER_ANNOTATIONS.md) — proposed annotation kinds beyond the current set
 - [Out-of-line annotations](docs/OUT_OF_LINE_ANNOTATIONS.md) — keep headers clean: a JSON side-car of annotations baked in at generation time, merged at compile time
 - [Todo list](docs/TODO.md) — what the walker and visitor surface still miss (static data members, parameter metadata, nested types, ...)
+
+</details>
 
 ## License
 

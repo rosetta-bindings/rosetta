@@ -181,6 +181,14 @@ namespace rosetta {
             info[QStringLiteral("widget")] = QStringLiteral("textfield");
         } else if constexpr (ann::has<widget::spin_tag>(Anns...)) {
             info[QStringLiteral("widget")] = QStringLiteral("spin");
+        } else if constexpr (ann::has<widget::color_tag>(Anns...)) {
+            info[QStringLiteral("widget")] = QStringLiteral("color");
+        } else if constexpr (ann::has<widget::multiline_tag>(Anns...)) {
+            info[QStringLiteral("widget")] = QStringLiteral("multiline");
+        } else if constexpr (ann::has<widget::radio_tag>(Anns...)) {
+            info[QStringLiteral("widget")] = QStringLiteral("radio");
+        } else if constexpr (ann::has<widget::file_tag>(Anns...)) {
+            info[QStringLiteral("widget")] = QStringLiteral("file");
         } else {
             info[QStringLiteral("widget")] = QString{};
         }

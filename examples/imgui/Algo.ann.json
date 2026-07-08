@@ -1,0 +1,20 @@
+{
+  "eps":        { "doc": "Tolerence of the solver", "range": [1e-10, 1e-6],
+                  "widget": "textfield", "label": "EPS" },
+  "maxIter":    { "doc": "Set the max iterations", "range": [0, 200],
+                  "widget": "slider", "label": "Max iter" },
+  "iterative":  { "doc": "Tell if the solver must be iterative",
+                  "widget": "checkbox", "label": "Iterative solver" },
+  "solverName": { "doc": "Solver name", "combobox": ["Seidel", "Jacobi", "gmres", "cgnr"],
+                  "label": "Solver name" },
+  "precond":    { "doc": "Preconditioner", "combobox": ["none", "jacobi", "ilu"],
+                  "widget": "radio", "label": "Preconditioner" },
+  "plotColor":  { "doc": "Color used for the convergence plot",
+                  "widget": "color", "label": "Plot color" },
+  "meshFile":   { "doc": "Input mesh to solve on",
+                  "widget": "file", "label": "Mesh file" },
+  "notes":      { "doc": "Free-form solver notes",
+                  "widget": "multiline", "label": "Notes" },
+  "run":        { "doc": "Run the solver and return the convergence", "button": "Run" },
+  "reset":      { "doc": "Reset the solver", "button": "Reset" }
+}

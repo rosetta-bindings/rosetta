@@ -810,16 +810,15 @@ endif()
         }
 
         // Format a range bound as a clean number (drop a trailing ".0…").
+        // %g keeps tiny magnitudes exact ("1e-10") — std::to_string would
+        // collapse a solver tolerance to "0.000000" and emit a wrong bound.
         inline std::string num_str(double d) {
             if (d == static_cast<long long>(d)) {
                 return std::to_string(static_cast<long long>(d));
             }
-            std::string s = std::to_string(d);
-            s.erase(s.find_last_not_of('0') + 1);
-            if (!s.empty() && s.back() == '.') {
-                s.pop_back();
-            }
-            return s;
+            char buf[32];
+            std::snprintf(buf, sizeof buf, "%g", d);
+            return buf;
         }
 
         // The per-class Markdown fragment (heading + field table + methods),
