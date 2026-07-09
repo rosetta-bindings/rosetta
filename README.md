@@ -27,11 +27,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/bindings-Python%20%7C%20Node%20%7C%20Wasm%20%7C%20TypeScript%20%7C%20Lua%20%7C%20Julia%20%7C%20ParaView%20%7C%20Csharp%20%7C%20Java-green.svg" alt="Bindings">
+  <img src="https://img.shields.io/badge/bindings-Python%20%7C%20Node%20%7C%20Wasm%20%7C%20TypeScript%20%7C%20Lua%20%7C%20Julia%20%7C%20Csharp%20%7C%20Java-green.svg" alt="Bindings">
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/bindings-Qt%20%7C%20QML%20%7C%20ImGUI%20%7C%20Json%20%7C%20Html%20%7C%20REST%20%7C%20OpenAPI%20%7C%20Markdown-green.svg" alt="Bindings">
+  <img src="https://img.shields.io/badge/bindings-Qt%20%7C%20QML%20%7C%20ImGUI%20%7C%20ParaView%20%7C%20Json%20%7C%20Html%20%7C%20REST%20%7C%20OpenAPI%20%7C%20Markdown-green.svg" alt="Bindings">
 </p>
 
 A C++26 reflection playground with **27 generator backends** — Python (pybind11 / nanobind), Node, WebAssembly, Qt, QML, Dear ImGui, REST, Julia, Lua, OpenAPI, JSON, TypeScript, C#, Java, Markdown, HTML, ParaView... bindings for **your existing classes — without modifying them**. Point rosetta at a header via a small [manifest.json](./docs/MANIFEST.md), run one tool, get per-language binding projects out.
