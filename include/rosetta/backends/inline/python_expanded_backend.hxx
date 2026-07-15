@@ -155,6 +155,11 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         }
 
         inline bool px_method_ok(const GenMethod &m) {
+            // An overload set: the bare `&T::name` member pointer the emitter
+            // spells would be ambiguous — skip the whole set.
+            if (m.is_overloaded) {
+                return false;
+            }
             // Lvalue-ref class return: policy `automatic` copies it; a by-value
             // class return needs copy/move too (copy_constructible is the
             // conservative proxy for both).
@@ -214,8 +219,35 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             return "    c.def_readwrite(\"" + f.name + "\", " + mp + dq + ");\n";
         }
 
-        // Explicit pybind for one method. Overloads are already deduped by name
-        // in the walk, so the bare &T::m member pointer is unambiguous. An
+        // Member-object property: a public data member whose type is another
+        // BOUND class but is not copyable (a plain def_readwrite/def_readonly
+        // would copy). Emitted as a read-only property returning a reference,
+        // with reference_internal so the parent outlives every child handle —
+        // `mesh.vertices` hands out the real MeshVertices living inside the
+        // mesh. This is what makes struct-of-member-objects APIs (GEO::Mesh)
+        // reachable without a flat-array facade.
+        inline bool px_is_bound_class(const std::string &obj, const GenContext &c) {
+            for (const auto &k : c.classes) {
+                if (k.name == obj) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        inline std::string expanded_member_object(const GenClass &k, const GenField &f) {
+            const std::string dq = doc_arg(f.doc);
+            std::string s;
+            s += "    c.def_property_readonly(\"" + f.name + "\",\n";
+            s += "        [](" + k.name + " &s) -> " + f.type.object + " & { return s." +
+                 f.name + "; },\n";
+            s += "        py::return_value_policy::reference_internal" + dq + ");\n";
+            return s;
+        }
+
+        // Explicit pybind for one method. Overloads are deduped by name in the
+        // walk and the surviving IR entry is flagged is_overloaded (px_method_ok
+        // skips it), so the bare &T::m member pointer here is unambiguous. An
         // extension method binds its free function instead — pybind treats a
         // free function whose first parameter is T& as an instance method.
         inline std::string expanded_method(const GenClass &k, const GenMethod &m) {
@@ -256,7 +288,7 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         // trampoline (py::class_<T, Py_T>) when the class has virtual methods —
         // the trampoline classes themselves are emitted, verbatim, by the
         // existing reflection-free trampolines_of() helper.
-        inline std::string expanded_class(const GenClass &k) {
+        inline std::string expanded_class(const GenClass &k, const GenContext &c) {
             const bool        has_tramp = !virtual_methods(k).empty();
             const std::string decl = has_tramp ? "py::class_<" + k.name + ", rosetta_py::Py_" +
                                                      k.name + ">"
@@ -280,7 +312,18 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             s += indent(expanded_ctors(k));
             for (const auto &f : k.fields) {
                 if (!px_field_ok(f)) {
-                    continue; // non-copyable member object — see px_copyable
+                    // A non-copyable member object of a BOUND class becomes a
+                    // reference property (methods win on a name clash — e.g. a
+                    // manifest extension already named like the field).
+                    bool clashes = false;
+                    for (const auto &m : k.methods) {
+                        clashes = clashes || m.name == f.name;
+                    }
+                    if (f.type.kind == "object" && px_is_bound_class(f.type.object, c) &&
+                        !clashes) {
+                        s += indent(expanded_member_object(k, f));
+                    }
+                    continue; // anything else non-copyable — see px_copyable
                 }
                 s += indent(expanded_field(k, f));
             }
@@ -300,7 +343,7 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 body += expanded_enum(e);
             }
             for (const auto &k : c.classes) {
-                body += expanded_class(k);
+                body += expanded_class(k, c);
             }
             for (const auto &f : c.functions) {
                 GenMethod probe; // free functions go through the same gates

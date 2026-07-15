@@ -111,7 +111,7 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 return false;
             }
             if (t.kind == "object") {
-                return t.copy_assignable; // to_napi: Wrap(...)->inner = v
+                return t.copy_assignable; // to_napi: Wrap(...)->inner() = v
             }
             if (t.kind == "vector" && !t.element.empty()) {
                 const GenType &e = t.element.front();
@@ -136,6 +136,11 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         }
 
         inline bool nx_method_ok(const GenMethod &m) {
+            // Overload set: `&T::name` in the thunk template argument would be
+            // ambiguous — skip the whole set.
+            if (m.is_overloaded) {
+                return false;
+            }
             if (!nx_ret_ok(m.ret)) {
                 return false;
             }
@@ -150,7 +155,20 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         // One class, expanded into a DefineClass block. `held` is the concrete
         // wrapped type — the trampoline subclass when the class has virtuals,
         // else T itself — matching what bind_napi<T, Tramp> instantiates.
-        inline std::string node_expanded_class(const GenClass &k) {
+        // The GenClass bound under this unqualified name, or nullptr. Used by
+        // the member-object property path: the field's class must itself be
+        // bound (it provides the JS constructor the aliased wrap rides on) and
+        // must have no virtuals (the alias stores a T*, not a trampoline).
+        inline const GenClass *nx_bound_class(const std::string &obj, const GenContext &c) {
+            for (const auto &k : c.classes) {
+                if (k.name == obj) {
+                    return &k;
+                }
+            }
+            return nullptr;
+        }
+
+        inline std::string node_expanded_class(const GenClass &k, const GenContext &c) {
             const auto        virts = node_virtual_methods(k);
             const std::string held =
                 virts.empty() ? k.name : "rosetta_node::Js_" + k.name;
@@ -163,10 +181,27 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
 
             // Fields → InstanceAccessor(getter, setter). Both directions copy
             // (get_field via to_napi, set_field via copy assignment), so a
-            // non-copy-assignable member object is skipped.
+            // non-copy-assignable member object is skipped — UNLESS its class
+            // is itself bound (and untrampolined): then it becomes a read-only
+            // member-object property returning an aliased wrap that pins the
+            // parent (get_member_object in node_runtime.h).
             for (const auto &f : k.fields) {
                 if (!nx_marshalable(f.type) || !nx_ret_ok(f.type) ||
                     (f.type.kind == "object" && !f.type.copy_assignable)) {
+                    const GenClass *fk = f.type.kind == "object"
+                                             ? nx_bound_class(f.type.object, c)
+                                             : nullptr;
+                    bool clashes = false;
+                    for (const auto &m : k.methods) {
+                        clashes = clashes || m.name == f.name;
+                    }
+                    if (fk != nullptr && node_virtual_methods(*fk).empty() && !clashes) {
+                        const std::string mp = "&" + self + "::" + f.name;
+                        s += "        props.push_back(This::InstanceAccessor<"
+                             "&This::get_member_object<" + mp + ">, "
+                             "&This::set_field_readonly<" + mp + ", \"" + f.name +
+                             "\">>(\"" + f.name + "\"));\n";
+                    }
                     continue;
                 }
                 const std::string mp  = "&" + self + "::" + f.name;
@@ -274,7 +309,7 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 body += "}));\n";
             }
             for (const auto &k : c.classes) {
-                body += node_expanded_class(k);
+                body += node_expanded_class(k, c);
             }
             for (const auto &f : c.functions) {
                 bool ok = nx_ret_ok(f.ret);

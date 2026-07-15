@@ -686,6 +686,27 @@ endif()
                    sig_params_bindable<Fn>(std::make_index_sequence<arity>{});
         }
 
+        // Whether the member function Fn is one of an overload set: more than
+        // one exportable member function of its declaring class shares its
+        // name. Baked into GenMethod::is_overloaded — the bare `&T::name` the
+        // emitters spell is ambiguous for an overload set, so they skip it.
+        template <std::meta::info Fn> consteval bool fn_is_overloaded() {
+            constexpr auto parent = std::meta::parent_of(Fn);
+            if constexpr (!std::meta::is_class_type(parent)) {
+                return false; // free function — overloads never reach the IR
+            } else {
+                auto        ctx = std::meta::access_context::current();
+                std::size_t n   = 0;
+                for (auto m : std::meta::members_of(parent, ctx)) {
+                    if (is_exportable_member_function(m) &&
+                        std::meta::identifier_of(m) == std::meta::identifier_of(Fn)) {
+                        ++n;
+                    }
+                }
+                return n > 1;
+            }
+        }
+
         inline std::string num_str(double d); // defined below; used by default_value_str
 
         // Render a field's default member initializer (read from a default-built
@@ -789,6 +810,7 @@ endif()
                 m.sig_bindable = sig_fn_bindable<Fn>();
                 m.ret_is_ref =
                     std::is_lvalue_reference_v<typename[:std::meta::return_type_of(Fn):]>;
+                m.is_overloaded = fn_is_overloaded<Fn>();
                 out.methods.push_back(std::move(m));
             }
         };

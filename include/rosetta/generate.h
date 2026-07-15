@@ -205,6 +205,14 @@ namespace rosetta {
         // returning a non-copyable store&).
         bool ret_is_ref = false;
 
+        // True when the declaring class has MORE THAN ONE member function with
+        // this name. The walk dedups overloads by name (one IR entry survives),
+        // but the emitters spell the bare member pointer `&T::name`, which is
+        // ambiguous for an overload set — the generated line would not compile.
+        // Emitters consult this to skip the whole set (conservative; overload
+        // selection by explicit signature is the planned lift).
+        bool is_overloaded = false;
+
         // Extension method (manifest class "extensions"): a free function whose
         // first parameter is `Cls&`, exposed as an instance method of Cls.
         // `params` holds the parameters AFTER the receiver; `ext_qualified` is

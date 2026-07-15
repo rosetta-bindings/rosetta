@@ -93,3 +93,11 @@ target_include_directories(node_trampoline PRIVATE ${CMAKE_SOURCE_DIR}/../includ
 target_compile_options(node_trampoline PRIVATE -fannotation-attributes)
 target_link_libraries(node_trampoline PRIVATE GTest::gtest_main)
 gtest_discover_tests(node_trampoline)
+
+# Member-object property binding (mesh.vertices-style aliased references) and
+# overload-set gating in the *-expanded backends. Verifies generated sources.
+add_executable(member_object member_object.cpp)
+target_include_directories(member_object PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(member_object PRIVATE -fannotation-attributes)
+target_link_libraries(member_object PRIVATE GTest::gtest_main)
+gtest_discover_tests(member_object)

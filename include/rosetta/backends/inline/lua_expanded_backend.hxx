@@ -190,6 +190,11 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         }
 
         inline bool lx_method_ok(const GenMethod &m, const GenContext &c) {
+            // Overload set: the bare `&T::name` the emitter spells would be
+            // ambiguous — skip the whole set.
+            if (m.is_overloaded) {
+                return false;
+            }
             if (m.ret.kind != "void" && !lx_marshalable(m.ret, c)) {
                 return false;
             }

@@ -16,6 +16,11 @@
 // trampoline source emitted by gen_detail::node_trampolines_of() compiles
 // against either runtime unchanged. The two headers are never included in the
 // same TU (one per generated target), so the shared names never collide.
+//
+// This header holds the documented declarations (plus the small compile-time
+// trait types the declarations need); the implementations live in
+// inline/node_runtime.hxx, included at the bottom — the generate.h /
+// inline/generate.hxx layout convention.
 
 #pragma once
 
@@ -54,17 +59,17 @@ namespace rosetta {
     // / return_type_of queries the reflective visitor used.
     template <typename F> struct fn_traits;
     template <typename R, typename C, typename... A> struct fn_traits<R (C::*)(A...)> {
-        using ret                         = R;
+        using ret                          = R;
         static constexpr std::size_t arity = sizeof...(A);
         template <std::size_t I> using arg = std::tuple_element_t<I, std::tuple<A...>>;
     };
     template <typename R, typename C, typename... A> struct fn_traits<R (C::*)(A...) const> {
-        using ret                         = R;
+        using ret                          = R;
         static constexpr std::size_t arity = sizeof...(A);
         template <std::size_t I> using arg = std::tuple_element_t<I, std::tuple<A...>>;
     };
     template <typename R, typename... A> struct fn_traits<R (*)(A...)> {
-        using ret                         = R;
+        using ret                          = R;
         static constexpr std::size_t arity = sizeof...(A);
         template <std::size_t I> using arg = std::tuple_element_t<I, std::tuple<A...>>;
     };
@@ -72,6 +77,8 @@ namespace rosetta {
     // ---- Forward declarations (mutually recursive with conversions) ----
 
     template <typename T, typename Tramp = T> class Wrap;
+
+    /** @brief The persistent JS constructor for the wrapped class T. */
     template <typename T> Napi::FunctionReference &ctor_ref();
 
     // ---- Virtual-method trampoline support (verbatim from node_visitor) ----
@@ -90,292 +97,128 @@ namespace rosetta {
         bool                  has_self_ = false;
     };
 
+    /** @brief Bound prototype functions per class, for override detection. */
     template <typename T>
-    inline std::unordered_map<std::string, Napi::FunctionReference> &napi_override_guard() {
-        static std::unordered_map<std::string, Napi::FunctionReference> m;
-        return m;
-    }
+    std::unordered_map<std::string, Napi::FunctionReference> &napi_override_guard();
 
+    /** @brief Parameterized-constructor table for the held type, keyed by arity. */
     template <typename T>
-    std::unordered_map<std::size_t, std::function<T(const Napi::CallbackInfo &)>> &ctor_table() {
-        static std::unordered_map<std::size_t, std::function<T(const Napi::CallbackInfo &)>> table;
-        return table;
-    }
+    std::unordered_map<std::size_t, std::function<T(const Napi::CallbackInfo &)>> &ctor_table();
 
-    // ---- Type conversion helpers (verbatim from node_visitor) ----
+    // ---- Type conversion (declarations; definitions in inline/node_runtime.hxx) ----
 
-    template <typename T> Napi::Value to_napi(Napi::Env env, const T &v) {
-        using U = std::remove_cvref_t<T>;
-        if constexpr (std::is_same_v<U, std::string>) {
-            return Napi::String::New(env, v);
-        } else if constexpr (std::is_same_v<U, bool>) {
-            return Napi::Boolean::New(env, v);
-        } else if constexpr (std::is_floating_point_v<U> || std::is_integral_v<U>) {
-            return Napi::Number::New(env, static_cast<double>(v));
-        } else if constexpr (is_std_vector<U>::value) {
-            Napi::Array arr = Napi::Array::New(env, v.size());
-            for (std::size_t i = 0; i < v.size(); ++i) {
-                arr.Set(static_cast<uint32_t>(i), to_napi(env, v[i]));
-            }
-            return arr;
-        } else if constexpr (std::is_enum_v<U>) {
-            return Napi::Number::New(
-                env, static_cast<double>(static_cast<std::underlying_type_t<U>>(v)));
-        } else if constexpr (std::is_class_v<U>) {
-            Napi::Object obj = ctor_ref<U>().New({});
-            Wrap<U>::Unwrap(obj)->inner = v;
-            return obj;
-        } else {
-            static_assert(sizeof(T) == 0, "to_napi: unsupported type");
-        }
-    }
+    /** @brief Convert a C++ value to a JS value (a class type is wrapped by copy). */
+    template <typename T> Napi::Value to_napi(Napi::Env env, const T &v);
 
-    // Returns by value for scalars / strings / vectors / enums, but by
-    // REFERENCE for wrapped class types: the C++ object lives inside the JS
-    // object's Wrap, so handing out `T&` (a) lets a bound function mutate the
-    // caller-visible object through `T&` / out-parameters, and (b) avoids
-    // copying types whose copy is shallow or deleted (e.g. pImpl facades —
-    // a by-value return would copy the pointer and dangle it when the
-    // temporary is destroyed).
-    template <typename T> decltype(auto) from_napi(const Napi::Value &v) {
-        if constexpr (std::is_same_v<T, std::string>) {
-            return v.As<Napi::String>().Utf8Value();
-        } else if constexpr (std::is_same_v<T, bool>) {
-            return v.As<Napi::Boolean>().Value();
-        } else if constexpr (std::is_floating_point_v<T>) {
-            return static_cast<T>(v.As<Napi::Number>().DoubleValue());
-        } else if constexpr (std::is_integral_v<T>) {
-            return static_cast<T>(v.As<Napi::Number>().Int64Value());
-        } else if constexpr (is_std_vector<T>::value) {
-            using Elem      = typename T::value_type;
-            Napi::Array arr = v.As<Napi::Array>();
-            T           out;
-            out.reserve(arr.Length());
-            for (uint32_t i = 0; i < arr.Length(); ++i) {
-                out.push_back(from_napi<Elem>(arr.Get(i)));
-            }
-            return out;
-        } else if constexpr (std::is_enum_v<T>) {
-            return static_cast<T>(
-                static_cast<std::underlying_type_t<T>>(v.As<Napi::Number>().Int64Value()));
-        } else if constexpr (std::is_class_v<T>) {
-            return static_cast<T &>(Wrap<T>::Unwrap(v.As<Napi::Object>())->inner);
-        } else {
-            static_assert(sizeof(T) == 0, "from_napi: unsupported type");
-        }
-    }
+    /**
+     * @brief Convert a JS value to a C++ value. Returns by value for scalars /
+     * strings / vectors / enums, but by REFERENCE for wrapped class types: the
+     * C++ object lives inside the JS object's Wrap, so handing out `T&` (a)
+     * lets a bound function mutate the caller-visible object through `T&` /
+     * out-parameters, and (b) avoids copying types whose copy is shallow or
+     * deleted (e.g. pImpl facades — a by-value return would copy the pointer
+     * and dangle it when the temporary is destroyed).
+     */
+    template <typename T> decltype(auto) from_napi(const Napi::Value &v);
 
-    template <typename T> inline bool napi_is_overridden(Napi::Object self, const char *name) {
-        Napi::Value f = self.Get(name);
-        if (!f.IsFunction()) {
-            return false;
-        }
-        auto &guard = napi_override_guard<T>();
-        auto  it    = guard.find(name);
-        if (it == guard.end()) {
-            return false;
-        }
-        return !f.StrictEquals(it->second.Value());
-    }
+    /** @brief Whether a JS subclass overrides the named bound method. */
+    template <typename T> bool napi_is_overridden(Napi::Object self, const char *name);
 
+    /** @brief Call the JS override when present, else the C++ base thunk. */
     template <typename T, typename Ret, typename Base, typename... Args>
-    inline Ret napi_call_override(const NapiTrampoline &self, const char *name, Base base,
-                                  const Args &...args) {
-        if (self.__rosetta_has_self()) {
-            Napi::Object obj = self.__rosetta_self();
-            if (napi_is_overridden<T>(obj, name)) {
-                Napi::Value r = obj.Get(name).template As<Napi::Function>().Call(
-                    obj, {to_napi(obj.Env(), args)...});
-                if constexpr (std::is_void_v<Ret>) {
-                    return;
-                } else {
-                    return from_napi<Ret>(r);
-                }
-            }
-        }
-        return base();
-    }
+    Ret napi_call_override(const NapiTrampoline &self, const char *name, Base base,
+                           const Args &...args);
 
+    /** @brief Call the JS override of a pure virtual; throws when absent. */
     template <typename T, typename Ret, typename... Args>
-    inline Ret napi_call_override_pure(const NapiTrampoline &self, const char *name,
-                                       const Args &...args) {
-        if (self.__rosetta_has_self()) {
-            Napi::Object obj = self.__rosetta_self();
-            if (napi_is_overridden<T>(obj, name)) {
-                Napi::Value r = obj.Get(name).template As<Napi::Function>().Call(
-                    obj, {to_napi(obj.Env(), args)...});
-                if constexpr (std::is_void_v<Ret>) {
-                    return;
-                } else {
-                    return from_napi<Ret>(r);
-                }
-            }
-            throw Napi::Error::New(obj.Env(), std::string("rosetta: pure virtual '") + name +
-                                                  "' is not overridden in JS");
-        }
-        throw std::runtime_error(std::string("rosetta: pure virtual '") + name +
-                                 "' called before the JS object was bound");
-    }
+    Ret napi_call_override_pure(const NapiTrampoline &self, const char *name,
+                                const Args &...args);
 
     // ---- CRTP wrapper: accessors keyed on member/function pointers ----
 
+    /**
+     * @brief The N-API wrapper for one bound class. The wrapped object is held
+     * by POINTER: either owned (allocated by this Wrap — the ordinary
+     * `new Cls()` path) or aliased (a member object living inside ANOTHER
+     * wrapped object — the member-object property path, in which case
+     * `parent_` pins the owning JS object so the storage outlives every child
+     * handle). Pointer storage is also what lets a non-default-constructible
+     * class (GEO::MeshVertices, reachable only as `mesh.vertices`) be wrapped
+     * at all.
+     */
     template <typename T, typename Tramp> class Wrap : public Napi::ObjectWrap<Wrap<T, Tramp>> {
       public:
-        Tramp inner;
+        Tramp &inner() { return *ptr_; }
 
-        Wrap(const Napi::CallbackInfo &info) : Napi::ObjectWrap<Wrap<T, Tramp>>(info) {
-            if constexpr (!std::is_same_v<T, Tramp>) {
-                inner.__rosetta_set_self(this->Value());
-            }
-            // The parameterized-constructor path ASSIGNS the freshly built
-            // object into `inner`. For a non-assignable class (GEO::Mesh) the
-            // statement itself would not compile — the emitter registers no
-            // ctor_table entries for such a class, so compile the whole path
-            // out and keep only the default constructor.
-            if constexpr (std::is_copy_assignable_v<T> || std::is_move_assignable_v<T>) {
-                auto &tbl = ctor_table<Tramp>();
-                auto  it  = tbl.find(info.Length());
-                if (it != tbl.end()) {
-                    static_cast<T &>(inner) = it->second(info);
-                    return;
-                }
-            }
-            if (info.Length() > 0) {
-                throw Napi::TypeError::New(info.Env(), "no matching constructor for " +
-                                                           std::to_string(info.Length()) +
-                                                           " argument(s)");
-            }
-        }
+        Wrap(const Napi::CallbackInfo &info);
+        ~Wrap();
 
-        template <auto MemPtr> Napi::Value get_field(const Napi::CallbackInfo &info) {
-            return to_napi(info.Env(), inner.*MemPtr);
-        }
+        /** @brief Field getter (copies through to_napi). */
+        template <auto MemPtr> Napi::Value get_field(const Napi::CallbackInfo &info);
 
+        /**
+         * @brief Member-object property getter: wrap the ADDRESS of the member
+         * object in a fresh JS object of its own class, aliased (not owned),
+         * with this JS object pinned as the parent — `mesh.vertices` hands out
+         * the real MeshVertices living inside the mesh, valid as long as any
+         * child handle is alive.
+         */
+        template <auto MemPtr> Napi::Value get_member_object(const Napi::CallbackInfo &info);
+
+        /** @brief Field setter (copy-assigns through from_napi). */
         template <auto MemPtr>
-        void set_field(const Napi::CallbackInfo & /*info*/, const Napi::Value &v) {
-            using FieldT  = std::remove_cvref_t<decltype(std::declval<T &>().*MemPtr)>;
-            inner.*MemPtr = from_napi<FieldT>(v);
-        }
+        void set_field(const Napi::CallbackInfo &info, const Napi::Value &v);
 
+        /** @brief Range-validating field setter (rosetta::range annotation). */
         template <auto MemPtr, fixed_str Name, double Lo, double Hi>
-        void set_field_ranged(const Napi::CallbackInfo &info, const Napi::Value &v) {
-            using FieldT = std::remove_cvref_t<decltype(std::declval<T &>().*MemPtr)>;
-            FieldT val   = from_napi<FieldT>(v);
-            double d     = static_cast<double>(val);
-            if (d < Lo || d > Hi) {
-                throw Napi::RangeError::New(info.Env(),
-                                            std::string(Name.data) + " out of range");
-            }
-            inner.*MemPtr = val;
-        }
+        void set_field_ranged(const Napi::CallbackInfo &info, const Napi::Value &v);
 
-        template <auto /*MemPtr*/, fixed_str Name>
-        void set_field_readonly(const Napi::CallbackInfo &info, const Napi::Value & /*v*/) {
-            throw Napi::TypeError::New(info.Env(), std::string(Name.data) + " is read-only");
-        }
+        /** @brief Setter stub for a read-only field: always throws. */
+        template <auto MemPtr, fixed_str Name>
+        void set_field_readonly(const Napi::CallbackInfo &info, const Napi::Value &v);
 
-        template <auto MFP> Napi::Value call_method(const Napi::CallbackInfo &info) {
-            return call_method_impl<MFP>(info,
-                                         std::make_index_sequence<fn_traits<decltype(MFP)>::arity>{});
-        }
+        /** @brief Instance-method thunk, keyed on the member-function pointer. */
+        template <auto MFP> Napi::Value call_method(const Napi::CallbackInfo &info);
 
-        // Extension method: a FREE function whose first parameter is `T&` (or
-        // `const T&`), exposed as an instance method — the wrapped object is
-        // passed as the receiver and info[i] maps to parameter i+1.
-        template <auto FP> Napi::Value ext_method(const Napi::CallbackInfo &info) {
-            return ext_method_impl<FP>(
-                info, std::make_index_sequence<fn_traits<decltype(FP)>::arity - 1>{});
-        }
+        /**
+         * @brief Extension method: a FREE function whose first parameter is
+         * `T&` (or `const T&`), exposed as an instance method — the wrapped
+         * object is passed as the receiver and info[i] maps to parameter i+1.
+         */
+        template <auto FP> Napi::Value ext_method(const Napi::CallbackInfo &info);
 
-        template <auto FP> static Napi::Value call_static(const Napi::CallbackInfo &info) {
-            return call_static_impl<FP>(info,
-                                        std::make_index_sequence<fn_traits<decltype(FP)>::arity>{});
-        }
+        /** @brief Static-method thunk, keyed on the function pointer. */
+        template <auto FP> static Napi::Value call_static(const Napi::CallbackInfo &info);
 
       private:
+        Tramp                *ptr_   = nullptr;
+        bool                  owned_ = false;
+        Napi::ObjectReference parent_; // pins the owner while aliased
+
         template <auto FP, std::size_t... Is>
-        Napi::Value ext_method_impl(const Napi::CallbackInfo &info, std::index_sequence<Is...>) {
-            using FT = fn_traits<decltype(FP)>;
-            using R  = typename FT::ret;
-            T &self  = static_cast<T &>(inner);
-            if constexpr (std::is_void_v<R>) {
-                (*FP)(self, from_napi<std::remove_cvref_t<typename FT::template arg<Is + 1>>>(
-                                info[Is])...);
-                return info.Env().Undefined();
-            } else {
-                R r = (*FP)(self, from_napi<std::remove_cvref_t<typename FT::template arg<Is + 1>>>(
-                                      info[Is])...);
-                return to_napi(info.Env(), r);
-            }
-        }
+        Napi::Value ext_method_impl(const Napi::CallbackInfo &info, std::index_sequence<Is...>);
 
         template <auto MFP, std::size_t... Is>
-        Napi::Value call_method_impl(const Napi::CallbackInfo &info, std::index_sequence<Is...>) {
-            using FT = fn_traits<decltype(MFP)>;
-            using R  = typename FT::ret;
-            if constexpr (std::is_void_v<R>) {
-                (inner.*MFP)(
-                    from_napi<std::remove_cvref_t<typename FT::template arg<Is>>>(info[Is])...);
-                return info.Env().Undefined();
-            } else {
-                R r = (inner.*MFP)(
-                    from_napi<std::remove_cvref_t<typename FT::template arg<Is>>>(info[Is])...);
-                return to_napi(info.Env(), r);
-            }
-        }
+        Napi::Value call_method_impl(const Napi::CallbackInfo &info, std::index_sequence<Is...>);
 
         template <auto FP, std::size_t... Is>
         static Napi::Value call_static_impl(const Napi::CallbackInfo &info,
-                                            std::index_sequence<Is...>) {
-            using FT = fn_traits<decltype(FP)>;
-            using R  = typename FT::ret;
-            if constexpr (std::is_void_v<R>) {
-                (*FP)(from_napi<std::remove_cvref_t<typename FT::template arg<Is>>>(info[Is])...);
-                return info.Env().Undefined();
-            } else {
-                R r = (*FP)(
-                    from_napi<std::remove_cvref_t<typename FT::template arg<Is>>>(info[Is])...);
-                return to_napi(info.Env(), r);
-            }
-        }
+                                            std::index_sequence<Is...>);
     };
-
-    template <typename T> Napi::FunctionReference &ctor_ref() {
-        static Napi::FunctionReference ref;
-        return ref;
-    }
 
     // ---- Free-function entry, keyed on the function pointer ----
 
     template <auto FP, std::size_t... Is>
-    inline Napi::Value napi_free_call(const Napi::CallbackInfo &info, std::index_sequence<Is...>) {
-        using FT = fn_traits<decltype(FP)>;
-        using R  = typename FT::ret;
-        if constexpr (std::is_void_v<R>) {
-            (*FP)(from_napi<std::remove_cvref_t<typename FT::template arg<Is>>>(info[Is])...);
-            return info.Env().Undefined();
-        } else {
-            R r =
-                (*FP)(from_napi<std::remove_cvref_t<typename FT::template arg<Is>>>(info[Is])...);
-            return to_napi(info.Env(), r);
-        }
-    }
+    Napi::Value napi_free_call(const Napi::CallbackInfo &info, std::index_sequence<Is...>);
 
-    template <auto FP> inline Napi::Value napi_free_entry(const Napi::CallbackInfo &info) {
-        return napi_free_call<FP>(info, std::make_index_sequence<fn_traits<decltype(FP)>::arity>{});
-    }
+    template <auto FP> Napi::Value napi_free_entry(const Napi::CallbackInfo &info);
 
     // ---- Enum object from an explicit name/value list (no reflection) ----
 
     inline Napi::Object
     make_enum(Napi::Env env,
-              std::initializer_list<std::pair<const char *, long long>> values) {
-        Napi::Object obj = Napi::Object::New(env);
-        for (const auto &[name, value] : values) {
-            obj.Set(name, Napi::Number::New(env, static_cast<double>(value)));
-        }
-        obj.Freeze();
-        return obj;
-    }
+              std::initializer_list<std::pair<const char *, long long>> values);
 
 } // namespace rosetta
+
+#include "inline/node_runtime.hxx"
