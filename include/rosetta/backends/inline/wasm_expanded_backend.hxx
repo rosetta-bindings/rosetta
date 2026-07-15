@@ -55,7 +55,13 @@ endif()
 
 target_link_options({{LIB}} PRIVATE
     --bind -sMODULARIZE=1 -sEXPORT_NAME=createModule
-    -sENVIRONMENT=node,web -sALLOW_MEMORY_GROWTH=1 -sDISABLE_EXCEPTION_CATCHING=0)
+    -sENVIRONMENT=node,web -sALLOW_MEMORY_GROWTH=1 -sDISABLE_EXCEPTION_CATCHING=0
+    # A generated demo may mount a real directory via NODEFS and drive libc fopen()
+    # through it. An embind-only module strips the JS filesystem as unused, so force
+    # it in and export the FS/NODEFS runtime objects (M.FS, M.NODEFS).
+    -sFORCE_FILESYSTEM=1
+    -sEXPORTED_RUNTIME_METHODS=FS,NODEFS
+    -lnodefs.js)
 
 set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
 )CMK";
