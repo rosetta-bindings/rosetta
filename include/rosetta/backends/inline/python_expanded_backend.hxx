@@ -18,7 +18,7 @@ namespace rosetta {
 cmake_minimum_required(VERSION 3.18)
 project({{LIB}}_binding CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 execute_process(
@@ -121,7 +121,7 @@ python3 -c "import {{LIB}}"
                 "unordered_map","unordered_set","map",     "multimap",    "set",
                 "multiset",     "pair",        "tuple",    "array",       "list",
                 "deque",        "optional",    "variant",  "hash",        "less",
-                "equal_to",     "size_t",      "ptrdiff_t"};
+                "equal_to",     "size_t",      "ptrdiff_t","initializer_list"};
             auto ident_char = [](char ch) {
                 return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
                        (ch >= '0' && ch <= '9') || ch == '_';

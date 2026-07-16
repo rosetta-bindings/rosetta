@@ -406,11 +406,15 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             s += "        rosetta::ctor_ref<" + self + ">().SuppressDestruct();\n";
 
             // Constructors → ctor_table entries on the held type, keyed by arity.
-            // The Wrap ctor ASSIGNS the freshly built object into its inner
-            // storage, so a non-assignable class (GEO::Mesh) keeps only the
-            // default constructor.
-            for (std::size_t i = 0;
-                 k.copy_or_move_assignable && i < k.ctor_param_cpp.size(); ++i) {
+            // A default-constructible class ASSIGNS the freshly built object
+            // into the Wrap's inner storage (so it must be assignable —
+            // GEO::Mesh keeps only the default ctor); a class WITHOUT a default
+            // ctor is constructed straight from the entry into fresh storage
+            // (so it must be copy- or move-constructible).
+            const bool ctor_entries_ok = k.is_default_constructible
+                                             ? k.copy_or_move_assignable
+                                             : k.copy_or_move_constructible;
+            for (std::size_t i = 0; ctor_entries_ok && i < k.ctor_param_cpp.size(); ++i) {
                 const auto &ir = k.ctors[i];
                 bool        ok = true;
                 for (const auto &p : ir) {

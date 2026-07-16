@@ -689,13 +689,76 @@ endif()
             return params_impl<Fn>(std::make_index_sequence<n>{});
         }
 
+        // Fully qualified name of T: enclosing namespaces AND classes
+        // ("stressinv::NodalPlane::Planes"). Unlike class_namespace(), which
+        // stops at the first non-namespace scope, this keeps walking through
+        // outer classes, so a nested type keeps its owner in the spelling.
+        template <typename T> inline std::string qualified_class_name() {
+            constexpr const char *n = std::define_static_string([] consteval -> std::string {
+                // dealias: ^^T through an alias template (remove_cvref_t)
+                // reflects the alias, whose parent is the alias's own scope.
+                const std::meta::info ty = std::meta::dealias(^^T);
+                std::string     out(std::meta::identifier_of(ty));
+                std::meta::info scope = std::meta::parent_of(ty);
+                while (std::meta::has_identifier(scope) &&
+                       (std::meta::is_namespace(scope) || std::meta::is_type(scope))) {
+                    out   = std::string(std::meta::identifier_of(scope)) + "::" + out;
+                    scope = std::meta::parent_of(scope);
+                }
+                return out;
+            }());
+            return std::string(n);
+        }
+
+        // Replace standalone occurrences of `token` in `s` by `repl` — same
+        // word-boundary rules as the backends' qualify_std(): the match must
+        // not be part of a longer identifier nor already qualified.
+        inline std::string replace_type_token(std::string s, std::string_view token,
+                                              const std::string &repl) {
+            auto ident_char = [](char ch) {
+                return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                       (ch >= '0' && ch <= '9') || ch == '_';
+            };
+            std::string::size_type pos = 0;
+            while ((pos = s.find(token, pos)) != std::string::npos) {
+                const bool left_ok = pos == 0 || (!ident_char(s[pos - 1]) && s[pos - 1] != ':');
+                const std::string::size_type end = pos + token.size();
+                const bool right_ok              = end >= s.size() || !ident_char(s[end]);
+                if (left_ok && right_ok) {
+                    s.replace(pos, token.size(), repl);
+                    pos += repl.size();
+                } else {
+                    pos = end;
+                }
+            }
+            return s;
+        }
+
         // Exact C++ spelling of a reflected type (cv- and ref-qualifiers kept),
         // prettified only for the libc++ basic_string spelling. Unlike
         // type_descriptor (which strips cvref for the language-neutral kind),
         // this is what a trampoline override signature must reproduce verbatim.
+        // display_string_of spells a class nested inside another class by its
+        // bare identifier ("Planes" for stressinv::NodalPlane::Planes); the
+        // emitted code opens namespaces (using_namespaces_of) but cannot open
+        // classes, so the bare token would not resolve — re-qualify it with
+        // its full parent chain (always legal, whatever scope it lands in).
         template <std::meta::info Ty> inline std::string exact_spelling() {
             constexpr const char *s = std::define_static_string(std::meta::display_string_of(Ty));
-            return prettify(s);
+            std::string out         = prettify(s);
+            using U                 = std::remove_cvref_t<typename[:Ty:]>;
+            if constexpr (std::is_class_v<U> || std::is_enum_v<U>) {
+                // dealias before parent_of: ^^U reflects the remove_cvref_t
+                // alias, whose parent is the alias's scope, not U's owner.
+                constexpr std::meta::info ur = std::meta::dealias(^^U);
+                if constexpr (std::meta::has_identifier(ur) &&
+                              std::meta::is_type(std::meta::parent_of(ur))) {
+                    constexpr const char *id =
+                        std::define_static_string(std::meta::identifier_of(ur));
+                    out = replace_type_token(std::move(out), id, qualified_class_name<U>());
+                }
+            }
+            return out;
         }
 
         template <std::meta::info Fn, std::size_t... Is>
@@ -709,6 +772,57 @@ endif()
         template <std::meta::info Fn> inline std::vector<std::string> param_cpp_of() {
             constexpr auto n = std::define_static_array(std::meta::parameters_of(Fn)).size();
             return param_cpp_impl<Fn>(std::make_index_sequence<n>{});
+        }
+
+        // Is `ty` declared (transitively) inside namespace std? Walks the
+        // parent chain and checks the outermost named scope.
+        consteval bool in_std_namespace(std::meta::info ty) {
+            std::meta::info scope = std::meta::parent_of(ty);
+            std::meta::info root  = scope;
+            while (std::meta::has_identifier(scope)) {
+                root  = scope;
+                scope = std::meta::parent_of(scope);
+            }
+            return std::meta::is_namespace(root) && std::meta::has_identifier(root) &&
+                   std::meta::identifier_of(root) == std::string_view("std");
+        }
+
+        // Constructor-parameter spelling: like exact_spelling, except a
+        // parameter whose decayed type lives in namespace std is spelled BY
+        // VALUE. Those types cross the language boundary by conversion — the
+        // argument the binding passes is a caster temporary — and the value
+        // spelling routes construction to the move overload rather than a
+        // const& one that may capture a dangling reference (e.g. a view ctor
+        // like Serie(const std::vector<double>&, size_t): with the const&
+        // spelling, first-match overload dispatch hands every script call to
+        // the view ctor and the object ends up referencing freed memory).
+        // Parameters of user class types keep their exact spelling: they
+        // arrive as references to live registered objects, and a class may
+        // deliberately store that reference (e.g. StressDomain's model).
+        template <std::meta::info Ty> inline std::string ctor_param_spelling() {
+            using U = std::remove_cvref_t<typename[:Ty:]>;
+            if constexpr (std::is_class_v<U>) {
+                if constexpr (!in_std_namespace(std::meta::dealias(^^U))) {
+                    return exact_spelling<Ty>();
+                } else {
+                    return exact_spelling<std::meta::remove_cvref(Ty)>();
+                }
+            } else {
+                return exact_spelling<std::meta::remove_cvref(Ty)>();
+            }
+        }
+
+        template <std::meta::info Fn, std::size_t... Is>
+        inline std::vector<std::string> ctor_param_cpp_impl(std::index_sequence<Is...>) {
+            constexpr auto           ps = std::define_static_array(std::meta::parameters_of(Fn));
+            std::vector<std::string> out;
+            (out.push_back(ctor_param_spelling<std::meta::type_of(ps[Is])>()), ...);
+            return out;
+        }
+
+        template <std::meta::info Fn> inline std::vector<std::string> ctor_param_cpp_of() {
+            constexpr auto n = std::define_static_array(std::meta::parameters_of(Fn)).size();
+            return ctor_param_cpp_impl<Fn>(std::make_index_sequence<n>{});
         }
 
         // --- Trampoline signature representability, evaluated at reflection time ---
@@ -865,10 +979,19 @@ endif()
             }
 
             template <std::meta::info Ctor, auto... /*Anns*/> void constructor() {
+                // Parameter spellings a code-emitting backend can reproduce in
+                // `py::init<...>()` without reflection on the target — std
+                // types by value, see ctor_param_spelling(). A const&/&& pair
+                // (Serie's view/owning vector ctors) collapses to one value
+                // spelling: keep the first, the emitted init is identical.
+                auto cpp = ctor_param_cpp_of<Ctor>();
+                for (const auto &prev : out.ctor_param_cpp) {
+                    if (prev == cpp) {
+                        return;
+                    }
+                }
                 out.ctors.push_back(params_of<Ctor>());
-                // Exact parameter spellings, so a code-emitting backend can
-                // reproduce `py::init<...>()` without reflection on the target.
-                out.ctor_param_cpp.push_back(param_cpp_of<Ctor>());
+                out.ctor_param_cpp.push_back(std::move(cpp));
             }
 
         private:
@@ -1003,6 +1126,8 @@ endif()
             gc.is_abstract              = std::is_abstract_v<T>;
             gc.copy_or_move_assignable =
                 std::is_copy_assignable_v<T> || std::is_move_assignable_v<T>;
+            gc.copy_or_move_constructible =
+                std::is_copy_constructible_v<T> || std::is_move_constructible_v<T>;
             // Direct public bases as qualified names; the backend filters to the
             // ones actually bound before registering the relationship.
             {

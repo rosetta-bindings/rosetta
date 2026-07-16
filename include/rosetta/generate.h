@@ -317,6 +317,13 @@ namespace rosetta {
         // the default constructor is emitted there.
         bool copy_or_move_assignable = true;
 
+        // Whether T can be constructed from another T (copy OR move). The node
+        // runtime's path for a NON-default-constructible class (e.g. a data
+        // class whose only ctor is parameterized) builds the object straight
+        // from the ctor_table entry into fresh storage, moving or copying the
+        // returned value; the emitter registers no entries otherwise.
+        bool copy_or_move_constructible = true;
+
         // Manifest "final": true — treat the class as non-overridable from the
         // host language: NO trampoline is generated even when it has public
         // virtual methods (they still bind as ordinary callable methods).

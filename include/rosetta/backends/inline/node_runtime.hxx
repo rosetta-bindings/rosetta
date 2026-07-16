@@ -179,6 +179,24 @@ namespace rosetta {
                                                            std::to_string(info.Length()) +
                                                            " argument(s)");
             }
+        } else if constexpr (std::is_copy_constructible_v<Tramp> ||
+                             std::is_move_constructible_v<Tramp>) {
+            // Not default-constructible, but a ctor_table entry can build the
+            // object straight into fresh storage (a data class whose only
+            // constructor is parameterized — Joint, StressDomain...).
+            auto &tbl = ctor_table<Tramp>();
+            auto  it  = tbl.find(info.Length());
+            if (it != tbl.end()) {
+                ptr_   = new Tramp(it->second(info));
+                owned_ = true;
+                if constexpr (!std::is_same_v<T, Tramp>) {
+                    inner().__rosetta_set_self(this->Value());
+                }
+                return;
+            }
+            throw Napi::TypeError::New(info.Env(), "no matching constructor for " +
+                                                       std::to_string(info.Length()) +
+                                                       " argument(s)");
         } else {
             // Not default-constructible and not aliased: this class only
             // exists inside another object (a member-object store).

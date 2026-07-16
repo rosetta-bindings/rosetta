@@ -37,9 +37,23 @@ namespace rosetta {
     }
 
     consteval bool is_exportable_constructor(std::meta::info fn) {
-        return std::meta::is_constructor(fn) && !std::meta::is_copy_constructor(fn) &&
-               !std::meta::is_move_constructor(fn) && !std::meta::is_constructor_template(fn) &&
-               !std::meta::is_deleted(fn);
+        if (!std::meta::is_constructor(fn) || std::meta::is_copy_constructor(fn) ||
+            std::meta::is_move_constructor(fn) || std::meta::is_constructor_template(fn) ||
+            std::meta::is_deleted(fn)) {
+            return false;
+        }
+        // A std::initializer_list parameter is a C++-source-only affordance: no
+        // target language can produce one (no marshaller in any backend), and
+        // such a constructor always shadows an equivalent std::vector overload.
+        for (std::meta::info p : std::meta::parameters_of(fn)) {
+            const std::meta::info t =
+                std::meta::dealias(std::meta::remove_cvref(std::meta::type_of(p)));
+            if (std::meta::has_template_arguments(t) &&
+                std::meta::template_of(t) == ^^std::initializer_list) {
+                return false;
+            }
+        }
+        return true;
     }
 
     namespace detail {
