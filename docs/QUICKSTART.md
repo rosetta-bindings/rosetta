@@ -111,6 +111,24 @@ One file, lives anywhere — paths inside are resolved relative to it.
 - `targets` — any subset of `python`, `node`, `rest`, `wasm`, `csharp`, … (see the backend table in the README); shared by every class.
 - `classes[].header` — required; `classes[].name` is optional and defaults to the header's basename. Each class's binding library is derived as `reflected_<lowercase name>`.
 
+## One command for steps 4–5
+
+After step 3 (the one-time tool build), `rosetta_gen --build` chains
+everything else — it emits and builds the generator, generates the bindings,
+and compiles every backend (npm for node, emcmake for wasm, `dotnet build` /
+`mvn package` as csharp/java second stages; a backend whose toolchain is
+absent is skipped with a note, and the run ends with a per-backend summary):
+
+```bash
+/path/to/rosetta/bin/rosetta_gen --build path/to/manifest.json
+# rosetta_gen --build --help: --only/--skip, --clang-p2996-root, --qt-dir, --fresh, …
+
+/path/to/rosetta/bin/rosetta_gen --clean path/to/manifest.json
+# back to sources: removes gen/, bindings/ and the generator binary (never the manifest)
+```
+
+The manual steps it automates:
+
 ## 3. Build the framework tool (one time)
 
 ```bash

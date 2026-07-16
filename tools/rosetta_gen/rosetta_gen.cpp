@@ -13,7 +13,15 @@
 // to emit the per-backend bindings.
 //
 // Usage:
-//   rosetta_gen <manifest.json> [out_dir]   emit the tool source tree
+//   rosetta_gen <manifest.json> [out_dir]    emit the tool source tree
+//   rosetta_gen --build <manifest.json> [..] the whole pipeline in one command:
+//                                            emit + build + run the generator,
+//                                            then compile every backend
+//                                            (--build --help lists the options)
+//   rosetta_gen --clean <manifest.json> [..] remove everything generated for
+//                                            the manifest (gen/, bindings/,
+//                                            the generator binary) — never the
+//                                            manifest itself
 //   rosetta_gen --init [manifest.json]       write a commented example manifest
 //                                            (default ./manifest.json; refuses to
 //                                            overwrite an existing file)
@@ -84,12 +92,13 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <glob.h>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -101,21 +110,105 @@ static bool is_glob_pattern(const std::string &s) {
     return s.find_first_of("*?[") != std::string::npos;
 }
 
-// Expand a shell glob (relative to `base`) into the matching files, sorted for
-// reproducible output. Used by `user_sources` so a manifest can say
-// "src/algorithms/*.cpp" instead of listing every file. POSIX glob expands `*`,
-// `?` and `[...]` within a path component (not recursive `**`); a pattern that
-// matches nothing yields an empty list (the caller warns).
-static std::vector<fs::path> expand_glob(const fs::path &base, const std::string &pattern) {
-    const fs::path full = fs::absolute(base / fs::path(pattern)).lexically_normal();
-    glob_t         g{};
-    std::vector<fs::path> out;
-    if (::glob(full.c_str(), GLOB_NOSORT | GLOB_ERR, nullptr, &g) == 0) {
-        for (std::size_t i = 0; i < g.gl_pathc; ++i) {
-            out.push_back(fs::weakly_canonical(fs::path(g.gl_pathv[i])));
+// Match one path component against a glob component: `*`, `?` and `[...]`
+// (with `!`/`^` negation and `a-z` ranges), POSIX-glob style. Hand-rolled so
+// the tool builds on Windows too (no <glob.h>/fnmatch there); iterative with
+// single-`*` backtracking.
+static bool glob_match(const std::string &pat, const std::string &str) {
+    std::size_t p = 0, s = 0;
+    std::size_t star_p = std::string::npos, star_s = 0;
+    // like POSIX glob, a wildcard never matches a leading dot
+    if (!str.empty() && str[0] == '.' && !pat.empty() && pat[0] != '.') {
+        return false;
+    }
+    while (s < str.size()) {
+        bool step = false;
+        if (p < pat.size() && pat[p] == '[') {
+            std::size_t q   = p + 1;
+            bool        neg = false;
+            if (q < pat.size() && (pat[q] == '!' || pat[q] == '^')) {
+                neg = true;
+                ++q;
+            }
+            bool       hit   = false;
+            bool       first = true;
+            const char c     = str[s];
+            while (q < pat.size() && (pat[q] != ']' || first)) {
+                first = false;
+                if (q + 2 < pat.size() && pat[q + 1] == '-' && pat[q + 2] != ']') {
+                    hit = hit || (pat[q] <= c && c <= pat[q + 2]);
+                    q += 3;
+                } else {
+                    hit = hit || (pat[q] == c);
+                    ++q;
+                }
+            }
+            if (q < pat.size() && hit != neg) { // q at ']' (unterminated set never matches)
+                p    = q + 1;
+                ++s;
+                step = true;
+            }
+        } else if (p < pat.size() && (pat[p] == '?' || pat[p] == str[s])) {
+            ++p;
+            ++s;
+            step = true;
+        } else if (p < pat.size() && pat[p] == '*') {
+            star_p = p++;
+            star_s = s;
+            step   = true;
+        }
+        if (!step) {
+            if (star_p == std::string::npos) {
+                return false;
+            }
+            p = star_p + 1; // give the last '*' one more character
+            s = ++star_s;
         }
     }
-    ::globfree(&g);
+    while (p < pat.size() && pat[p] == '*') {
+        ++p;
+    }
+    return p == pat.size();
+}
+
+// Expand a shell glob (relative to `base`) into the matching files, sorted for
+// reproducible output. Used by `user_sources` so a manifest can say
+// "src/algorithms/*.cpp" instead of listing every file. Expands `*`, `?` and
+// `[...]` within a path component (not recursive `**`); a pattern that matches
+// nothing yields an empty list (the caller warns). std::filesystem-based so it
+// behaves identically on POSIX and Windows.
+static std::vector<fs::path> expand_glob(const fs::path &base, const std::string &pattern) {
+    const fs::path full = fs::absolute(base / fs::path(pattern)).lexically_normal();
+
+    std::vector<fs::path> frontier{full.root_path()};
+    for (const auto &part : full.relative_path()) {
+        const std::string     comp = part.string();
+        std::vector<fs::path> next;
+        for (const auto &dir : frontier) {
+            std::error_code ec;
+            if (!is_glob_pattern(comp)) {
+                fs::path p = dir / part;
+                if (fs::exists(p, ec)) {
+                    next.push_back(std::move(p));
+                }
+                continue;
+            }
+            for (const auto &entry : fs::directory_iterator(dir, ec)) {
+                if (glob_match(comp, entry.path().filename().string())) {
+                    next.push_back(entry.path());
+                }
+            }
+        }
+        frontier = std::move(next);
+        if (frontier.empty()) {
+            break;
+        }
+    }
+
+    std::vector<fs::path> out;
+    for (const auto &p : frontier) {
+        out.push_back(fs::weakly_canonical(p));
+    }
     std::sort(out.begin(), out.end());
     return out;
 }
@@ -872,7 +965,570 @@ static int init_manifest(const fs::path &path) {
     return 0;
 }
 
+// Emit the generator project tree (bindings.h + <generator_name>.cpp +
+// CMakeLists.txt) — shared by the plain generate mode and --build.
+static void emit_generator_project(const Manifest &m, const fs::path &out_dir) {
+    const std::string target = m.target();
+    write_file(out_dir / "bindings.h", render_bindings_h(m));
+    write_file(out_dir / (target + ".cpp"), render_project_gen_cpp(m));
+    write_file(out_dir / "CMakeLists.txt", render_cmakelists(m));
+    std::fprintf(stderr, "wrote %s/{bindings.h, %s.cpp, CMakeLists.txt}\n",
+                 out_dir.string().c_str(), target.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// --build: the whole pipeline in one command (portable — std::system +
+// std::filesystem only, so the same code drives sh on POSIX and cmd on
+// Windows). Emits the generator project, builds and runs it, then compiles
+// every generated backend with its own build shape: plain CMake for most,
+// npm for node, emcmake for wasm, a dotnet/mvn second stage for csharp/java.
+// A backend whose toolchain is absent is SKIPPED (not an error); a failed
+// build is reported in the summary and --build exits non-zero after trying
+// the rest.
+// ---------------------------------------------------------------------------
+
+// Quote one command-line argument. Double quotes are the one form both the
+// POSIX shells and cmd.exe accept for embedded spaces.
+static std::string q(const std::string &s) {
+    if (!s.empty() && s.find_first_of(" \t\"") == std::string::npos) {
+        return s;
+    }
+    std::string out = "\"";
+    for (char ch : s) {
+        if (ch == '"') {
+            out += '\\';
+        }
+        out += ch;
+    }
+    out += '"';
+    return out;
+}
+static std::string q(const fs::path &p) { return q(p.string()); }
+
+// Run a command line (echoed), optionally from another working directory.
+// std::system's return value is implementation-defined; we only rely on
+// zero == success, which holds on POSIX and Windows alike.
+static int run_cmd(const std::string &cmd, const fs::path &cwd = {}) {
+    std::fprintf(stderr, "   $ %s\n", cmd.c_str());
+    fs::path prev;
+    if (!cwd.empty()) {
+        prev = fs::current_path();
+        fs::current_path(cwd);
+    }
+    const int rc = std::system(cmd.c_str());
+    if (!prev.empty()) {
+        fs::current_path(prev);
+    }
+    return rc;
+}
+
+// Is a tool on PATH? Probe with its --version, output discarded.
+static bool have_tool(const std::string &probe) {
+#ifdef _WIN32
+    const char *sink = " >nul 2>&1";
+#else
+    const char *sink = " >/dev/null 2>&1";
+#endif
+    return std::system((probe + " --version" + sink).c_str()) == 0;
+}
+
+// The generator binary lands next to the gen dir (single-config), or under a
+// per-config subdir with a multi-config generator (MSVC).
+static fs::path find_generator(const fs::path &beside) {
+#ifdef _WIN32
+    const std::string exe = "generator.exe";
+#else
+    const std::string exe = "generator";
+#endif
+    for (const char *sub : {"", "Release", "Debug", "RelWithDebInfo"}) {
+        const fs::path p = *sub ? beside / sub / exe : beside / exe;
+        if (fs::exists(p)) {
+            return p;
+        }
+    }
+    return {};
+}
+
+struct BuildOptions {
+    fs::path                 manifest;
+    fs::path                 gen_dir;      // default <manifest dir>/gen
+    fs::path                 bindings_dir; // default <manifest dir>/bindings
+    std::string              p2996_root;   // -DCLANG_P2996_ROOT for every configure
+    std::string              qt_dir;       // -DQT_DIR for qt-/qml-expanded
+    std::string              jobs;         // cmake --build --parallel N
+    std::vector<std::string> only, skip;   // backend (target lang) filters
+    std::vector<std::string> cmake_args;   // extra args for every configure
+    bool                     fresh = false;
+};
+
+static std::vector<std::string> split_list(const std::string &s) {
+    std::vector<std::string> out;
+    std::string::size_type   pos = 0;
+    while (pos <= s.size()) {
+        const auto comma = s.find(',', pos);
+        const auto end   = (comma == std::string::npos) ? s.size() : comma;
+        if (end > pos) {
+            out.push_back(s.substr(pos, end - pos));
+        }
+        pos = end + 1;
+    }
+    return out;
+}
+
+static bool contains(const std::vector<std::string> &v, const std::string &s) {
+    return std::find(v.begin(), v.end(), s) != v.end();
+}
+
+static int run_build(const BuildOptions &opt) {
+    const Manifest m            = load(opt.manifest);
+    const fs::path manifest_dir = fs::absolute(opt.manifest).parent_path();
+    const fs::path gen_dir = opt.gen_dir.empty() ? manifest_dir / "gen" : opt.gen_dir;
+    const fs::path bindings_dir =
+        opt.bindings_dir.empty() ? manifest_dir / "bindings" : opt.bindings_dir;
+
+    if (opt.fresh) {
+        fs::remove_all(gen_dir);
+        fs::remove_all(bindings_dir);
+    }
+
+    // Configure/build fragments shared by every CMake invocation.
+    std::string conf;
+    for (const auto &a : opt.cmake_args) {
+        conf += " " + q(a);
+    }
+    if (!opt.p2996_root.empty()) {
+        conf += " " + q("-DCLANG_P2996_ROOT=" + opt.p2996_root);
+    }
+    const std::string par = opt.jobs.empty() ? "" : " --parallel " + q(opt.jobs);
+
+    auto cmake_build = [&](const fs::path &src, const std::string &extra = "") {
+        return run_cmd("cmake -S " + q(src) + " -B " + q(src / "build") + conf + extra) == 0 &&
+               run_cmd("cmake --build " + q(src / "build") + par) == 0;
+    };
+
+    // 1. generator project sources.
+    emit_generator_project(m, gen_dir);
+
+    // 2. build and run the generator (clang-p2996).
+    std::fprintf(stderr, "== building the generator\n");
+    if (!cmake_build(gen_dir)) {
+        std::fprintf(stderr, "rosetta_gen: generator build failed\n");
+        return 1;
+    }
+    const fs::path generator = find_generator(gen_dir.parent_path());
+    if (generator.empty()) {
+        std::fprintf(stderr, "rosetta_gen: generator binary not found beside %s\n",
+                     gen_dir.string().c_str());
+        return 1;
+    }
+    std::fprintf(stderr, "== generating bindings -> %s\n", bindings_dir.string().c_str());
+    if (run_cmd(q(generator) + " " + q(bindings_dir)) != 0) {
+        std::fprintf(stderr, "rosetta_gen: binding generation failed\n");
+        return 1;
+    }
+
+    // 3. build each declared backend.
+    std::vector<std::pair<std::string, std::string>> results; // backend -> verdict
+    bool failed = false;
+    auto record = [&](const std::string &b, const std::string &v) {
+        results.emplace_back(b, v);
+    };
+    auto attempt = [&](const std::string &b, bool ok, const std::string &what = "") {
+        if (ok) {
+            record(b, "OK" + what);
+        } else {
+            record(b, "FAILED" + what);
+            failed = true;
+        }
+    };
+
+    std::vector<std::string> done; // a lang may appear once per manifest only, but be safe
+    for (const auto &t : m.targets) {
+        const std::string &lang = t.lang;
+        if (contains(done, lang)) {
+            continue;
+        }
+        done.push_back(lang);
+        if (!opt.only.empty() && !contains(opt.only, lang)) {
+            continue;
+        }
+        if (contains(opt.skip, lang)) {
+            record(lang, "SKIPPED (--skip)");
+            continue;
+        }
+        const fs::path dir = bindings_dir / lang;
+        if (!fs::exists(dir)) {
+            record(lang, "SKIPPED (nothing generated)");
+            continue;
+        }
+        std::fprintf(stderr, "== building %s\n", lang.c_str());
+
+        if (lang == "html" || lang == "markdown" || lang == "typescript" ||
+            lang == "paraview" || lang == "openapi" || lang == "json-schema") {
+            record(lang, "OK (nothing to compile)");
+        } else if (lang == "node" || lang == "node-expanded") {
+            if (!have_tool("npm")) {
+                record(lang, "SKIPPED (npm not found)");
+                continue;
+            }
+            std::string build = "npm run build";
+            if (!opt.p2996_root.empty()) {
+                build += " -- " + q("--CDCLANG_P2996_ROOT=" + opt.p2996_root);
+            }
+            attempt(lang, run_cmd("npm install", dir) == 0 && run_cmd(build, dir) == 0);
+        } else if (lang == "wasm" || lang == "wasm-expanded") {
+            if (!have_tool("emcc")) {
+                record(lang, "SKIPPED (emcc not found — activate emsdk)");
+                continue;
+            }
+            std::string extra;
+            for (const auto &a : opt.cmake_args) {
+                extra += " " + q(a);
+            }
+            attempt(lang, run_cmd("emcmake cmake -S " + q(dir) + " -B " + q(dir / "build") +
+                                  extra) == 0 &&
+                              run_cmd("cmake --build " + q(dir / "build") + par) == 0);
+        } else if (lang == "julia" || lang == "julia-expanded") {
+            // the generated CMake locates JlCxx by running julia (CxxWrap.prefix_path())
+            if (!have_tool("julia")) {
+                record(lang, "SKIPPED (julia not found)");
+                continue;
+            }
+            attempt(lang, cmake_build(dir));
+        } else if (lang == "csharp" || lang == "csharp-expanded") {
+            if (!cmake_build(dir)) {
+                attempt(lang, false);
+            } else if (!have_tool("dotnet")) {
+                record(lang, "OK (native only — dotnet not found)");
+            } else {
+                attempt(lang, run_cmd("dotnet build " + q(t.name + ".csproj"), dir) == 0,
+                        " (dotnet)");
+            }
+        } else if (lang == "java" || lang == "java-expanded") {
+            if (!cmake_build(dir)) {
+                attempt(lang, false);
+            } else if (!have_tool("mvn")) {
+                record(lang, "OK (native only — mvn not found)");
+            } else {
+                attempt(lang, run_cmd("mvn -q package", dir) == 0, " (mvn)");
+            }
+        } else if (lang == "qt-expanded" || lang == "qml-expanded") {
+            std::string extra;
+            if (!opt.qt_dir.empty()) {
+                extra = " " + q("-DQT_DIR=" + opt.qt_dir);
+            }
+            attempt(lang, cmake_build(dir, extra));
+        } else {
+            // python, nanobind, rest, json, lua-expanded, imgui-expanded, …
+            attempt(lang, cmake_build(dir));
+        }
+    }
+
+    std::fprintf(stderr, "\n== summary\n");
+    for (const auto &[b, v] : results) {
+        std::fprintf(stderr, "   %-20s %s\n", b.c_str(), v.c_str());
+    }
+    return failed ? 1 : 0;
+}
+
+static const char *kBuildOptions =
+    "  --gen-dir DIR            generator project dir   (default: <manifest dir>/gen)\n"
+    "  --bindings-dir DIR       generated bindings dir  (default: <manifest dir>/bindings)\n"
+    "  --clang-p2996-root PATH  -DCLANG_P2996_ROOT for every CMake configure\n"
+    "  --qt-dir PATH            -DQT_DIR for the qt-/qml-expanded builds\n"
+    "  --only a,b / --skip a,b  restrict the backend builds to / exclude these\n"
+    "  --cmake-arg ARG          extra argument for every CMake configure (repeatable)\n"
+    "  --jobs N                 parallel build jobs\n"
+    "  --fresh                  wipe the gen and bindings dirs first\n";
+
+static void print_build_usage(std::FILE *to) {
+    std::fprintf(to, "usage: rosetta_gen --build <manifest.json> [options]\n%s", kBuildOptions);
+}
+
+// ---------------------------------------------------------------------------
+// --clean: remove everything the pipeline generated for a manifest — the
+// generator project dir, the generator binary beside it, and the manifest's
+// backend folders under the bindings dir. Never the manifest itself, and
+// never a folder that lacks the "Generated by rosetta" stamp the emitters
+// write into their CMakeLists (so a hand-made folder sharing the name
+// survives).
+// ---------------------------------------------------------------------------
+
+static bool has_generated_marker(const fs::path &cmakelists) {
+    std::ifstream in(cmakelists);
+    std::string   line;
+    for (int i = 0; i < 3 && std::getline(in, line); ++i) {
+        if (line.find("Generated by rosetta") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool remove_reported(const fs::path &p) {
+    std::error_code ec;
+    const auto      n = fs::remove_all(p, ec);
+    if (ec || n == 0) {
+        return false;
+    }
+    std::fprintf(stderr, "removed %s\n", p.string().c_str());
+    return true;
+}
+
+static int run_clean(const fs::path &manifest, fs::path gen_dir, fs::path bindings_dir) {
+    const Manifest m            = load(manifest);
+    const fs::path manifest_dir = fs::absolute(manifest).parent_path();
+    if (bindings_dir.empty()) {
+        bindings_dir = manifest_dir / "bindings";
+    }
+
+    // The generator project: the explicit --gen-dir, or both defaults (`gen`
+    // from --build, `generated` from the plain mode). Marker-guarded.
+    std::vector<fs::path> gen_candidates;
+    if (!gen_dir.empty()) {
+        gen_candidates.push_back(gen_dir);
+    } else {
+        gen_candidates.push_back(manifest_dir / "gen");
+        gen_candidates.push_back(manifest_dir / "generated");
+    }
+    std::vector<fs::path> gen_parents; // where a generator binary may sit
+    for (const auto &g : gen_candidates) {
+        if (!fs::exists(g)) {
+            continue;
+        }
+        if (!has_generated_marker(g / "CMakeLists.txt")) {
+            std::fprintf(stderr, "not removing %s (no rosetta_gen marker in its CMakeLists)\n",
+                         g.string().c_str());
+            continue;
+        }
+        if (remove_reported(g)) {
+            gen_parents.push_back(fs::absolute(g).parent_path());
+        }
+    }
+
+    // The generator binary dropped next to a removed project dir (incl. the
+    // per-config subdirs a multi-config generator uses).
+    for (const auto &parent : gen_parents) {
+        for (fs::path bin = find_generator(parent); !bin.empty(); bin = find_generator(parent)) {
+            if (!remove_reported(bin)) {
+                break;
+            }
+        }
+    }
+
+    // The per-backend folders the manifest declares — and only those, so
+    // anything else a user parked under the bindings dir survives.
+    for (const auto &t : m.targets) {
+        remove_reported(bindings_dir / t.lang);
+    }
+    std::error_code ec;
+    if (fs::exists(bindings_dir, ec) && fs::is_empty(bindings_dir, ec)) {
+        remove_reported(bindings_dir);
+    } else if (fs::exists(bindings_dir, ec)) {
+        std::fprintf(stderr, "kept %s (holds files not generated from this manifest)\n",
+                     bindings_dir.string().c_str());
+    }
+    return 0;
+}
+
+static const char *kCleanUsage =
+    "usage: rosetta_gen --clean <manifest.json> [options]\n"
+    "  --gen-dir DIR            generator project dir   (default: <manifest dir>/gen\n"
+    "                           and <manifest dir>/generated)\n"
+    "  --bindings-dir DIR       generated bindings dir  (default: <manifest dir>/bindings)\n";
+
+static int clean_main(int argc, char **argv) {
+    fs::path manifest, gen_dir, bindings_dir;
+    for (int i = 2; i < argc; ++i) {
+        const std::string a    = argv[i];
+        auto              next = [&]() -> std::string {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "rosetta_gen: %s needs a value\n%s", a.c_str(),
+                             kCleanUsage);
+                std::exit(1);
+            }
+            return argv[++i];
+        };
+        if (a == "--gen-dir") {
+            gen_dir = next();
+        } else if (a == "--bindings-dir") {
+            bindings_dir = next();
+        } else if (a == "-h" || a == "--help") {
+            std::fprintf(stdout, "%s", kCleanUsage);
+            return 0;
+        } else if (a[0] == '-') {
+            std::fprintf(stderr, "rosetta_gen: unknown --clean option %s\n%s", a.c_str(),
+                         kCleanUsage);
+            return 1;
+        } else if (manifest.empty()) {
+            manifest = a;
+        } else {
+            std::fprintf(stderr, "rosetta_gen: unexpected argument %s\n%s", a.c_str(),
+                         kCleanUsage);
+            return 1;
+        }
+    }
+    if (manifest.empty()) {
+        std::fprintf(stderr, "%s", kCleanUsage);
+        return 1;
+    }
+    if (!fs::exists(manifest)) {
+        std::fprintf(stderr, "rosetta_gen: manifest not found: %s\n", manifest.string().c_str());
+        return 1;
+    }
+    try {
+        return run_clean(manifest, gen_dir, bindings_dir);
+    } catch (const std::exception &e) {
+        std::fprintf(stderr, "rosetta_gen: %s\n", e.what());
+        return 1;
+    }
+}
+
+static const char *kUsage =
+    "usage: rosetta_gen <manifest.json> [out_dir]\n"
+    "       rosetta_gen --build <manifest.json> [options]\n"
+    "       rosetta_gen --clean <manifest.json> [options]\n"
+    "       rosetta_gen --init [manifest.json]\n"
+    "try `rosetta_gen --help` for details and examples\n";
+
+// Full -h / --help: the three modes, the --build options, and worked examples.
+static void print_help() {
+    std::fprintf(
+        stdout,
+        "rosetta_gen — turn a manifest.json into language bindings for a C++ library.\n"
+        "\n"
+        "Modes:\n"
+        "  rosetta_gen <manifest.json> [out_dir]\n"
+        "      Emit the generator project (bindings.h + <generator_name>.cpp +\n"
+        "      CMakeLists.txt) into out_dir (default: <manifest dir>/generated).\n"
+        "      Build it with CMake (needs the clang-p2996 toolchain), then run the\n"
+        "      `generator` binary it drops next to out_dir to write one\n"
+        "      self-contained project per backend.\n"
+        "\n"
+        "  rosetta_gen --build <manifest.json> [options]\n"
+        "      The whole pipeline in one command: emit the generator project,\n"
+        "      build and run it, then compile every backend the manifest declares\n"
+        "      — plain CMake for most, npm for node, emcmake for wasm, and the\n"
+        "      dotnet / mvn second stages for csharp / java. A backend whose\n"
+        "      toolchain is missing (no emsdk, no julia, …) is skipped with a\n"
+        "      note; the run ends with a per-backend summary and exits non-zero\n"
+        "      if any attempted build failed.\n"
+        "\n"
+        "  rosetta_gen --clean <manifest.json> [--gen-dir DIR] [--bindings-dir DIR]\n"
+        "      Remove everything generated for this manifest: the generator\n"
+        "      project dir (gen/ or generated/), the generator binary, and the\n"
+        "      manifest's backend folders under bindings/. Never the manifest\n"
+        "      itself — and never a folder missing the \"Generated by rosetta\"\n"
+        "      stamp, so hand-written folders sharing a name survive.\n"
+        "\n"
+        "  rosetta_gen --init [manifest.json]\n"
+        "      Write a commented example manifest to start from (default\n"
+        "      ./manifest.json; never overwrites an existing file).\n"
+        "\n"
+        "--build options:\n"
+        "%s"
+        "\n"
+        "Examples:\n"
+        "  rosetta_gen --init\n"
+        "      Start here — writes a commented manifest.json to fill in.\n"
+        "\n"
+        "  rosetta_gen --build manifest.json\n"
+        "      Everything: bindings generated into ./bindings and compiled.\n"
+        "\n"
+        "  rosetta_gen --build manifest.json --only python,node --jobs 8\n"
+        "      Only the python and node backends, 8-way parallel builds.\n"
+        "\n"
+        "  rosetta_gen --build manifest.json \\\n"
+        "      --clang-p2996-root ~/devs/clang-p2996/build --fresh\n"
+        "      Point the thin (reflection) backends at your toolchain and start\n"
+        "      from a clean gen/ + bindings/.\n"
+        "\n"
+        "  rosetta_gen --clean manifest.json\n"
+        "      Back to sources: delete gen/, bindings/ and the generator binary.\n"
+        "\n"
+        "  rosetta_gen manifest.json gen\n"
+        "      Generate only, then run the steps by hand:\n"
+        "        cmake -S gen -B gen/build && cmake --build gen/build\n"
+        "        ./generator bindings\n"
+        "        cmake -S bindings/python -B bindings/python/build\n"
+        "        cmake --build bindings/python/build\n"
+        "\n"
+        "Every manifest field is documented in docs/MANIFEST.md; the full\n"
+        "walkthrough is docs/QUICKSTART.md. Each generated backend folder also\n"
+        "carries a README.md with its own build/use instructions.\n",
+        kBuildOptions);
+}
+
+static int build_main(int argc, char **argv) {
+    BuildOptions opt;
+    for (int i = 2; i < argc; ++i) {
+        const std::string a    = argv[i];
+        auto              next = [&]() -> std::string {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "rosetta_gen: %s needs a value\n", a.c_str());
+                print_build_usage(stderr);
+                std::exit(1);
+            }
+            return argv[++i];
+        };
+        if (a == "--gen-dir") {
+            opt.gen_dir = next();
+        } else if (a == "--bindings-dir") {
+            opt.bindings_dir = next();
+        } else if (a == "--clang-p2996-root") {
+            opt.p2996_root = next();
+        } else if (a == "--qt-dir") {
+            opt.qt_dir = next();
+        } else if (a == "--only") {
+            opt.only = split_list(next());
+        } else if (a == "--skip") {
+            opt.skip = split_list(next());
+        } else if (a == "--cmake-arg") {
+            opt.cmake_args.push_back(next());
+        } else if (a == "--jobs") {
+            opt.jobs = next();
+        } else if (a == "--fresh") {
+            opt.fresh = true;
+        } else if (a == "-h" || a == "--help") {
+            print_build_usage(stdout);
+            return 0;
+        } else if (a[0] == '-') {
+            std::fprintf(stderr, "rosetta_gen: unknown --build option %s\n", a.c_str());
+            print_build_usage(stderr);
+            return 1;
+        } else if (opt.manifest.empty()) {
+            opt.manifest = a;
+        } else {
+            std::fprintf(stderr, "rosetta_gen: unexpected argument %s\n", a.c_str());
+            print_build_usage(stderr);
+            return 1;
+        }
+    }
+    if (opt.manifest.empty()) {
+        print_build_usage(stderr);
+        return 1;
+    }
+    if (!fs::exists(opt.manifest)) {
+        std::fprintf(stderr, "rosetta_gen: manifest not found: %s\n",
+                     opt.manifest.string().c_str());
+        return 1;
+    }
+    try {
+        return run_build(opt);
+    } catch (const std::exception &e) {
+        std::fprintf(stderr, "rosetta_gen: %s\n", e.what());
+        return 1;
+    }
+}
+
 int main(int argc, char **argv) {
+    // `-h` / `--help` prints the full help: modes, options, examples.
+    if (argc >= 2 &&
+        (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
+        print_help();
+        return 0;
+    }
+
     // `--init [path]` writes an example manifest (default ./manifest.json) and
     // exits, without clobbering an existing one.
     if (argc >= 2 && std::string(argv[1]) == "--init") {
@@ -884,9 +1540,26 @@ int main(int argc, char **argv) {
         return init_manifest(path);
     }
 
+    // `--build manifest.json [...]` runs the whole pipeline (generate + build
+    // the generator + generate the bindings + compile every backend).
+    if (argc >= 2 && std::string(argv[1]) == "--build") {
+        return build_main(argc, argv);
+    }
+
+    // `--clean manifest.json [...]` removes everything the pipeline generated
+    // for that manifest (never the manifest itself).
+    if (argc >= 2 && std::string(argv[1]) == "--clean") {
+        return clean_main(argc, argv);
+    }
+
+    // Any other leading option is a mistake — don't treat it as a manifest path.
+    if (argc >= 2 && argv[1][0] == '-') {
+        std::fprintf(stderr, "rosetta_gen: unknown option %s\n%s", argv[1], kUsage);
+        return 1;
+    }
+
     if (argc < 2 || argc > 3) {
-        std::fprintf(stderr, "usage: rosetta_gen <manifest.json> [out_dir]\n"
-                             "       rosetta_gen --init [manifest.json]\n");
+        std::fprintf(stderr, "%s", kUsage);
         return 1;
     }
     const fs::path manifest_path = argv[1];
@@ -894,14 +1567,7 @@ int main(int argc, char **argv) {
         (argc == 3) ? fs::path(argv[2]) : fs::absolute(manifest_path).parent_path() / "generated";
 
     try {
-        const Manifest    m      = load(manifest_path);
-        const std::string target = m.target();
-        write_file(out_dir / "bindings.h", render_bindings_h(m));
-        write_file(out_dir / (target + ".cpp"), render_project_gen_cpp(m));
-        write_file(out_dir / "CMakeLists.txt", render_cmakelists(m));
-
-        std::fprintf(stderr, "wrote %s/{bindings.h, %s.cpp, CMakeLists.txt}\n",
-                     out_dir.string().c_str(), target.c_str());
+        emit_generator_project(load(manifest_path), out_dir);
     } catch (const std::exception &e) {
         std::fprintf(stderr, "rosetta_gen: %s\n", e.what());
         return 1;

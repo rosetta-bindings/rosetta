@@ -256,7 +256,13 @@ Write a small [manifest.json](./docs/MANIFEST.md) next to it. Each `targets` ent
 }
 ```
 
-Build the scaffolder once, then from your project folder generate, build, and run the project-specific tool it emits:
+Once the scaffolder is built (first block below), one command runs the rest of the pipeline — generation, generator build, and a compile of every backend (skipping any whose toolchain is missing):
+
+```bash
+/path/to/rosetta/bin/rosetta_gen --build manifest.json    # → bindings/, compiled; --help lists the options
+```
+
+Or step by step — generate, build, and run the project-specific tool it emits:
 
 ```bash
 # (one-time) build the framework scaffolder → <repo>/bin/rosetta_gen
