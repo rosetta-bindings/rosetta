@@ -38,14 +38,29 @@ set(Python_EXECUTABLE "${Python_EXECUTABLE}" CACHE FILEPATH "" FORCE)
 
 find_package(Python 3.8 COMPONENTS Interpreter Development.Module REQUIRED)
 
-# Locate the nanobind CMake package shipped with the pip/`nanobind` module.
+# Prefer the nanobind CMake package shipped with the pip/`nanobind` module,
+# fall back to fetching a pinned release.
 if(NOT nanobind_DIR)
     execute_process(
         COMMAND ${Python_EXECUTABLE} -c "import nanobind; print(nanobind.cmake_dir())"
         OUTPUT_VARIABLE nanobind_DIR
+        RESULT_VARIABLE _nanobind_probe
+        ERROR_QUIET
         OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT _nanobind_probe EQUAL 0)
+        set(nanobind_DIR "")
+    endif()
 endif()
-find_package(nanobind CONFIG REQUIRED)
+if(nanobind_DIR)
+    find_package(nanobind CONFIG REQUIRED)
+else()
+    include(FetchContent)
+    FetchContent_Declare(
+        nanobind
+        GIT_REPOSITORY https://github.com/wjakob/nanobind.git
+        GIT_TAG v2.13.0)
+    FetchContent_MakeAvailable(nanobind)
+endif()
 
 nanobind_add_module({{LIB}} NB_STATIC auto_nanobind.cpp)
 
@@ -64,6 +79,32 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         $<TARGET_FILE:{{LIB}}>
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
 )CMK";
+
+        // Build/Use section for the generated README — kept next to NB_CMAKE so
+        // the doc can't drift from the template it describes: nanobind comes
+        // from pip when installed (`nanobind.cmake_dir()` locates it) and is
+        // otherwise fetched at configure time, the compile needs the
+        // clang-p2996 toolchain ({{REFLECTION_FLAGS}}/{{STDLIB_LINK}}), and the
+        // POST_BUILD copy makes the module importable from this dir.
+        constexpr std::string_view NB_README_BUILD = R"MD(## Build
+
+Prerequisite: the clang-p2996 C++26 reflection toolchain — pass
+`-DCLANG_P2996_ROOT=/path/to/clang-p2996/build` (or `-DROSETTA_CXX_COMPILER=…`)
+if yours is not at the default location. nanobind is taken from an installed
+copy when available (`pip install nanobind`); otherwise CMake fetches a pinned
+release at configure time (network access needed on the first configure).
+
+```sh
+cmake -S . -B build && cmake --build build
+```
+
+## Use
+
+A post-build step copies the module next to the sources, so from this directory:
+
+```sh
+python3 -c "import {{LIB}}"
+```)MD";
 
         inline std::string nanobind_bindings(const GenContext &c) {
             std::string binds;
@@ -97,7 +138,8 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             auto dir = c.out_dir / "nanobind";
             write_file(dir / "auto_nanobind.cpp", nanobind_source(c));
             write_file(dir / "CMakeLists.txt", render_meta(NB_CMAKE, c));
-            write_file(dir / "README.md", readme("nanobind", c));
+            write_file(dir / "README.md",
+                       readme("nanobind", c, subst(NB_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

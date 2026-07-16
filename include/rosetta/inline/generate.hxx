@@ -465,10 +465,21 @@ endif()
             return true;
         }
 
-        inline std::string readme(std::string_view backend, const GenContext &c) {
+        // `build` (optional) is a ready-to-append markdown section ("## Build"
+        // …) describing how to compile the emitted sources; each backend keeps
+        // it next to its CMake template so the two can't drift apart.
+        inline std::string readme(std::string_view backend, const GenContext &c,
+                                  std::string_view build = {}) {
             std::string s = "# `" + c.lib + "` (";
             s += backend;
             s += ")\n\nAuto-generated bindings.\n\n";
+            if (!build.empty()) {
+                s += build;
+                if (build.back() != '\n') {
+                    s += '\n';
+                }
+                s += '\n';
+            }
             s += readme_body_of(c.classes);
             for (const auto &e : c.enums) {
                 s += e.doc + "\n";
@@ -523,6 +534,49 @@ endif()
         // parameter GenTypes (defined after type_descriptor, which it calls).
         template <typename F> inline void fill_callback_sig(GenType &g);
 
+        // --- Foreign-sequence spelling (rosetta::is_sequence) -----------------
+        // A qualified, compilable spelling for the types a sequence adapter has
+        // to name in emitted code. display_string_of prints template names and
+        // user namespaces unqualified ("vector<double>" for GEO::vector<double>),
+        // so the spelling is COMPOSED: enclosing namespaces + the template's own
+        // identifier + the (recursively spelled) element. Only the kinds the
+        // marshalling gates let through need to round-trip here.
+        template <typename E> inline std::string marshal_spelling();
+
+        template <typename U> inline std::string sequence_spelling() {
+            // class_namespace walks the specialization's parents — the same
+            // chain encloses the template itself.
+            const std::string     ns = class_namespace<U>();
+            constexpr const char *id = std::define_static_string(std::meta::identifier_of(
+                std::meta::template_of(std::meta::dealias(^^U))));
+            const std::string     head = ns.empty() ? std::string(id) : ns + "::" + id;
+            return head + "<" + marshal_spelling<typename U::value_type>() + ">";
+        }
+
+        template <typename E> inline std::string marshal_spelling() {
+            using V = std::remove_cvref_t<E>;
+            if constexpr (std::is_same_v<V, std::string>) {
+                return "std::string";
+            } else if constexpr (std::is_same_v<V, bool>) {
+                return "bool";
+            } else if constexpr (std::is_arithmetic_v<V>) {
+                constexpr const char *sp = std::define_static_string(
+                    std::meta::display_string_of(std::meta::dealias(^^V)));
+                return sp; // "double", "unsigned int", ...
+            } else if constexpr (is_vec<V>::value) {
+                return "std::vector<" + marshal_spelling<typename V::value_type>() + ">";
+            } else if constexpr (rosetta::is_sequence<V>::value) {
+                return sequence_spelling<V>();
+            } else if constexpr (std::is_enum_v<V> || std::is_class_v<V>) {
+                const std::string ns = class_namespace<V>();
+                return ns.empty() ? class_name<V>() : ns + "::" + class_name<V>();
+            } else {
+                constexpr const char *sp = std::define_static_string(
+                    std::meta::display_string_of(std::meta::dealias(^^V)));
+                return sp;
+            }
+        }
+
         // Map a C++ type to the language-neutral GenType descriptor.
         template <typename T> inline GenType type_descriptor() {
             using U = std::remove_cvref_t<T>;
@@ -548,6 +602,24 @@ endif()
             } else if constexpr (is_vec<U>::value) {
                 g.kind = "vector";
                 g.element.push_back(type_descriptor<typename U::value_type>());
+            } else if constexpr (rosetta::is_sequence<U>::value) {
+                // Trait-registered foreign container: `kind` stays "unknown"
+                // (backends that don't opt in keep skipping it — the
+                // is_pointer / is_callback pattern); an opted-in backend
+                // marshals it through std::vector<element> using seq_cpp to
+                // construct the container (see rosetta/sequence.h).
+                static_assert(requires(U s, std::size_t n) {
+                                  typename U::value_type;
+                                  s.resize(n);
+                                  { s.size() } -> std::convertible_to<std::size_t>;
+                                  s.begin();
+                                  s.end();
+                              } && std::is_default_constructible_v<U>,
+                              "rosetta::is_sequence<T>: T must be default-constructible with "
+                              "value_type, size(), resize(n) and begin()/end()");
+                g.is_sequence = true;
+                g.element.push_back(type_descriptor<typename U::value_type>());
+                g.seq_cpp = sequence_spelling<U>();
             } else if constexpr (std::is_enum_v<U>) {
                 g.kind   = "enum";
                 g.object = class_name<U>();
@@ -666,6 +738,15 @@ endif()
             if constexpr (std::is_array_v<std::remove_reference_t<T>>) {
                 return false;
             } else if constexpr (std::is_pointer_v<U>) {
+                return false;
+            } else if constexpr (rosetta::is_sequence<U>::value) {
+                // A trait-registered foreign sequence in a VIRTUAL signature:
+                // the trampoline override must spell the exact type, but the
+                // exact spelling is unqualified (display_string_of) and
+                // qualify_std would mis-qualify it to std::vector — the
+                // override then would not override. The method itself still
+                // binds callable through the sequence adapters; only the
+                // script-side override is off the table.
                 return false;
             } else if constexpr (sig_vector_elem<U>::is) {
                 return sig_type_bindable<typename sig_vector_elem<U>::type>();
@@ -977,6 +1058,87 @@ endif()
             return ge;
         }
 
+        // --- Foreign-sequence adapter helpers (shared by the runtime backends) ---
+        // A trait-registered sequence (GenType::is_sequence) crosses the boundary
+        // by COPY through a std::vector<element>: the emitted adapter declares the
+        // boundary vector as its parameter, builds the foreign container before
+        // the call (seq_decl_stmts) and flattens a returned one after
+        // (seq_from_expr). Because the adapter CALLS the method by name with
+        // concrete arguments — instead of spelling the ambiguous `&T::name`
+        // member pointer — an overload set whose surviving IR entry is the
+        // sequence one binds too (overload resolution happens in the adapter).
+
+        // Adapter-marshalable? Element must round-trip a script array cheaply.
+        inline bool seq_ok(const GenType &t) {
+            if (!t.is_sequence || t.element.empty() || t.seq_cpp.empty()) {
+                return false;
+            }
+            const GenType &e = t.element.front();
+            return e.kind == "number" || e.kind == "boolean" || e.kind == "string" ||
+                   e.kind == "enum";
+        }
+
+        // The boundary element / vector spellings ("double" / "std::vector<double>").
+        inline std::string seq_elem_cpp(const GenType &t) {
+            const GenType &e = t.element.front();
+            if (e.kind == "string") {
+                return "std::string";
+            }
+            if (e.kind == "boolean") {
+                return "bool";
+            }
+            if (e.kind == "enum") {
+                return e.object;
+            }
+            return e.spelling.empty() ? "double" : e.spelling; // number
+        }
+        inline std::string seq_boundary_cpp(const GenType &t) {
+            return "std::vector<" + seq_elem_cpp(t) + ">";
+        }
+
+        // Statements building the foreign container `sn` from boundary vector `an`.
+        inline std::string seq_decl_stmts(const GenType &t, const std::string &an,
+                                          const std::string &sn, const std::string &ind) {
+            return ind + t.seq_cpp + " " + sn + ";\n" +
+                   ind + sn + ".resize(" + an + ".size());\n" +
+                   ind + "std::copy(" + an + ".begin(), " + an + ".end(), " + sn +
+                   ".begin());\n";
+        }
+
+        // Expression flattening a foreign container value/reference `expr`.
+        inline std::string seq_from_expr(const GenType &t, const std::string &expr) {
+            return seq_boundary_cpp(t) + "(" + expr + ".begin(), " + expr + ".end())";
+        }
+
+        // Does this signature touch a foreign sequence at all / only adaptable
+        // ones? (touches && !adaptable ⇒ leave the method to the backend's
+        // ordinary gates — for most that means skipping it.)
+        inline bool seq_touches(const GenMethod &m) {
+            if (m.ret.is_sequence) {
+                return true;
+            }
+            for (const auto &p : m.params) {
+                if (p.type.is_sequence) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        inline bool seq_adaptable(const GenMethod &m) {
+            if (!seq_touches(m)) {
+                return false;
+            }
+            if (m.ret.is_sequence && !seq_ok(m.ret)) {
+                return false;
+            }
+            for (const auto &p : m.params) {
+                if (p.type.is_sequence && !seq_ok(p.type)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         // Build a GenContext from a type pack (no files, no targets) — the same
         // class/enum split generate() does, for the render-to-string helpers.
         template <typename... Ts> inline GenContext make_context(std::string lib) {
@@ -1101,6 +1263,28 @@ namespace rosetta {
                 }
             }(),
             ...);
+
+        // Mark the manifest's "final" classes: no trampoline even with public
+        // virtuals (see GenClass::is_final). Matched like extensions —
+        // qualified or unqualified spelling.
+        for (const std::string &fc : opt.final_classes) {
+            bool found = false;
+            for (auto &k : classes) {
+                const std::string qualified =
+                    k.name_space.empty() ? k.name : k.name_space + "::" + k.name;
+                if (fc == qualified || fc == k.name) {
+                    k.is_final = true;
+                    found      = true;
+                    break;
+                }
+            }
+            if (!found) {
+                std::fprintf(stderr,
+                             "rosetta::generate: \"final\" names unbound class '%s' — "
+                             "ignored\n",
+                             fc.c_str());
+            }
+        }
 
         // Attach the extension methods (manifest class "extensions") to their
         // classes: a free function whose first parameter is `Cls&` becomes an

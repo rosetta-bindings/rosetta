@@ -77,6 +77,28 @@ target_link_options({{LIB}} PRIVATE
     {{STDLIB_LINK}})
 )CMK";
 
+        constexpr std::string_view REST_README_BUILD = R"MD(## Build
+
+Prerequisites: the clang-p2996 C++26 reflection toolchain — pass
+`-DCLANG_P2996_ROOT=/path/to/clang-p2996/build` (or `-DROSETTA_CXX_COMPILER=…`)
+if yours is not at the default location. cpp-httplib and nlohmann/json are
+fetched by CMake (FetchContent), so the first configure needs network access.
+
+```sh
+cmake -S . -B build && cmake --build build
+```
+
+## Run
+
+```sh
+./build/{{LIB}}                # serves on http://127.0.0.1:8080
+./build/{{LIB}} 0.0.0.0 9090   # optional args: [host] [port]
+```
+
+Open `http://127.0.0.1:8080/` for the browser client (the emitted
+`index.html`, also usable standalone via `file://`), `/docs` for Swagger UI,
+and `/openapi.json` for the OpenAPI 3.1 spec.)MD";
+
         // The browser client: a static renderer that builds the UI from a
         // {{SPEC}} descriptor (emitted from the reflected IR). {{LIB}} is the
         // page title. The renderer talks to the server selected in the Server
@@ -326,7 +348,8 @@ if(SPEC.functions.length){
             write_file(dir / "auto_rest.cpp", render_source(REST_CPP, c, binds));
             write_file(dir / "CMakeLists.txt", render_meta(REST_CMAKE, c));
             write_file(dir / "index.html", html);
-            write_file(dir / "README.md", readme("rest", c));
+            write_file(dir / "README.md",
+                       readme("rest", c, subst(REST_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

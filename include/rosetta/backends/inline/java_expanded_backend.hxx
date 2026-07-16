@@ -254,8 +254,9 @@ ROSETTA_JAVA_EXPORT void rosetta_java_free(char *p) { std::free(p); }
             write_file(dir / "auto_java.cpp", java_expanded_source(c));
             write_file(dir / "CMakeLists.txt", render_meta(JVX_CMAKE, c));
 
-            // The Java sources / pom.xml / README are identical to the thin
-            // backend's — same FFM protocol, same wrappers.
+            // The Java sources / pom.xml are identical to the thin backend's —
+            // same FFM protocol, same wrappers. The README only differs in the
+            // backend tag and toolchain note (via {{BACKEND}} / {{TOOLCHAIN}}).
             write_file(srcdir / "Native.java", java_native(c));
             write_file(srcdir / "Rt.java", java_runtime_src(c));
             for (const auto &e : c.enums) {
@@ -272,7 +273,12 @@ ROSETTA_JAVA_EXPORT void rosetta_java_free(char *p) { std::free(p); }
             write_file(dir / "pom.xml", subst(JAVA_POM, {{"LIB", c.lib}}));
             const std::string doc =
                 subst(JAVA_README,
-                      {{"LIB", c.lib}, {"PKG", java_pkg(c)}, {"PKGDIR", java_pkgdir(c)}}) +
+                      {{"LIB", c.lib},
+                       {"PKG", java_pkg(c)},
+                       {"PKGDIR", java_pkgdir(c)},
+                       {"BACKEND", "java-expanded"},
+                       {"TOOLCHAIN",
+                        "Builds with a stock C++20 compiler — no reflection toolchain needed."}}) +
                 readme_body_of(c.classes);
             write_file(dir / "README.md", doc);
         }

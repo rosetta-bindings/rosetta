@@ -70,6 +70,35 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
 )CMK";
 
+        // Build/Use section of the generated README — every claim traces to
+        // JULIA_CMAKE above (JlCxx auto-located through Julia's CxxWrap,
+        // clang-p2996 via {{HEADER_BLOCK}}, post-build copy) or to the
+        // `define_julia_module` entry point JULIA_CPP documents.
+        constexpr std::string_view JULIA_README_BUILD = R"MD(## Build
+
+Prerequisites: the Julia package **CxxWrap** (the CMakeLists locates JlCxx by
+running `julia -e "using CxxWrap; print(CxxWrap.prefix_path())"`; hint it
+manually with `-DJlCxx_DIR=…` or `-DCMAKE_PREFIX_PATH=…` if `julia` is not on
+PATH), and the clang-p2996 C++26 reflection toolchain.
+
+```sh
+cmake -S . -B build   # add -DCLANG_P2996_ROOT=… if the default root doesn't match
+cmake --build build   # post-build step copies lib{{LIB}}.{dylib,so} next to this README
+```
+
+## Use
+
+CxxWrap loads the library's `define_julia_module` entry point:
+
+```julia
+module {{LIB}}
+using CxxWrap
+@wrapmodule(() -> joinpath(@__DIR__, "lib{{LIB}}"))
+__init__() = @initcxx
+end
+```
+)MD";
+
         inline void JuliaBackend::emit(const GenContext &c) const {
             std::string binds;
             // Enums first so class fields/methods can resolve them.
@@ -88,7 +117,8 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             auto dir = c.out_dir / "julia";
             write_file(dir / "auto_jlcxx.cpp", render_source(JULIA_CPP, c, binds));
             write_file(dir / "CMakeLists.txt", render_meta(JULIA_CMAKE, c));
-            write_file(dir / "README.md", readme("julia", c));
+            write_file(dir / "README.md",
+                       readme("julia", c, subst(JULIA_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

@@ -175,12 +175,14 @@ target_link_options({{LIB}} PRIVATE
 </project>
 )POM";
 
-        constexpr std::string_view JAVA_README = R"MD(# `{{LIB}}` (java)
+        // Shared with the expanded backend: {{BACKEND}} / {{TOOLCHAIN}} carry the
+        // parts that differ (the expanded shim builds with a stock compiler).
+        constexpr std::string_view JAVA_README = R"MD(# `{{LIB}}` ({{BACKEND}})
 
 Auto-generated Java bindings. Two pieces work together:
 
 - **`auto_java.cpp`** → a native shared library exposing a flat C ABI
-  (`rosetta_java_*`). Built with the C++26 reflection toolchain.
+  (`rosetta_java_*`). {{TOOLCHAIN}}
 - **the Java sources** (under `src/main/java/{{PKGDIR}}/`) → idiomatic wrappers.
   Each class is a handle into the native instance store; property and method
   access is a JSON round-trip through the C ABI via the Foreign Function & Memory
@@ -799,7 +801,11 @@ final class Rt {
             write_file(dir / "pom.xml", subst(JAVA_POM, {{"LIB", c.lib}}));
             const std::string doc =
                 subst(JAVA_README,
-                      {{"LIB", c.lib}, {"PKG", java_pkg(c)}, {"PKGDIR", java_pkgdir(c)}}) +
+                      {{"LIB", c.lib},
+                       {"PKG", java_pkg(c)},
+                       {"PKGDIR", java_pkgdir(c)},
+                       {"BACKEND", "java"},
+                       {"TOOLCHAIN", "Built with the C++26 reflection toolchain."}}) +
                 readme_body_of(c.classes);
             write_file(dir / "README.md", doc);
         }

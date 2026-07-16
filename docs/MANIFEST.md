@@ -71,6 +71,7 @@ cmake --build path/to/generated/build
 | `targets` | ✅ | — | The language backends to emit. See [Targets](#targets). |
 | `classes` | ✅ | — | The classes / structs / enums to bind. See [Classes](#classes). |
 | `functions` | — | `[]` | Free (non-member) functions to bind. See [Functions](#functions). |
+| `sequences` | — | `[]` | Foreign sequence containers (qualified template names, one type parameter — `"GEO::vector"`) that marshal like `std::vector<T>`. See [Foreign sequence containers](#foreign-sequence-containers-sequences). |
 | `user_lib` | — | — | Link the generated bindings against a pre-built external library. See [Linking an external library](#linking-an-external-library-user_lib). |
 | `user_sources` | — | `[]` | List of user `.cpp` (or `.c`) files compiled directly into every generated binding target. See [Compiling user sources](#compiling-user-sources-user_sources). |
 | `compile_definitions` | — | `[]` | Preprocessor definitions (`"NAME"` or `"NAME=VALUE"`) applied to the generator driver and every compiled binding target. See [Preprocessor definitions](#preprocessor-definitions-compile_definitions). |
@@ -105,6 +106,7 @@ Keys beginning with `//` (e.g. `"//1"`, `"//note"`) are treated as comments and 
 | `annotations` | — | — | Path (relative to the manifest) to an out-of-line annotation JSON side-car, baked into `bindings.h` so the header stays clean. See [OUT_OF_LINE_ANNOTATIONS](OUT_OF_LINE_ANNOTATIONS.md). |
 | `doc` | — | — | A description string for the class (used by doc backends). |
 | `extensions` | — | `[]` | Free functions exposed as **instance methods** of this class. See [Extension methods](#extension-methods-extensions). |
+| `final` | — | `false` | Treat the class as non-overridable from the host language: **no trampoline** is generated even when it has public virtual methods (they still bind as ordinary callable methods). Also what makes a class *with* virtuals eligible as a node member-object property (`mesh.vertices` — the aliased wrap stores a `T*`, which requires the wrapped type to be `T`, not `Js_T`). |
 
 Inheritance, multiple constructors, enums, nested user types and `std::vector` members are discovered automatically — no entry needed per base class, just list the most-derived type you want bound.
 
@@ -135,6 +137,26 @@ print(len(m.vertices()) // 3)
 ```
 
 The receiver is dropped from the exposed signature; the remaining parameters and the return type marshal exactly like a free function's. The method name is the function's unqualified identifier. Supported by the `python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded` targets and all text backends (`typescript`, `markdown`, `html`); the thin (reflection-re-running) backends don't see them, and backends that can only emit member pointers (`qt`/`qml`/`csharp`/`java`) skip them.
+
+---
+
+## Foreign sequence containers (`sequences`)
+
+Many libraries carry their bulk data in their **own vector type** — geogram's `GEO::vector<T>`, an aligned or pooled vector — and the marshalling layers only know `std::vector`. List the container template (qualified, **one type parameter**) under `sequences` and it crosses the boundary like a `std::vector` of its element:
+
+```json
+"sequences": ["GEO::vector"]
+```
+
+`rosetta_gen` emits `template <typename T> struct rosetta::is_sequence<GEO::vector<T>> : std::true_type {};` into the generated `bindings.h` (equivalently, write that specialization yourself for programmatic use — see `rosetta/sequence.h`). The container must be default-constructible with `value_type`, `size()`, `resize(n)` and `begin()`/`end()`; elements must be arithmetic, `bool`, `std::string` or a bound enum.
+
+The opted-in backends (`python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded`, `lua-expanded`, plus `typescript` declarations) marshal it **by copy through a `std::vector<element>` boundary** inside an emitted adapter — scripts pass and receive plain arrays/lists/tables. Every other backend keeps skipping the type (the IR leaves `kind` "unknown", like raw pointers and callbacks). Three consequences worth knowing:
+
+- **Mutable `Seq&` parameters bind, input-only** — the adapter's local container is a real lvalue (geogram's `assign_points(vector<double>&, dim, steal)` works; `steal` steals from the adapter's copy, which is fine). In-place mutations are discarded, exactly like pybind's `std::vector&` casters.
+- **Overload sets whose surviving IR entry is the sequence overload bind** — the adapter calls the method *by name* with concrete arguments instead of spelling the ambiguous `&T::name` member pointer. The walk keeps the **first-declared** overload, so `GEO::MeshVertices::assign_points` (sequence overload first) binds; a set whose first declaration is the raw-pointer one stays skipped.
+- **Virtual methods naming the container can't be overridden script-side** (their trampoline `sig_bindable` is off — the exact spelling can't round-trip), but they still bind as callable methods.
+
+Sequence-typed public **fields** bind as copying properties (python / nanobind / wasm / lua; node skips them).
 
 ---
 

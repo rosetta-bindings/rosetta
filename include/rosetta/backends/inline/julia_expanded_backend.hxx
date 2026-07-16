@@ -55,6 +55,34 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
 )CMK";
 
+        // Build/Use section of the generated README — every claim traces to
+        // JULIAX_CMAKE above (stock C++20, JlCxx auto-located through Julia's
+        // CxxWrap, post-build copy) or to the jx_loader() output ({{LIB}}.jl
+        // resolves lib{{LIB}} relative to its own directory via @__DIR__).
+        constexpr std::string_view JULIAX_README_BUILD = R"MD(## Build
+
+Plain jlcxx — no C++26, no reflection toolchain: any stock C++20 compiler
+works. Only prerequisite: the Julia package **CxxWrap** (the CMakeLists locates
+JlCxx by running `julia -e "using CxxWrap; print(CxxWrap.prefix_path())"`; hint
+it manually with `-DJlCxx_DIR=…` or `-DCMAKE_PREFIX_PATH=…` if `julia` is not
+on PATH).
+
+```sh
+cmake -S . -B build
+cmake --build build   # post-build step copies lib{{LIB}}.{dylib,so} next to {{LIB}}.jl
+```
+
+## Use
+
+The generated `{{LIB}}.jl` module wraps the library through CxxWrap, resolving
+`lib{{LIB}}` in its own directory (where the post-build copy put it):
+
+```julia
+include("{{LIB}}.jl")
+using .{{LIB}}
+```
+)MD";
+
         // --- Marshalling gates -------------------------------------------------
         // jlcxx's boundary rules: scalars / bool / std::string / enums map
         // natively; a registered class crosses as a wrapped object; with
@@ -574,7 +602,9 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             write_file(dir / "auto_jlcxx.cpp", julia_expanded_source(c));
             write_file(dir / "CMakeLists.txt", render_meta(JULIAX_CMAKE, c));
             write_file(dir / (c.lib + ".jl"), jx_loader(c));
-            write_file(dir / "README.md", readme("julia-expanded", c));
+            write_file(dir / "README.md",
+                       readme("julia-expanded", c,
+                              subst(JULIAX_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

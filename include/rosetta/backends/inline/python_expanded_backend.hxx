@@ -28,13 +28,28 @@ execute_process(
 set(Python3_EXECUTABLE "${Python_EXECUTABLE}" CACHE FILEPATH "" FORCE)
 set(PYBIND11_FINDPYTHON ON)
 
+# Prefer an installed pybind11 (pip), fall back to fetching a pinned release.
 if(NOT pybind11_DIR)
     execute_process(
         COMMAND ${Python_EXECUTABLE} -m pybind11 --cmakedir
         OUTPUT_VARIABLE pybind11_DIR
+        RESULT_VARIABLE _pybind11_probe
+        ERROR_QUIET
         OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT _pybind11_probe EQUAL 0)
+        set(pybind11_DIR "")
+    endif()
 endif()
-find_package(pybind11 REQUIRED CONFIG)
+if(pybind11_DIR)
+    find_package(pybind11 REQUIRED CONFIG)
+else()
+    include(FetchContent)
+    FetchContent_Declare(
+        pybind11
+        GIT_REPOSITORY https://github.com/pybind/pybind11.git
+        GIT_TAG v3.0.4)
+    FetchContent_MakeAvailable(pybind11)
+endif()
 
 pybind11_add_module({{LIB}} NO_EXTRAS auto_pybind.cpp)
 
@@ -49,6 +64,29 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         $<TARGET_FILE:{{LIB}}>
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
 )CMK";
+
+        // Build/Use section for the generated README — kept next to PYX_CMAKE
+        // so the doc can't drift from the template it describes. Unlike the
+        // thin python backend the source is pre-expanded: plain C++17 pybind11,
+        // any stock compiler, no clang-p2996 and no rosetta headers.
+        constexpr std::string_view PYX_README_BUILD = R"MD(## Build
+
+The emitted source is plain C++17 pybind11 — any stock compiler works; no
+reflection toolchain, no rosetta headers. pybind11 is taken from an installed
+copy when available (`pip install pybind11`); otherwise CMake fetches a pinned
+release at configure time (network access needed on the first configure).
+
+```sh
+cmake -S . -B build && cmake --build build
+```
+
+## Use
+
+A post-build step copies the module next to the sources, so from this directory:
+
+```sh
+python3 -c "import {{LIB}}"
+```)MD";
 
         // Escape a docstring for a C++ string literal (backslash + quote only;
         // annotation text is short single-line prose in practice).
@@ -111,7 +149,9 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         inline std::string expanded_includes(const GenContext &c) {
             std::string s = "#include <pybind11/pybind11.h>\n"
                             "#include <pybind11/stl.h>\n"
-                            "#include <pybind11/functional.h>\n";
+                            "#include <pybind11/functional.h>\n"
+                            "#include <algorithm>\n"
+                            "#include <vector>\n";
             auto add = [&](const std::string &h) { append_include(s, h); };
             for (const auto &k : c.classes) {
                 add(k.header);
@@ -245,6 +285,151 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             return s;
         }
 
+        // --- Foreign sequences (rosetta::is_sequence) --------------------------
+        // A method touching a trait-registered sequence binds through a lambda
+        // adapter: the script side speaks std::vector<element> (pybind's stl.h
+        // caster), the adapter builds the foreign container before the call and
+        // flattens a returned one after. The adapter calls the method BY NAME
+        // with concrete arguments, so — unlike the member-pointer path — an
+        // overload set whose surviving IR entry is the sequence overload binds
+        // (GEO::MeshVertices::assign_points). A mutable `Seq&` parameter binds
+        // input-only: the adapter's local container is a real lvalue and
+        // in-place mutations are discarded, exactly like pybind's std::vector&.
+
+        // A compilable value/reference spelling for adapter parameters that
+        // carry no exact param_cpp (extension methods, free functions).
+        inline std::string px_cpp_type(const GenType &t) {
+            if (t.kind == "vector") {
+                return "std::vector<" +
+                       (t.element.empty() ? std::string("double")
+                                          : px_cpp_type(t.element.front())) +
+                       ">";
+            }
+            if (t.kind == "object" || t.kind == "enum") {
+                return t.object;
+            }
+            if (t.kind == "string") {
+                return "std::string";
+            }
+            if (t.kind == "boolean") {
+                return "bool";
+            }
+            if (t.kind == "number") {
+                return t.spelling.empty() ? "double" : t.spelling;
+            }
+            return qualify_std(t.spelling);
+        }
+
+        // Do the NON-sequence parts of the signature still satisfy the python
+        // gates? (The sequence parts go through the adapter, which lifts the
+        // vector-copy and overload restrictions.)
+        inline bool px_seq_rest_ok(const GenMethod &m) {
+            if (m.ret.kind == "object" && !m.ret.copy_constructible) {
+                return false;
+            }
+            if (m.ret.kind == "vector" && !px_copyable(m.ret)) {
+                return false;
+            }
+            for (const auto &p : m.params) {
+                if (p.type.is_sequence) {
+                    continue;
+                }
+                if (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) {
+                    return false;
+                }
+                if (p.type.kind == "vector" && !px_copyable(p.type)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // The adapter lambda's (parameter decls, pre-call statements, call args).
+        struct PxSeqSig {
+            std::string decls;
+            std::string pre;
+            std::string args;
+        };
+        inline PxSeqSig px_seq_sig(const std::vector<GenParam>    &params,
+                                   const std::vector<std::string> &param_cpp) {
+            PxSeqSig    o;
+            const bool  exact = param_cpp.size() == params.size();
+            for (std::size_t j = 0; j < params.size(); ++j) {
+                const std::string an = "arg" + std::to_string(j);
+                if (j) {
+                    o.decls += ", ";
+                    o.args += ", ";
+                }
+                const GenType &t = params[j].type;
+                if (t.is_sequence) {
+                    const std::string sn = "seq" + std::to_string(j);
+                    o.decls += seq_boundary_cpp(t) + " " + an;
+                    o.pre += seq_decl_stmts(t, an, sn, "        ");
+                    o.args += sn;
+                } else if (exact) {
+                    o.decls += qualify_std(param_cpp[j]) + " " + an;
+                    o.args += an;
+                } else if (t.kind == "object") {
+                    o.decls += px_cpp_type(t) + " &" + an; // bound class, by ref
+                    o.args += an;
+                } else {
+                    o.decls += px_cpp_type(t) + " " + an;
+                    o.args += an;
+                }
+            }
+            return o;
+        }
+
+        // The full def(...) for a sequence-adapted method / extension / static.
+        inline std::string px_seq_method(const GenClass &k, const GenMethod &m) {
+            const PxSeqSig    sig = px_seq_sig(m.params, m.param_cpp);
+            std::string       decls, call;
+            if (m.is_extension) {
+                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                call  = m.ext_qualified + "(self" + (sig.args.empty() ? "" : ", " + sig.args) +
+                       ")";
+            } else if (m.is_static) {
+                decls = sig.decls;
+                call  = k.name + "::" + m.name + "(" + sig.args + ")";
+            } else {
+                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                call  = "self." + m.name + "(" + sig.args + ")";
+            }
+            std::string body = sig.pre;
+            if (m.ret.is_sequence) {
+                body += "        auto &&r = " + call + ";\n";
+                body += "        return " + seq_from_expr(m.ret, "r") + ";\n";
+            } else if (m.ret.kind == "void") {
+                body += "        " + call + ";\n";
+            } else {
+                body += "        return " + call + ";\n";
+            }
+            const std::string def = m.is_static ? "def_static" : "def";
+            return "    c." + def + "(\"" + m.name + "\", [](" + decls + ") {\n" + body +
+                   "    }" + doc_arg(m.doc) + ");\n";
+        }
+
+        // A sequence-typed field: def_property copying through the boundary
+        // vector in both directions (member pointers would hand pybind the
+        // casterless foreign type).
+        inline std::string px_seq_field(const GenClass &k, const GenField &f) {
+            const std::string vt = seq_boundary_cpp(f.type);
+            const std::string dq = doc_arg(f.doc);
+            std::string       s;
+            const std::string get = "[](const " + k.name + " &s) { return " +
+                                    seq_from_expr(f.type, "s." + f.name) + "; }";
+            if (f.is_readonly) {
+                return "    c.def_property_readonly(\"" + f.name + "\", " + get + dq + ");\n";
+            }
+            s += "    c.def_property(\"" + f.name + "\",\n";
+            s += "        " + get + ",\n";
+            s += "        [](" + k.name + " &s, const " + vt + " &v) {\n";
+            s += "            s." + f.name + ".resize(v.size());\n";
+            s += "            std::copy(v.begin(), v.end(), s." + f.name + ".begin());\n";
+            s += "        }" + dq + ");\n";
+            return s;
+        }
+
         // Explicit pybind for one method. Overloads are deduped by name in the
         // walk and the surviving IR entry is flagged is_overloaded (px_method_ok
         // skips it), so the bare &T::m member pointer here is unambiguous. An
@@ -311,6 +496,12 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             };
             s += indent(expanded_ctors(k));
             for (const auto &f : k.fields) {
+                if (f.type.is_sequence) {
+                    if (seq_ok(f.type)) {
+                        s += indent(px_seq_field(k, f));
+                    }
+                    continue; // never hand pybind the casterless foreign type
+                }
                 if (!px_field_ok(f)) {
                     // A non-copyable member object of a BOUND class becomes a
                     // reference property (methods win on a name clash — e.g. a
@@ -328,6 +519,16 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 s += indent(expanded_field(k, f));
             }
             for (const auto &m : k.methods) {
+                if (seq_touches(m)) {
+                    // Foreign sequence in the signature: adapter or nothing —
+                    // the member-pointer path would hand pybind the casterless
+                    // foreign type (and an overloaded set is fine here, see
+                    // px_seq_method).
+                    if (seq_adaptable(m) && px_seq_rest_ok(m)) {
+                        s += indent(px_seq_method(k, m));
+                    }
+                    continue;
+                }
                 if (!px_method_ok(m)) {
                     continue; // signature the emitted pybind line could not compile
                 }
@@ -349,6 +550,24 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 GenMethod probe; // free functions go through the same gates
                 probe.ret    = f.ret;
                 probe.params = f.params;
+                if (seq_touches(probe)) {
+                    if (seq_adaptable(probe) && px_seq_rest_ok(probe)) {
+                        const PxSeqSig sig = px_seq_sig(f.params, {});
+                        std::string body2 = sig.pre;
+                        const std::string call = f.qualified + "(" + sig.args + ")";
+                        if (f.ret.is_sequence) {
+                            body2 += "        auto &&r = " + call + ";\n";
+                            body2 += "        return " + seq_from_expr(f.ret, "r") + ";\n";
+                        } else if (f.ret.kind == "void") {
+                            body2 += "        " + call + ";\n";
+                        } else {
+                            body2 += "        return " + call + ";\n";
+                        }
+                        body += "    m.def(\"" + f.name + "\", [](" + sig.decls + ") {\n" +
+                                body2 + "    }" + doc_arg(f.doc) + ");\n";
+                    }
+                    continue;
+                }
                 if (!px_method_ok(probe)) {
                     continue;
                 }
@@ -376,7 +595,8 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             auto dir = c.out_dir / "python-expanded";
             write_file(dir / "auto_pybind.cpp", python_expanded_source(c));
             write_file(dir / "CMakeLists.txt", render_meta(PYX_CMAKE, c));
-            write_file(dir / "README.md", readme("python-expanded", c));
+            write_file(dir / "README.md",
+                       readme("python-expanded", c, subst(PYX_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

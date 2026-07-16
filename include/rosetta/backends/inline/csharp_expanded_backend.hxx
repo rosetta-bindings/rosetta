@@ -265,7 +265,12 @@ ROSETTA_CS_EXPORT void rosetta_csharp_free(char *p) { std::free(p); }
             write_file(dir / (c.lib + ".csproj"),
                        subst(CS_CSPROJ, {{"LIB", c.lib}, {"NS", cs_ident(c.lib)}}));
             const std::string doc =
-                subst(CS_README, {{"LIB", c.lib}, {"NS", cs_ident(c.lib)}}) +
+                subst(CS_README,
+                      {{"LIB", c.lib},
+                       {"NS", cs_ident(c.lib)},
+                       {"BACKEND", "csharp-expanded"},
+                       {"TOOLCHAIN",
+                        "Builds with a stock C++20 compiler — no reflection toolchain needed."}}) +
                 readme_body_of(c.classes);
             write_file(dir / "README.md", doc);
         }

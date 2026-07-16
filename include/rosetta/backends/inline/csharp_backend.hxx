@@ -142,12 +142,14 @@ target_link_options({{LIB}} PRIVATE
         // C#-specific README: the two-part build (native shim + .NET assembly)
         // and how the runtime loader finds the shared library are not obvious, so
         // unlike most backends this one doesn't fall back to the generic readme().
-        constexpr std::string_view CS_README = R"MD(# `{{LIB}}` (csharp)
+        // Shared with the expanded backend: {{BACKEND}} / {{TOOLCHAIN}} carry the
+        // parts that differ (the expanded shim builds with a stock compiler).
+        constexpr std::string_view CS_README = R"MD(# `{{LIB}}` ({{BACKEND}})
 
 Auto-generated C# bindings. Two pieces work together:
 
 - **`auto_csharp.cpp`** → a native shared library exposing a flat C ABI
-  (`rosetta_csharp_*`). Built with the C++26 reflection toolchain.
+  (`rosetta_csharp_*`). {{TOOLCHAIN}}
 - **`{{LIB}}.cs`** → idiomatic C# wrappers. Each class is a handle into the
   native instance store; property and method access is a JSON round-trip through
   the C ABI via P/Invoke (`System.Text.Json` does the (de)serialisation).
@@ -552,7 +554,11 @@ those. Members using any other type are omitted from both sides.
                        subst(CS_CSPROJ, {{"LIB", c.lib}, {"NS", cs_ident(c.lib)}}));
             // The standard header/usage, then the per-class reference docs.
             const std::string doc =
-                subst(CS_README, {{"LIB", c.lib}, {"NS", cs_ident(c.lib)}}) +
+                subst(CS_README,
+                      {{"LIB", c.lib},
+                       {"NS", cs_ident(c.lib)},
+                       {"BACKEND", "csharp"},
+                       {"TOOLCHAIN", "Built with the C++26 reflection toolchain."}}) +
                 readme_body_of(c.classes);
             write_file(dir / "README.md", doc);
         }

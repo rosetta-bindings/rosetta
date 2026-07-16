@@ -101,3 +101,11 @@ target_include_directories(member_object PRIVATE ${CMAKE_SOURCE_DIR}/../include)
 target_compile_options(member_object PRIVATE -fannotation-attributes)
 target_link_libraries(member_object PRIVATE GTest::gtest_main)
 gtest_discover_tests(member_object)
+
+# Foreign-sequence marshalling (rosetta::is_sequence — GEO::vector-style
+# containers through a std::vector boundary). Verifies generated sources.
+add_executable(sequence sequence.cpp)
+target_include_directories(sequence PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(sequence PRIVATE -fannotation-attributes)
+target_link_libraries(sequence PRIVATE GTest::gtest_main)
+gtest_discover_tests(sequence)

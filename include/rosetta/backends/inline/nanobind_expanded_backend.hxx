@@ -30,13 +30,29 @@ set(Python_EXECUTABLE "${Python_EXECUTABLE}" CACHE FILEPATH "" FORCE)
 
 find_package(Python 3.8 COMPONENTS Interpreter Development.Module REQUIRED)
 
+# Prefer the nanobind CMake package shipped with the pip/`nanobind` module,
+# fall back to fetching a pinned release.
 if(NOT nanobind_DIR)
     execute_process(
         COMMAND ${Python_EXECUTABLE} -c "import nanobind; print(nanobind.cmake_dir())"
         OUTPUT_VARIABLE nanobind_DIR
+        RESULT_VARIABLE _nanobind_probe
+        ERROR_QUIET
         OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT _nanobind_probe EQUAL 0)
+        set(nanobind_DIR "")
+    endif()
 endif()
-find_package(nanobind CONFIG REQUIRED)
+if(nanobind_DIR)
+    find_package(nanobind CONFIG REQUIRED)
+else()
+    include(FetchContent)
+    FetchContent_Declare(
+        nanobind
+        GIT_REPOSITORY https://github.com/wjakob/nanobind.git
+        GIT_TAG v2.13.0)
+    FetchContent_MakeAvailable(nanobind)
+endif()
 
 nanobind_add_module({{LIB}} NB_STATIC auto_nanobind.cpp)
 
@@ -49,6 +65,30 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         $<TARGET_FILE:{{LIB}}>
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
 )CMK";
+
+        // Build/Use section for the generated README — kept next to
+        // NANOBINDX_CMAKE so the doc can't drift from the template it
+        // describes. Unlike the thin nanobind backend the source is
+        // pre-expanded: plain C++17 nanobind, any stock compiler, no
+        // clang-p2996 and no rosetta headers.
+        constexpr std::string_view NANOBINDX_README_BUILD = R"MD(## Build
+
+The emitted source is plain C++17 nanobind — any stock compiler works; no
+reflection toolchain, no rosetta headers. nanobind is taken from an installed
+copy when available (`pip install nanobind`); otherwise CMake fetches a pinned
+release at configure time (network access needed on the first configure).
+
+```sh
+cmake -S . -B build && cmake --build build
+```
+
+## Use
+
+A post-build step copies the module next to the sources, so from this directory:
+
+```sh
+python3 -c "import {{LIB}}"
+```)MD";
 
         // Trailing `, "doc"` for a nanobind call, or empty when there is no doc.
         // (py_lit / qualify_std come from python_expanded_backend.hxx.)
@@ -95,6 +135,58 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             return ".def_rw(\"" + f.name + "\", " + mp + dq + ")";
         }
 
+        // A sequence-adapted method as a chain segment (see px_seq_method — same
+        // adapter, nanobind spelling). nanobind's stl/vector.h caster covers the
+        // std::vector boundary.
+        inline std::string nbx_seq_method_segment(const GenClass &k, const GenMethod &m) {
+            const PxSeqSig sig = px_seq_sig(m.params, m.param_cpp);
+            std::string    decls, call;
+            if (m.is_extension) {
+                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                call  = m.ext_qualified + "(self" + (sig.args.empty() ? "" : ", " + sig.args) +
+                       ")";
+            } else if (m.is_static) {
+                decls = sig.decls;
+                call  = k.name + "::" + m.name + "(" + sig.args + ")";
+            } else {
+                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                call  = "self." + m.name + "(" + sig.args + ")";
+            }
+            std::string body = sig.pre;
+            if (m.ret.is_sequence) {
+                body += "        auto &&r = " + call + ";\n";
+                body += "        return " + seq_from_expr(m.ret, "r") + ";\n";
+            } else if (m.ret.kind == "void") {
+                body += "        " + call + ";\n";
+            } else {
+                body += "        return " + call + ";\n";
+            }
+            const std::string def = m.is_static ? "def_static" : "def";
+            return "." + def + "(\"" + m.name + "\", [](" + decls + ") {\n" + body +
+                   "        }" + nbx_doc_arg(m.doc) + ")";
+        }
+
+        // A sequence-typed field as def_prop_ro / def_prop_rw copying through
+        // the boundary vector (member pointers would hand nanobind the
+        // casterless foreign type).
+        inline std::string nbx_seq_field_segment(const GenClass &k, const GenField &f) {
+            const std::string vt  = seq_boundary_cpp(f.type);
+            const std::string dq  = nbx_doc_arg(f.doc);
+            const std::string get = "[](const " + k.name + " &s) { return " +
+                                    seq_from_expr(f.type, "s." + f.name) + "; }";
+            if (f.is_readonly) {
+                return ".def_prop_ro(\"" + f.name + "\", " + get + dq + ")";
+            }
+            std::string s;
+            s += ".def_prop_rw(\"" + f.name + "\",\n";
+            s += "            " + get + ",\n";
+            s += "            [](" + k.name + " &s, const " + vt + " &v) {\n";
+            s += "                s." + f.name + ".resize(v.size());\n";
+            s += "                std::copy(v.begin(), v.end(), s." + f.name + ".begin());\n";
+            s += "            }" + dq + ")";
+            return s;
+        }
+
         // One method as a chain segment. Overloads are already deduped by name in
         // the walk, so &T::m is unambiguous. An extension method binds its free
         // function instead — nanobind, like pybind, treats a free function whose
@@ -129,12 +221,24 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 segs.push_back(".def(nb::init<>())");
             }
             for (const auto &f : k.fields) {
+                if (f.type.is_sequence) {
+                    if (seq_ok(f.type)) {
+                        segs.push_back(nbx_seq_field_segment(k, f));
+                    }
+                    continue; // never hand nanobind the casterless foreign type
+                }
                 if (!px_field_ok(f)) {
                     continue; // non-copyable member object (shared pybind gate)
                 }
                 segs.push_back(nbx_field_segment(k, f));
             }
             for (const auto &m : k.methods) {
+                if (seq_touches(m)) {
+                    if (seq_adaptable(m) && px_seq_rest_ok(m)) {
+                        segs.push_back(nbx_seq_method_segment(k, m));
+                    }
+                    continue; // adapter or nothing (see px_seq_method)
+                }
                 if (!px_method_ok(m)) {
                     continue; // signature the emitted line could not compile
                 }
@@ -161,6 +265,24 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 GenMethod probe; // free functions go through the same gates
                 probe.ret    = f.ret;
                 probe.params = f.params;
+                if (seq_touches(probe)) {
+                    if (seq_adaptable(probe) && px_seq_rest_ok(probe)) {
+                        const PxSeqSig    sig  = px_seq_sig(f.params, {});
+                        const std::string call = f.qualified + "(" + sig.args + ")";
+                        std::string       fb   = sig.pre;
+                        if (f.ret.is_sequence) {
+                            fb += "        auto &&r = " + call + ";\n";
+                            fb += "        return " + seq_from_expr(f.ret, "r") + ";\n";
+                        } else if (f.ret.kind == "void") {
+                            fb += "        " + call + ";\n";
+                        } else {
+                            fb += "        return " + call + ";\n";
+                        }
+                        body += "    m.def(\"" + f.name + "\", [](" + sig.decls + ") {\n" + fb +
+                                "    }" + nbx_doc_arg(f.doc) + ");\n";
+                    }
+                    continue;
+                }
                 if (!px_method_ok(probe)) {
                     continue;
                 }
@@ -173,6 +295,8 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             out += "#include <nanobind/stl/string.h>\n";
             out += "#include <nanobind/stl/vector.h>\n";
             out += "#include <nanobind/stl/function.h>\n";
+            out += "#include <algorithm>\n";
+            out += "#include <vector>\n";
             auto add = [&](const std::string &h) { append_include(out, h); };
             for (const auto &k : c.classes) {
                 add(k.header);
@@ -206,7 +330,9 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             auto dir = c.out_dir / "nanobind-expanded";
             write_file(dir / "auto_nanobind.cpp", nanobind_expanded_source(c));
             write_file(dir / "CMakeLists.txt", render_meta(NANOBINDX_CMAKE, c));
-            write_file(dir / "README.md", readme("nanobind-expanded", c));
+            write_file(dir / "README.md",
+                       readme("nanobind-expanded", c,
+                              subst(NANOBINDX_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

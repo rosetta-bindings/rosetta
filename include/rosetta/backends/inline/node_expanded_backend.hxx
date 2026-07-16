@@ -56,6 +56,33 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
 )CMK";
 
+        // Build section appended to the generated README. package.json is the
+        // shared NODE_PACKAGE (same cmake-js/node-addon-api devDependencies and
+        // `build` script), but the build itself differs from the thin backend:
+        // NODEX_CMAKE sets no compiler and no reflection flags, so any stock
+        // C++20 toolchain works — say so instead of sharing NODE_README_BUILD.
+        constexpr std::string_view NODEX_README_BUILD = R"MD(## Build
+
+Needs Node.js and a stock C++20 compiler — the emitted source is pre-expanded
+(no C++26, no reflection toolchain). `npm install` pulls the two build-time
+deps from `package.json`: cmake-js (drives CMake and supplies the Node headers)
+and node-addon-api (the CMakeLists locates it via
+`node -p "require('node-addon-api').include"`).
+
+```sh
+npm install
+npm run build    # cmake-js compile
+```
+
+## Use
+
+A post-build step copies the addon next to this README:
+
+```sh
+node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
+```
+)MD";
+
         // Can N-API marshal this IR type? Same surface as the reflective
         // napi_supported(): scalars, bool, string, enums, user objects, and
         // vectors of those; std::function / "unknown" cannot.
@@ -135,6 +162,112 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             return s;
         }
 
+        // --- Foreign sequences (rosetta::is_sequence) --------------------------
+        // A method touching a trait-registered sequence binds through a FREE
+        // adapter function emitted at namespace scope: the runtime's fn_traits
+        // introspect the ADAPTER's signature, so the boundary speaks
+        // std::vector<element> (from_napi/to_napi handle that) and the adapter
+        // builds the foreign container around the real call. Instance methods
+        // ride ext_method<&adapter> (receiver = first param), statics ride
+        // call_static<&adapter>, free functions napi_free_entry<&adapter>.
+        // Because the adapter calls by NAME with concrete arguments, an
+        // overload set whose surviving IR entry is the sequence one binds too.
+
+        // Do the NON-sequence parts of the signature satisfy the node gates?
+        inline bool nx_seq_rest_ok(const GenMethod &m) {
+            if (!m.ret.is_sequence && !nx_ret_ok(m.ret)) {
+                return false;
+            }
+            for (const auto &p : m.params) {
+                if (p.type.is_sequence) {
+                    continue;
+                }
+                if (!nx_pass_ok(p)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Generic value/reference spelling for adapter params without an exact
+        // param_cpp (extension methods, free functions).
+        inline std::string nx_cpp_type(const GenType &t) {
+            if (t.kind == "vector") {
+                return "std::vector<" +
+                       (t.element.empty() ? std::string("double")
+                                          : nx_cpp_type(t.element.front())) +
+                       ">";
+            }
+            if (t.kind == "object" || t.kind == "enum") {
+                return t.object;
+            }
+            if (t.kind == "string") {
+                return "std::string";
+            }
+            if (t.kind == "boolean") {
+                return "bool";
+            }
+            if (t.kind == "number") {
+                return t.spelling.empty() ? "double" : t.spelling;
+            }
+            return qualify_std(t.spelling);
+        }
+
+        // The namespace-scope adapter definition. `receiver` is the class name
+        // for instance/extension flavors ("" for statics and free functions);
+        // `callee` is what gets called — "self.assign_points", "georo::fn"
+        // (with ext_self, which forwards `self` as the first argument),
+        // "Cls::stat", "ns::freefn".
+        inline std::string nx_seq_adapter_def(const std::string &fn_name,
+                                              const std::string &receiver, const GenMethod &m,
+                                              const std::string &callee, bool ext_self = false) {
+            std::string decls = receiver.empty() ? "" : receiver + " &self";
+            std::string pre, args;
+            const bool  exact = m.param_cpp.size() == m.params.size();
+            for (std::size_t j = 0; j < m.params.size(); ++j) {
+                const std::string an = "arg" + std::to_string(j);
+                if (!decls.empty()) {
+                    decls += ", ";
+                }
+                if (j) {
+                    args += ", ";
+                }
+                const GenType &t = m.params[j].type;
+                if (t.is_sequence) {
+                    const std::string sn = "seq" + std::to_string(j);
+                    decls += seq_boundary_cpp(t) + " " + an;
+                    pre += seq_decl_stmts(t, an, sn, "        ");
+                    args += sn;
+                } else if (exact) {
+                    decls += qualify_std(m.param_cpp[j]) + " " + an;
+                    args += an;
+                } else if (t.kind == "object") {
+                    decls += nx_cpp_type(t) + " &" + an;
+                    args += an;
+                } else {
+                    decls += nx_cpp_type(t) + " " + an;
+                    args += an;
+                }
+            }
+            const std::string invoke =
+                ext_self ? (callee + "(self" + (args.empty() ? "" : ", " + args) + ")")
+                         : (callee + "(" + args + ")");
+            std::string       ret, body = pre;
+            if (m.ret.is_sequence) {
+                ret = seq_boundary_cpp(m.ret);
+                body += "        auto &&r = " + invoke + ";\n";
+                body += "        return " + seq_from_expr(m.ret, "r") + ";\n";
+            } else if (m.ret.kind == "void") {
+                ret = "void";
+                body += "        " + invoke + ";\n";
+            } else {
+                ret = "decltype(auto)"; // preserve a reference return (to_napi copies)
+                body += "        return " + invoke + ";\n";
+            }
+            return "    inline " + ret + " " + fn_name + "(" + decls + ") {\n" + body +
+                   "    }\n";
+        }
+
         inline bool nx_method_ok(const GenMethod &m) {
             // Overload set: `&T::name` in the thunk template argument would be
             // ambiguous — skip the whole set.
@@ -168,7 +301,8 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             return nullptr;
         }
 
-        inline std::string node_expanded_class(const GenClass &k, const GenContext &c) {
+        inline std::string node_expanded_class(const GenClass &k, const GenContext &c,
+                                               std::string &adapters) {
             const auto        virts = node_virtual_methods(k);
             const std::string held =
                 virts.empty() ? k.name : "rosetta_node::Js_" + k.name;
@@ -223,6 +357,32 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             // their free function through ext_method (receiver = the wrapped
             // object) instead of a member pointer.
             for (const auto &m : k.methods) {
+                if (seq_touches(m)) {
+                    // Foreign sequence in the signature: free-adapter or
+                    // nothing (from_napi has no conversion for the foreign
+                    // type; overloaded sets are fine here, see the adapter
+                    // notes above).
+                    if (!seq_adaptable(m) || !nx_seq_rest_ok(m)) {
+                        continue;
+                    }
+                    const std::string an = "seq_" + self + "_" + m.name;
+                    if (m.is_extension) {
+                        adapters +=
+                            nx_seq_adapter_def(an, self, m, m.ext_qualified, true);
+                    } else if (m.is_static) {
+                        adapters += nx_seq_adapter_def(an, "", m, self + "::" + m.name);
+                    } else {
+                        adapters += nx_seq_adapter_def(an, self, m, "self." + m.name);
+                    }
+                    if (m.is_static) {
+                        s += "        props.push_back(This::StaticMethod<&This::call_static<"
+                             "&rosetta_nx_seq::" + an + ">>(\"" + m.name + "\"));\n";
+                    } else {
+                        s += "        props.push_back(This::InstanceMethod<&This::ext_method<"
+                             "&rosetta_nx_seq::" + an + ">>(\"" + m.name + "\"));\n";
+                    }
+                    continue;
+                }
                 if (!nx_method_ok(m)) {
                     continue;
                 }
@@ -300,6 +460,7 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
 
         inline std::string node_expanded_source(const GenContext &c) {
             std::string body;
+            std::string adapters; // namespace-scope sequence adapters (rosetta_nx_seq)
             for (const auto &e : c.enums) {
                 body += "    exports.Set(\"" + e.name + "\", rosetta::make_enum(env, {";
                 for (std::size_t i = 0; i < e.values.size(); ++i) {
@@ -309,9 +470,23 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 body += "}));\n";
             }
             for (const auto &k : c.classes) {
-                body += node_expanded_class(k, c);
+                body += node_expanded_class(k, c, adapters);
             }
             for (const auto &f : c.functions) {
+                GenMethod probe;
+                probe.ret    = f.ret;
+                probe.params = f.params;
+                if (seq_touches(probe)) {
+                    if (seq_adaptable(probe) && nx_seq_rest_ok(probe)) {
+                        const std::string an = "seq_fn_" + f.name;
+                        adapters += nx_seq_adapter_def(an, "", probe, f.qualified);
+                        body += "    exports.Set(\"" + f.name +
+                                "\", Napi::Function::New(env, "
+                                "&rosetta::napi_free_entry<&rosetta_nx_seq::" + an +
+                                ">, \"" + f.name + "\"));\n";
+                    }
+                    continue;
+                }
                 bool ok = nx_ret_ok(f.ret);
                 for (const auto &p : f.params) {
                     ok = ok && nx_pass_ok(p);
@@ -343,6 +518,14 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 add(f.header);
             }
             out += using_namespaces_of(c); // `using namespace` for namespaced user types
+            if (!adapters.empty()) {
+                out += "\n// Foreign-sequence adapters (rosetta::is_sequence): the boundary\n"
+                       "// speaks std::vector<element>; the adapter builds the foreign\n"
+                       "// container around the real call (mutable Seq& binds input-only).\n"
+                       "#include <algorithm>\n"
+                       "#include <vector>\n"
+                       "namespace rosetta_nx_seq {\n" + adapters + "}\n";
+            }
             out += node_trampolines_of(c); // reflection-free; empty when no virtuals
             out += "\nNapi::Object Init(Napi::Env env, Napi::Object exports) {\n";
             out += body;
@@ -360,7 +543,9 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             write_file(dir / "auto_napi.cpp", node_expanded_source(c));
             write_file(dir / "CMakeLists.txt", render_meta(NODEX_CMAKE, c));
             write_file(dir / "package.json", render_meta(NODE_PACKAGE, c));
-            write_file(dir / "README.md", readme("node-expanded", c));
+            write_file(dir / "README.md",
+                       readme("node-expanded", c,
+                              subst(NODEX_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

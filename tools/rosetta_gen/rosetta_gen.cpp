@@ -72,8 +72,11 @@
 //     ],
 //     "functions": [                                // optional: free (non-member) fns
 //       { "name": "transform", "header": "common.h", "doc": "..." }
-//     ]                                             // name may be qualified (api::add)
-//   }
+//     ],                                            // name may be qualified (api::add)
+//     "sequences": [                                // optional: foreign sequence
+//       "GEO::vector"                               //   containers (ONE type param) —
+//     ]                                             //   marshal like std::vector<T>
+//   }                                               //   (see rosetta/sequence.h)
 //
 // One generator emits a single combined module per backend exposing
 // every class. Each backend's module name is the target's `name` (or
@@ -128,6 +131,12 @@ struct ClassEntry {
     std::string header;
     fs::path    annotations; // optional out-of-line annotation JSON (absolute); empty if none
 
+    // Optional "final": true — no trampoline even when the class has public
+    // virtual methods (they still bind as callable methods; host-language
+    // overriding is off). Also what makes the class eligible as a node
+    // member-object property when it has virtuals (the alias stores a T*).
+    bool final_ = false;
+
     // Optional extension methods ("extensions"): free functions whose first
     // parameter is `<name>&`, exposed as instance methods of the class. This
     // is the escape hatch for a library whose own members can't cross the
@@ -155,6 +164,15 @@ struct Manifest {
     std::vector<TargetEntry>   targets;         // backends + per-backend module name
     std::vector<ClassEntry>    classes;
     std::vector<FunctionEntry> functions; // free functions to expose
+
+    // Optional foreign sequence containers ("sequences"): qualified template
+    // names with ONE type parameter ("GEO::vector"). For each, the generated
+    // bindings.h emits
+    //   template <typename T>
+    //   struct rosetta::is_sequence<GEO::vector<T>> : std::true_type {};
+    // so the container marshals like std::vector<T> in the opted-in expanded
+    // backends (see rosetta/sequence.h for the container requirements).
+    std::vector<std::string>   sequences;
     std::vector<std::string>   plugins;   // extra .cpp sources (absolute) for the driver
     std::vector<std::string>   user_sources; // user .cpp/.c sources (absolute) compiled into the bindings
     std::vector<std::string>   compile_definitions; // "NAME"/"NAME=VALUE" defs for driver + bindings
@@ -263,6 +281,10 @@ static Manifest load(const fs::path &manifest_path) {
             e.annotations =
                 fs::weakly_canonical(base / fs::path(c.at("annotations").get<std::string>()));
         }
+        // `final` is optional: suppress the trampoline (see ClassEntry::final_).
+        if (c.contains("final")) {
+            e.final_ = c.at("final").get<bool>();
+        }
         // `extensions` is optional: free functions (first parameter `Cls&`)
         // exposed as instance methods of this class — same entry shape as
         // "functions" (see ClassEntry::extensions).
@@ -289,6 +311,18 @@ static Manifest load(const fs::path &manifest_path) {
             e.header = f.at("header").get<std::string>();
             e.doc    = f.contains("doc") ? f.at("doc").get<std::string>() : std::string{};
             m.functions.push_back(std::move(e));
+        }
+    }
+
+    // `sequences` is optional: foreign sequence containers, each a qualified
+    // template name with one type parameter (see Manifest::sequences).
+    if (j.contains("sequences")) {
+        for (const auto &s : j.at("sequences")) {
+            std::string tpl = s.get<std::string>();
+            if (tpl.empty()) {
+                throw std::runtime_error("\"sequences\" entries must not be empty");
+            }
+            m.sequences.push_back(std::move(tpl));
         }
     }
 
@@ -486,6 +520,16 @@ static std::string render_bindings_h(const Manifest &m) {
         include_once(f.header);
     }
     out << "\n";
+    // Foreign sequence containers (manifest "sequences"): marshal like
+    // std::vector<value_type> in the opted-in expanded backends. The class
+    // headers above already declare the templates.
+    for (const auto &tpl : m.sequences) {
+        out << "template <typename T> struct rosetta::is_sequence<" << tpl
+            << "<T>> : std::true_type {};\n";
+    }
+    if (!m.sequences.empty()) {
+        out << "\n";
+    }
     for (const auto &c : m.classes) {
         out << "template <> struct rosetta::binding_info<" << c.name << "> {\n"
             << "    static constexpr const char *header = \"" << c.header << "\";\n"
@@ -616,6 +660,25 @@ static std::string render_project_gen_cpp(const Manifest &m) {
                 }
             }
             out << "    };\n";
+        }
+    }
+    // "final" classes: no trampoline (host-language overriding off) — see
+    // ClassEntry::final_.
+    {
+        bool any = false;
+        for (const auto &c : m.classes) {
+            any = any || c.final_;
+        }
+        if (any) {
+            out << "    opt.final_classes   = {";
+            bool first = true;
+            for (const auto &c : m.classes) {
+                if (c.final_) {
+                    out << (first ? "" : ", ") << "\"" << c.name << "\"";
+                    first = false;
+                }
+            }
+            out << "};\n";
         }
     }
     out << "\n";

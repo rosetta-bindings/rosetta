@@ -66,6 +66,32 @@ target_link_options({{LIB}} PRIVATE
 set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
 )CMK";
 
+        // Build section appended to the generated README. Unlike the thin wasm
+        // backend, WASMX_CMAKE has no reflection flags and no rosetta include
+        // dir, so any stock emsdk builds it; the FS/NODEFS note traces to the
+        // -sFORCE_FILESYSTEM / -sEXPORTED_RUNTIME_METHODS link options above.
+        constexpr std::string_view WASMX_README_BUILD = R"MD(## Build
+
+Plain embind: any stock emsdk (activated in the shell) — no C++26, no
+reflection toolchain, no rosetta headers. The CMakeLists refuses to configure
+without `emcmake`.
+
+```sh
+emcmake cmake -S . -B build
+cmake --build build
+```
+
+Produces `build/{{LIB}}.js` + `build/{{LIB}}.wasm`: a MODULARIZE'd factory
+named `createModule`, for both node and the web. The JS filesystem is forced in
+and exported (`M.FS`, `M.NODEFS`) so a demo can mount a real directory.
+
+## Use
+
+```sh
+node -e "require('./build/{{LIB}}.js')().then(M => console.log(Object.keys(M)))"
+```
+)MD";
+
         // Emitted verbatim into auto_emscripten.cpp: converts an emscripten::val
         // to/from C++ and wraps a JS function into a std::function of any
         // val-convertible signature. `to_val`/`from_val` handle scalars, strings,
@@ -271,6 +297,98 @@ namespace rosetta_wx {
             return false;
         }
 
+        // --- Foreign sequences (rosetta::is_sequence) --------------------------
+        // A method touching a trait-registered sequence binds through a lambda
+        // adapter whose boundary is std::vector<element> (registered above):
+        // the adapter builds the foreign container before the call and flattens
+        // a returned one after. A mutable `Seq&` parameter binds input-only
+        // (the adapter's local is a real lvalue; mutations are discarded), and
+        // an overload set whose surviving IR entry is the sequence one binds
+        // too — the adapter calls by NAME with concrete arguments.
+        inline bool wx_seq_rest_ok(const GenMethod &m, const GenContext &c) {
+            if (!m.ret.is_sequence) {
+                if (m.ret.kind != "void" && !wx_marshalable(m.ret, c)) {
+                    return false;
+                }
+                if (m.ret.kind == "object" && !m.ret.copy_constructible) {
+                    return false;
+                }
+            }
+            for (const auto &p : m.params) {
+                if (p.type.is_sequence) {
+                    continue;
+                }
+                if (p.type.is_callback) {
+                    return false; // keep the two adapter mechanisms apart
+                }
+                if (!wx_param_ok(p.type, c)) {
+                    return false;
+                }
+                if (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) {
+                    return false;
+                }
+                if (p.type.kind != "object" && p.is_mutable_ref) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        inline bool wx_seq_eligible(const GenMethod &m, const GenContext &c) {
+            return seq_adaptable(m) && wx_seq_rest_ok(m, c);
+        }
+
+        // The adapter's (param decls, pre-call statements, call args). Non-seq
+        // params keep their exact spellings (param_cpp) when available.
+        struct WxSeqSig {
+            std::string decls;
+            std::string pre;
+            std::string args;
+        };
+        inline WxSeqSig wx_seq_sig(const std::vector<GenParam>    &params,
+                                   const std::vector<std::string> &param_cpp) {
+            WxSeqSig   o;
+            const bool exact = param_cpp.size() == params.size();
+            for (std::size_t j = 0; j < params.size(); ++j) {
+                const std::string an = "arg" + std::to_string(j);
+                if (j) {
+                    o.decls += ", ";
+                    o.args += ", ";
+                }
+                const GenType &t = params[j].type;
+                if (t.is_sequence) {
+                    const std::string sn = "seq" + std::to_string(j);
+                    o.decls += seq_boundary_cpp(t) + " " + an;
+                    o.pre += seq_decl_stmts(t, an, sn, "            ");
+                    o.args += sn;
+                } else if (exact) {
+                    o.decls += qualify_std(param_cpp[j]) + " " + an;
+                    o.args += an;
+                } else if (t.kind == "object") {
+                    o.decls += wx_cpp_type(t) + " &" + an;
+                    o.args += an;
+                } else {
+                    o.decls += wx_cpp_type(t) + " " + an;
+                    o.args += an;
+                }
+            }
+            return o;
+        }
+
+        // The lambda body: conversions, the call, the (possibly flattened) return.
+        inline std::string wx_seq_body(const GenMethod &m, const WxSeqSig &sig,
+                                       const std::string &call) {
+            std::string body = sig.pre;
+            if (m.ret.is_sequence) {
+                body += "            auto &&r = " + call + ";\n";
+                body += "            return " + seq_from_expr(m.ret, "r") + ";\n";
+            } else if (m.ret.kind == "void") {
+                body += "            " + call + ";\n";
+            } else {
+                body += "            return " + call + ";\n";
+            }
+            return body;
+        }
+
         inline bool wx_method_ok(const GenMethod &m, const GenContext &c) {
             // Overload set: the bare `&T::name` the emitter spells would be
             // ambiguous — skip the whole set.
@@ -361,6 +479,15 @@ namespace rosetta_wx {
                 }
                 return;
             }
+            if (t.is_sequence && seq_ok(t)) {
+                // A foreign sequence marshals through std::vector<element> —
+                // that boundary vector needs registering like any other.
+                GenType v;
+                v.kind    = "vector";
+                v.element = t.element;
+                wx_collect_vectors(v, out);
+                return;
+            }
             if (t.kind == "vector" && !t.element.empty()) {
                 const std::string key = wx_cpp_type(t.element.front());
                 bool              seen = false;
@@ -384,7 +511,7 @@ namespace rosetta_wx {
                     wx_collect_vectors(f.type, out);
                 }
                 for (const auto &m : k.methods) {
-                    if (!wx_method_ok(m, c)) {
+                    if (!wx_method_ok(m, c) && !wx_seq_eligible(m, c)) {
                         continue;
                     }
                     wx_collect_vectors(m.ret, out);
@@ -547,12 +674,78 @@ namespace rosetta_wx {
             }
 
             for (const auto &f : k.fields) {
+                if (f.type.is_sequence) {
+                    // Foreign sequence field: property copying through the
+                    // boundary vector both ways (a member-pointer property
+                    // would name the unregistered foreign type).
+                    if (seq_ok(f.type)) {
+                        const std::string vt  = seq_boundary_cpp(f.type);
+                        const std::string get = "+[](const " + k.name + " &s) { return " +
+                                                seq_from_expr(f.type, "s." + f.name) + "; }";
+                        std::string set;
+                        if (f.is_readonly) {
+                            set = "+[](" + k.name + " &, " + vt +
+                                  ") { throw std::runtime_error(\"" + f.name +
+                                  " is read-only\"); }";
+                        } else {
+                            set = "+[](" + k.name + " &s, " + vt + " v) { s." + f.name +
+                                  ".resize(v.size()); std::copy(v.begin(), v.end(), s." +
+                                  f.name + ".begin()); }";
+                        }
+                        segs.push_back(".property(\"" + f.name + "\",\n            " + get +
+                                       ",\n            " + set + ")");
+                    }
+                    continue;
+                }
                 if (!wx_field_ok(f, c)) {
-                    continue; // unmarshalable or non-copyable member object
+                    // A non-copyable member object of a BOUND class becomes a
+                    // borrowed-handle getter METHOD — embind properties copy,
+                    // but a raw-pointer return (allow_raw_pointers) hands out
+                    // a non-owning handle to the member living inside the
+                    // parent: mesh.vertices().nb(). NOTE: unlike pybind's
+                    // reference_internal, nothing pins the parent — the handle
+                    // dangles if the parent is destroyed first.
+                    bool clashes = false;
+                    for (const auto &m : k.methods) {
+                        clashes = clashes || m.name == f.name;
+                    }
+                    if (f.type.kind == "object" && wx_is_bound(f.type.object, c) && !clashes) {
+                        segs.push_back(".function(\"" + f.name + "\", +[](" + k.name +
+                                       " &s) { return &s." + f.name +
+                                       "; }, emscripten::allow_raw_pointers())");
+                    }
+                    continue; // anything else unmarshalable / non-copyable
                 }
                 segs.push_back(wx_field_segment(k, f));
             }
             for (const auto &m : k.methods) {
+                if (seq_touches(m)) {
+                    // Foreign sequence in the signature: adapter or nothing
+                    // (embind has no type for the foreign container).
+                    if (!wx_seq_eligible(m, c)) {
+                        continue;
+                    }
+                    const WxSeqSig sig = wx_seq_sig(m.params, m.param_cpp);
+                    std::string    decls, call;
+                    if (m.is_extension) {
+                        decls = k.name + " &self" +
+                                (sig.decls.empty() ? "" : ", " + sig.decls);
+                        call = m.ext_qualified + "(self" +
+                               (sig.args.empty() ? "" : ", " + sig.args) + ")";
+                    } else if (m.is_static) {
+                        decls = sig.decls;
+                        call  = k.name + "::" + m.name + "(" + sig.args + ")";
+                    } else {
+                        decls = k.name + " &self" +
+                                (sig.decls.empty() ? "" : ", " + sig.decls);
+                        call = "self." + m.name + "(" + sig.args + ")";
+                    }
+                    const std::string body = wx_seq_body(m, sig, call);
+                    segs.push_back((m.is_static ? ".class_function(\"" : ".function(\"") +
+                                   m.name + "\", +[](" + decls + ") {\n" + body +
+                                   "        })");
+                    continue;
+                }
                 if (!wx_method_ok(m, c)) {
                     continue; // unmarshalable signature (e.g. std::function param)
                 }
@@ -636,6 +829,19 @@ namespace rosetta_wx {
                 body += wx_class(k, c);
             }
             for (const auto &f : c.functions) {
+                GenMethod probe;
+                probe.ret    = f.ret;
+                probe.params = f.params;
+                if (seq_touches(probe)) {
+                    if (wx_seq_eligible(probe, c)) {
+                        const WxSeqSig    sig  = wx_seq_sig(f.params, {});
+                        const std::string call = f.qualified + "(" + sig.args + ")";
+                        body += "    emscripten::function(\"" + f.name + "\", +[](" +
+                                sig.decls + ") {\n" + wx_seq_body(probe, sig, call) +
+                                "        });\n";
+                    }
+                    continue;
+                }
                 bool ok = (f.ret.kind == "void" ||
                            (wx_marshalable(f.ret, c) &&
                             (f.ret.kind != "object" || f.ret.copy_constructible)));
@@ -657,6 +863,7 @@ namespace rosetta_wx {
             std::string out = "// Generated by rosetta::generate (expanded, reflection-free) — "
                               "do not edit by hand.\n";
             out += "#include <emscripten/bind.h>\n";
+            out += "#include <algorithm>\n";
             out += "#include <array>\n";
             out += "#include <functional>\n";
             out += "#include <stdexcept>\n";
@@ -695,7 +902,9 @@ namespace rosetta_wx {
             auto dir = c.out_dir / "wasm-expanded";
             write_file(dir / "auto_emscripten.cpp", wasm_expanded_source(c));
             write_file(dir / "CMakeLists.txt", render_meta(WASMX_CMAKE, c));
-            write_file(dir / "README.md", readme("wasm-expanded", c));
+            write_file(dir / "README.md",
+                       readme("wasm-expanded", c,
+                              subst(WASMX_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

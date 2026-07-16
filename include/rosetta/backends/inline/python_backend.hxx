@@ -34,13 +34,28 @@ execute_process(
 set(Python3_EXECUTABLE "${Python_EXECUTABLE}" CACHE FILEPATH "" FORCE)
 set(PYBIND11_FINDPYTHON ON)
 
+# Prefer an installed pybind11 (pip), fall back to fetching a pinned release.
 if(NOT pybind11_DIR)
     execute_process(
         COMMAND ${Python_EXECUTABLE} -m pybind11 --cmakedir
         OUTPUT_VARIABLE pybind11_DIR
+        RESULT_VARIABLE _pybind11_probe
+        ERROR_QUIET
         OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT _pybind11_probe EQUAL 0)
+        set(pybind11_DIR "")
+    endif()
 endif()
-find_package(pybind11 REQUIRED CONFIG)
+if(pybind11_DIR)
+    find_package(pybind11 REQUIRED CONFIG)
+else()
+    include(FetchContent)
+    FetchContent_Declare(
+        pybind11
+        GIT_REPOSITORY https://github.com/pybind/pybind11.git
+        GIT_TAG v3.0.4)
+    FetchContent_MakeAvailable(pybind11)
+endif()
 
 pybind11_add_module({{LIB}} NO_EXTRAS auto_pybind.cpp)
 
@@ -62,10 +77,41 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
 )CMK";
 
+        // Build/Use section for the generated README — kept next to PY_CMAKE so
+        // the doc can't drift from the template it describes: pybind11 comes
+        // from pip when installed (`python3 -m pybind11 --cmakedir` locates it)
+        // and is otherwise fetched at configure time, the compile needs the
+        // clang-p2996 toolchain ({{REFLECTION_FLAGS}}/{{STDLIB_LINK}}), and the
+        // POST_BUILD copy makes the module importable from this dir.
+        constexpr std::string_view PY_README_BUILD = R"MD(## Build
+
+Prerequisite: the clang-p2996 C++26 reflection toolchain — pass
+`-DCLANG_P2996_ROOT=/path/to/clang-p2996/build` (or `-DROSETTA_CXX_COMPILER=…`)
+if yours is not at the default location. pybind11 is taken from an installed
+copy when available (`pip install pybind11`); otherwise CMake fetches a pinned
+release at configure time (network access needed on the first configure).
+
+```sh
+cmake -S . -B build && cmake --build build
+```
+
+## Use
+
+A post-build step copies the module next to the sources, so from this directory:
+
+```sh
+python3 -c "import {{LIB}}"
+```)MD";
+
         // The instance virtual methods of a class — the ones a trampoline must
         // shim. Empty result ⇒ no trampoline (and a plain py::class_<T> binding).
+        // A "final" class (manifest flag) never gets a trampoline: its virtuals
+        // bind as ordinary methods only.
         inline std::vector<const GenMethod *> virtual_methods(const GenClass &k) {
             std::vector<const GenMethod *> out;
+            if (k.is_final) {
+                return out;
+            }
             for (const auto &m : k.methods) {
                 if (m.is_virtual && !m.is_static) {
                     out.push_back(&m);
@@ -208,7 +254,8 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             auto dir = c.out_dir / "python";
             write_file(dir / "auto_pybind.cpp", python_source(c));
             write_file(dir / "CMakeLists.txt", render_meta(PY_CMAKE, c));
-            write_file(dir / "README.md", readme("python", c));
+            write_file(dir / "README.md",
+                       readme("python", c, subst(PY_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

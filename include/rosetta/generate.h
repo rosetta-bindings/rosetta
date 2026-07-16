@@ -35,6 +35,7 @@
 #include <map>
 #include <memory>
 #include <rosetta/annotations.h>
+#include <rosetta/sequence.h>
 #include <rosetta/walk.h>
 #include <string>
 #include <string_view>
@@ -105,6 +106,18 @@ namespace rosetta {
         // regression); a backend that CAN marshal a pointer to a bound class
         // (e.g. embind via allow_raw_pointers) checks this flag explicitly.
         bool is_pointer = false;
+
+        // True when the (cvref-stripped) type is a trait-registered foreign
+        // sequence container (rosetta::is_sequence<T>, e.g. GEO::vector<double>
+        // — see rosetta/sequence.h). Like is_pointer, `kind` stays "unknown" so
+        // backends that don't opt in keep skipping it; an opted-in backend
+        // marshals it by COPY through a std::vector<element> at the boundary.
+        // `element` holds one entry (the element type, like kind == "vector")
+        // and `seq_cpp` the qualified C++ spelling an emitted adapter can
+        // construct ("GEO::vector<double>") — needed because display_string_of
+        // prints template names unqualified.
+        bool        is_sequence = false;
+        std::string seq_cpp;
 
         // True when the type is a std::function<R(A...)>. Like is_pointer, `kind`
         // stays "unknown" so backends that don't opt in keep skipping callbacks;
@@ -304,6 +317,16 @@ namespace rosetta {
         // the default constructor is emitted there.
         bool copy_or_move_assignable = true;
 
+        // Manifest "final": true — treat the class as non-overridable from the
+        // host language: NO trampoline is generated even when it has public
+        // virtual methods (they still bind as ordinary callable methods).
+        // Beyond skipping useless shims, this is what lets the node runtime
+        // hand the class out as an aliased member-object property — the alias
+        // stores a T*, which requires the wrapped type to BE T, not Js_T
+        // (GEO::MeshVertices, whose delete_elements/permute_elements virtuals
+        // nobody script-overrides, is the motivating case).
+        bool is_final = false;
+
         // Exact C++ spellings of each constructor's parameter types, in the same
         // order as `ctors`. Parallel to `ctors` (which carries the neutral IR);
         // a backend that has to *spell* the constructor signature in emitted C++
@@ -333,6 +356,11 @@ namespace rosetta {
         std::vector<TargetSpec>  targets;         // backends + per-backend module name
         std::vector<GenFunction> functions;       // free functions to expose
         std::vector<GenExtension> extensions;     // free functions exposed as class methods
+
+        // Class names (as spelled in the manifest, qualified or not) to mark
+        // is_final — no trampoline, host-language overriding off. See
+        // GenClass::is_final.
+        std::vector<std::string> final_classes;
 
         // Optional pointers to the C++26 / P2996 reflection toolchain, baked into
         // the *thin* backends' generated CMakeLists so reflection-driven targets

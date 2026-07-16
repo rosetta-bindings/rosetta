@@ -44,6 +44,21 @@ target_link_options({{LIB}}_demo PRIVATE
     {{STDLIB_LINK}})
 )CMK";
 
+        constexpr std::string_view JSON_README_BUILD = R"MD(## Build
+
+Serialization is reflection-driven at run time (`rosetta::to_json` /
+`rosetta::from_json` in `<rosetta/visitors/json_visitor.h>` handle every
+reflected class), so this backend emits no per-type code — only a runnable
+demo. Prerequisites: the clang-p2996 C++26 reflection toolchain — pass
+`-DCLANG_P2996_ROOT=/path/to/clang-p2996/build` (or `-DROSETTA_CXX_COMPILER=…`)
+if yours is not at the default location. nlohmann/json is fetched by CMake
+(FetchContent), so the first configure needs network access.
+
+```sh
+cmake -S . -B build && cmake --build build
+./build/{{LIB}}_demo   # serialize a default instance of each class, then round-trip one
+```)MD";
+
         // A runnable demo: serialize a default instance of each class with the
         // reflection serializer, then value-round-trip the first one that has
         // public fields.
@@ -88,7 +103,8 @@ target_link_options({{LIB}}_demo PRIVATE
             auto dir = c.out_dir / "json";
             write_file(dir / "demo.cpp", json_demo(c));
             write_file(dir / "CMakeLists.txt", render_meta(JSON_CMAKE, c));
-            write_file(dir / "README.md", readme("json", c));
+            write_file(dir / "README.md",
+                       readme("json", c, subst(JSON_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

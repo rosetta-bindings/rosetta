@@ -32,6 +32,11 @@ namespace rosetta {
             if (t.kind == "vector") {
                 return (t.element.empty() ? std::string("any") : ts_type(t.element.front())) + "[]";
             }
+            if (t.is_sequence && !t.element.empty()) {
+                // A trait-registered foreign sequence marshals as an array of
+                // its element in the opted-in runtime backends.
+                return ts_type(t.element.front()) + "[]";
+            }
             return "any"; // unknown (e.g. std::function, unsupported types)
         }
 
@@ -66,6 +71,9 @@ namespace rosetta {
                 }
 
                 for (const auto &f : k.fields) {
+                    if (f.type.is_sequence && !seq_ok(f.type)) {
+                        continue; // not adaptable — the runtime backends skip it
+                    }
                     if (f.type.kind == "object" &&
                         !(f.type.copy_constructible && f.type.copy_assignable)) {
                         // A non-copyable member object of a BOUND class is a
@@ -99,9 +107,17 @@ namespace rosetta {
                     // Same visibility rule as the runtime backends: an
                     // overload set, a non-copyable class return, or a
                     // non-copyable by-value parameter is skipped there, so
-                    // don't declare it here either.
-                    bool visible = !m.is_overloaded &&
-                                   !(m.ret.kind == "object" && !m.ret.copy_constructible);
+                    // don't declare it here either. A signature touching a
+                    // foreign sequence follows the adapter rule instead:
+                    // declared iff adaptable (even when overloaded — the
+                    // adapter calls by name), hidden otherwise.
+                    bool visible;
+                    if (seq_touches(m)) {
+                        visible = seq_adaptable(m);
+                    } else {
+                        visible = !m.is_overloaded &&
+                                  !(m.ret.kind == "object" && !m.ret.copy_constructible);
+                    }
                     for (const auto &p : m.params) {
                         visible = visible && !(p.type.kind == "object" && !p.is_ref &&
                                                !p.type.copy_constructible);

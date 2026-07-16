@@ -68,6 +68,37 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
 )CMK";
 
+        // Build section appended to the generated README (see readme() in
+        // generate.hxx). Everything here mirrors NODE_CMAKE / NODE_PACKAGE:
+        // `npm install` provides cmake-js + node-addon-api (devDependencies),
+        // `npm run build` is the package.json script (cmake-js compile), the
+        // CLANG_P2996_ROOT cache var comes from {{HEADER_BLOCK}}, and the
+        // require path works because of the POST_BUILD copy above.
+        constexpr std::string_view NODE_README_BUILD = R"MD(## Build
+
+Needs Node.js and the C++26 reflection toolchain (clang-p2996). `npm install`
+pulls the two build-time deps from `package.json`: cmake-js (drives CMake and
+supplies the Node headers) and node-addon-api (the CMakeLists locates it via
+`node -p "require('node-addon-api').include"`).
+
+```sh
+npm install
+npm run build    # cmake-js compile
+```
+
+The toolchain root defaults to `$HOME/devs/c++/clang-p2996/build`; override the
+`CLANG_P2996_ROOT` cache var with
+`npx cmake-js compile --CDCLANG_P2996_ROOT=/path/to/clang-p2996/build`.
+
+## Use
+
+A post-build step copies the addon next to this README:
+
+```sh
+node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
+```
+)MD";
+
         constexpr std::string_view NODE_PACKAGE = R"JSON({
   "name": "{{LIB}}",
   "version": "1.0.0",
@@ -86,8 +117,15 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
 )JSON";
 
         // Instance virtual methods of a class — the ones a trampoline must shim.
+        // A "final" class (manifest flag) never gets one: its virtuals bind as
+        // ordinary methods, and — because the wrapped type is then T itself,
+        // not Js_T — the class becomes eligible as an aliased member-object
+        // property (mesh.vertices).
         inline std::vector<const GenMethod *> node_virtual_methods(const GenClass &k) {
             std::vector<const GenMethod *> out;
+            if (k.is_final) {
+                return out;
+            }
             for (const auto &m : k.methods) {
                 if (m.is_virtual && !m.is_static) {
                     out.push_back(&m);
@@ -206,7 +244,8 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             write_file(dir / "auto_napi.cpp", node_source(c));
             write_file(dir / "CMakeLists.txt", render_meta(NODE_CMAKE, c));
             write_file(dir / "package.json", render_meta(NODE_PACKAGE, c));
-            write_file(dir / "README.md", readme("node", c));
+            write_file(dir / "README.md",
+                       readme("node", c, subst(NODE_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

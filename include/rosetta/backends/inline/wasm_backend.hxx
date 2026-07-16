@@ -65,6 +65,33 @@ target_link_options({{LIB}} PRIVATE
 set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
 )CMK";
 
+        // Build section appended to the generated README. WASM_CMAKE hard-fails
+        // outside emcmake AND injects {{REFLECTION_FLAGS}} — the source runs
+        // reflection at compile time, so the emsdk's clang must be the p2996
+        // fork (a stock emsdk rejects -freflection). There is no
+        // CLANG_P2996_ROOT cache var here: emcmake pins the compiler itself.
+        constexpr std::string_view WASM_README_BUILD = R"MD(## Build
+
+Needs an activated emsdk whose clang understands the P2996 reflection flags
+(`-freflection` etc., i.e. an emscripten built on the clang-p2996 fork) — the
+emitted source runs reflection at compile time, so a stock emsdk will not do.
+The CMakeLists refuses to configure without `emcmake`.
+
+```sh
+emcmake cmake -S . -B build
+cmake --build build
+```
+
+Produces `build/{{LIB}}.js` + `build/{{LIB}}.wasm`: a MODULARIZE'd factory
+named `createModule`, for both node and the web.
+
+## Use
+
+```sh
+node -e "require('./build/{{LIB}}.js')().then(M => console.log(Object.keys(M)))"
+```
+)MD";
+
         inline void WasmBackend::emit(const GenContext &c) const {
             std::string binds;
             // Enums first so class fields/methods can resolve them.
@@ -81,7 +108,8 @@ set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
             auto dir = c.out_dir / "wasm";
             write_file(dir / "auto_emscripten.cpp", render_source(WASM_CPP, c, binds));
             write_file(dir / "CMakeLists.txt", render_meta(WASM_CMAKE, c));
-            write_file(dir / "README.md", readme("wasm", c));
+            write_file(dir / "README.md",
+                       readme("wasm", c, subst(WASM_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

@@ -112,6 +112,33 @@ set(ROSETTA_BINDING_TARGET {{LIB}}_imgui)
 target_link_libraries({{LIB}}_imgui PRIVATE glfw OpenGL::GL)
 )CMK";
 
+        // README build section — kept next to IMGX_CMAKE so the documented
+        // steps can't drift from the template. Stock C++20 by default (the
+        // emitted sources are pre-expanded); the ROSETTA_IMGUI_CPP26 escape
+        // hatch mirrors the template's inline-annotation exception.
+        constexpr std::string_view IMGX_README_BUILD = R"MD(## Build
+
+Prerequisites: a stock C++20 compiler, CMake >= 3.18, OpenGL, and network
+access at configure time — Dear ImGui (and GLFW, unless a glfw3 >= 3.3 package
+is already installed) are fetched with FetchContent and compiled into the
+target. No C++26 / reflection toolchain is needed by default.
+
+```sh
+cmake -S . -B build
+cmake --build build
+./build/{{LIB}}_imgui
+```
+
+Exception: if the bound headers carry inline `[[=rosetta::...]]` annotations a
+stock compiler cannot parse them — configure with the C++26 / P2996 toolchain:
+
+```sh
+cmake -S . -B build -DROSETTA_IMGUI_CPP26=ON -DCLANG_P2996_ROOT=/path/to/clang-p2996/build
+```
+
+Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
+)MD";
+
         // C-string literal for the generated source.
         inline std::string imgx_str(const std::string &s) { return "\"" + py_lit(s) + "\""; }
 
@@ -411,7 +438,8 @@ target_link_libraries({{LIB}}_imgui PRIVATE glfw OpenGL::GL)
             write_file(dir / "imgui_inspector.cpp", imgx_source(c));
             write_file(dir / "main.cpp", imgx_main(c));
             write_file(dir / "CMakeLists.txt", render_meta(IMGX_CMAKE, c));
-            write_file(dir / "README.md", readme("imgui-expanded", c));
+            write_file(dir / "README.md",
+                       readme("imgui-expanded", c, subst(IMGX_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

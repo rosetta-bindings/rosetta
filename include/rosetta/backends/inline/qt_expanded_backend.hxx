@@ -36,6 +36,26 @@ set(ROSETTA_BINDING_TARGET {{LIB}}_qt)
 target_link_libraries({{LIB}}_qt PRIVATE Qt6::Widgets)
 )CMK";
 
+        // README build section — kept next to QTX_CMAKE so the documented steps
+        // can't drift from the template. The template uses no {{REFLECTION_FLAGS}}:
+        // the emitted sources are pre-expanded and build with a stock C++17
+        // compiler; the only knob is the QT_DIR cache path.
+        constexpr std::string_view QTX_README_BUILD = R"MD(## Build
+
+Prerequisites: a stock C++17 compiler, CMake >= 3.18, and Qt 6 (>= 6.5 with the
+Core / Gui / Widgets modules). No C++26 / reflection toolchain is needed — the
+sources are fully pre-expanded. The CMakeLists defaults the Qt prefix to
+`~/Qt/6.8.3/macos`; point `QT_DIR` at yours if it lives elsewhere.
+
+```sh
+cmake -S . -B build -DQT_DIR=/path/to/Qt/6.x/<platform>
+cmake --build build
+./build/{{LIB}}_qt
+```
+
+The app opens one inspector tab per default-constructible class.
+)MD";
+
         // Scalars Qt can edit inline; everything else gets the disabled
         // placeholder (matching the reflective visitor's fallback).
         inline bool qtx_scalar(const GenType &t) {
@@ -253,7 +273,8 @@ target_link_libraries({{LIB}}_qt PRIVATE Qt6::Widgets)
             write_file(dir / "qt_inspector.cpp", qtx_source(c));
             write_file(dir / "main.cpp", qtx_main(c));
             write_file(dir / "CMakeLists.txt", render_meta(QTX_CMAKE, c));
-            write_file(dir / "README.md", readme("qt-expanded", c));
+            write_file(dir / "README.md",
+                       readme("qt-expanded", c, subst(QTX_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

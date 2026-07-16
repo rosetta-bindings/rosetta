@@ -94,6 +94,35 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
 )CMK";
 
+        // Build/Use section of the generated README — every claim traces to
+        // LUAX_CMAKE above (stock C++17, the Lua 5.1–5.4 / not-5.5 probe and
+        // its -DLUA_* override, sol2 find_package-then-FetchContent, the
+        // PREFIX ""/SUFFIX ".so" naming for require(), post-build copy).
+        constexpr std::string_view LUAX_README_BUILD = R"MD(## Build
+
+Plain sol2 — no C++26, no reflection toolchain: any stock C++17 compiler
+works. Prerequisite: Lua 5.1–5.4 or LuaJIT (5.4 preferred; sol2 does **not**
+support 5.5 — override the probe with `-DLUA_INCLUDE_DIR=…` and
+`-DLUA_LIBRARIES=…`). sol2 itself is header-only: an installed package is
+used when found, otherwise it is fetched (v3.5.0) at configure time.
+
+```sh
+cmake -S . -B build
+cmake --build build   # produces {{LIB}}.so (no "lib" prefix; .so also on macOS)
+```
+
+The post-build step copies `{{LIB}}.so` next to this README.
+
+## Use
+
+`require` searches `package.cpath` for `{{LIB}}.so`:
+
+```lua
+package.cpath = "path/to/this/dir/?.so;" .. package.cpath
+local {{LIB}} = require("{{LIB}}")
+```
+)MD";
+
         // --- Marshalling gates -------------------------------------------------
         // sol2's boundary rules differ from pybind/embind in rosetta's favor:
         // an lvalue-ref class return is pushed by REFERENCE (no copy), a method
@@ -327,6 +356,158 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             return a;
         }
 
+        // --- Foreign sequences (rosetta::is_sequence) --------------------------
+        // A method touching a trait-registered sequence binds through a lambda
+        // whose sequence parameters are sol::nested<std::vector<element>> —
+        // plain Lua tables — copied into the foreign container before the call;
+        // a returned sequence is flattened to a std::vector (container
+        // userdata, like every other bound vector return). Mutable `Seq&`
+        // binds input-only, and an overload set whose surviving IR entry is
+        // the sequence one binds too (the adapter calls by NAME).
+
+        inline bool lx_seq_rest_ok(const GenMethod &m, const GenContext &c) {
+            if (!m.ret.is_sequence) {
+                if (m.ret.kind != "void" && !lx_marshalable(m.ret, c)) {
+                    return false;
+                }
+                if (m.ret.kind == "object" && !m.ret_is_ref && !m.ret.copy_constructible) {
+                    return false;
+                }
+                if (m.ret.kind == "vector" && !m.ret_is_ref && !lx_copyable(m.ret)) {
+                    return false;
+                }
+            }
+            for (const auto &p : m.params) {
+                if (p.type.is_sequence) {
+                    continue;
+                }
+                if (!lx_param_ok(p.type, c)) {
+                    return false;
+                }
+                if (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) {
+                    return false;
+                }
+                if (p.type.kind == "vector" && !lx_copyable(p.type)) {
+                    return false;
+                }
+                if (p.type.kind != "object" && p.is_mutable_ref) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        inline bool lx_seq_eligible(const GenMethod &m, const GenContext &c) {
+            return seq_adaptable(m) && lx_seq_rest_ok(m, c);
+        }
+
+        // (decls, pre-call statements, call args) — sequence params arrive as
+        // sol::nested tables; the rest mirrors lua_table_params.
+        struct LxSeqSig {
+            std::string decls;
+            std::string pre;
+            std::string args;
+        };
+        // `tables`: vector-ish parameters arrive as sol::nested (plain Lua
+        // tables). Otherwise they arrive as std::vector container userdata —
+        // what a bound sequence RETURN pushes — so every sequence method is
+        // emitted as a sol::overload of both forms, mirroring the ordinary
+        // vector-parameter convention (primary + table overload).
+        inline LxSeqSig lx_seq_sig(const std::vector<GenParam> &params, bool tables) {
+            LxSeqSig o;
+            for (std::size_t j = 0; j < params.size(); ++j) {
+                const std::string an = "arg" + std::to_string(j);
+                if (j) {
+                    o.decls += ", ";
+                    o.args += ", ";
+                }
+                const GenType &t = params[j].type;
+                if (t.is_sequence) {
+                    const std::string sn = "seq" + std::to_string(j);
+                    if (tables) {
+                        o.decls += "sol::nested<" + seq_boundary_cpp(t) + "> " + an;
+                        o.pre += seq_decl_stmts(t, an + ".value()", sn, "        ");
+                    } else {
+                        o.decls += "const " + seq_boundary_cpp(t) + " &" + an;
+                        o.pre += seq_decl_stmts(t, an, sn, "        ");
+                    }
+                    o.args += sn;
+                } else if (t.kind == "vector") {
+                    if (tables) {
+                        o.decls += "sol::nested<" + lua_cpp_type(t) + "> " + an;
+                        o.args += an + ".value()";
+                    } else {
+                        o.decls += "const " + lua_cpp_type(t) + " &" + an;
+                        o.args += an;
+                    }
+                } else if (t.is_pointer) {
+                    o.decls += t.object + " *" + an;
+                    o.args += an;
+                } else if (t.kind == "object") {
+                    o.decls += lua_cpp_type(t) + " &" + an; // bound userdata, by ref
+                    o.args += an;
+                } else {
+                    o.decls += lua_cpp_type(t) + " " + an;
+                    o.args += an;
+                }
+            }
+            return o;
+        }
+
+        // Does the parameter list name a vector-ish type at all? (No ⇒ one
+        // lambda suffices; the overload pair is only about tables-vs-userdata
+        // for parameters.)
+        inline bool lx_seq_has_vectorish_param(const std::vector<GenParam> &params) {
+            for (const auto &p : params) {
+                if (p.type.is_sequence || p.type.kind == "vector") {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        inline std::string lx_seq_body(const GenMethod &m, const LxSeqSig &sig,
+                                       const std::string &call) {
+            std::string body = sig.pre;
+            if (m.ret.is_sequence) {
+                body += "        auto &&r = " + call + ";\n";
+                body += "        return " + seq_from_expr(m.ret, "r") + ";\n";
+            } else if (m.ret.kind == "void") {
+                body += "        " + call + ";\n";
+            } else {
+                body += "        return " + call + ";\n";
+            }
+            return body;
+        }
+
+        // One lambda text for the given parameter form (userdata / tables).
+        inline std::string lx_seq_lambda(const GenClass &k, const GenMethod &m, bool tables) {
+            const LxSeqSig sig = lx_seq_sig(m.params, tables);
+            std::string    decls, call;
+            if (m.is_extension) {
+                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                call  = m.ext_qualified + "(self" + (sig.args.empty() ? "" : ", " + sig.args) +
+                       ")";
+            } else if (m.is_static) {
+                decls = sig.decls;
+                call  = k.name + "::" + m.name + "(" + sig.args + ")";
+            } else {
+                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                call  = "self." + m.name + "(" + sig.args + ")";
+            }
+            return "[](" + decls + ") {\n" + lx_seq_body(m, sig, call) + "    }";
+        }
+
+        inline std::string lx_seq_method(const GenClass &k, const GenMethod &m) {
+            if (!lx_seq_has_vectorish_param(m.params)) {
+                return "    c[\"" + m.name + "\"] = " + lx_seq_lambda(k, m, true) + ";\n";
+            }
+            // Container userdata (what a bound sequence return pushes) AND
+            // plain Lua tables both dispatch.
+            return "    c[\"" + m.name + "\"] = sol::overload(\n        " +
+                   lx_seq_lambda(k, m, false) + ",\n        " + lx_seq_lambda(k, m, true) +
+                   ");\n";
+        }
+
         // One enum: m.new_enum<E>("E", {{"A", E::A}, ...}); (read-only table).
         inline std::string lua_enum(const GenEnum &e) {
             std::string s = "    m.new_enum<" + e.name + ">(\"" + e.name + "\", {";
@@ -551,12 +732,43 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                  k.name + "\",\n        " + lua_ctor_clause(k, c) + lua_bases_clause(k, c) +
                  ");\n";
             for (const auto &f : k.fields) {
+                if (f.type.is_sequence) {
+                    // Foreign sequence field: property copying through the
+                    // boundary vector (get: container userdata; set: another
+                    // container or a plain table via sol::nested).
+                    if (seq_ok(f.type)) {
+                        const std::string vt = seq_boundary_cpp(f.type);
+                        s += "    c[\"" + f.name + "\"] = sol::property(\n";
+                        s += "        [](const " + k.name + " &s) { return " +
+                             seq_from_expr(f.type, "s." + f.name) + "; }";
+                        if (!f.is_readonly) {
+                            s += ",\n        [](" + k.name + " &s, const sol::object &o) {\n";
+                            s += "            " + vt + " v = o.is<" + vt + ">() ? o.as<" + vt +
+                                 ">() : o.as<sol::nested<" + vt + ">>();\n";
+                            s += "            s." + f.name + ".resize(v.size());\n";
+                            s += "            std::copy(v.begin(), v.end(), s." + f.name +
+                                 ".begin());\n";
+                            s += "        }";
+                        }
+                        s += ");\n";
+                    }
+                    continue;
+                }
                 if (!lx_field_ok(f, c)) {
                     continue; // type sol2 can't marshal — see lx_field_ok
                 }
                 s += lua_field(k, f);
             }
             for (const auto &m : k.methods) {
+                if (seq_touches(m)) {
+                    // Foreign sequence in the signature: table-accepting
+                    // adapter or nothing (sol2 has no usertype for the
+                    // foreign container).
+                    if (lx_seq_eligible(m, c)) {
+                        s += lx_seq_method(k, m);
+                    }
+                    continue;
+                }
                 if (!lx_method_ok(m, c)) {
                     continue; // signature the emitted sol2 line could not compile
                 }
@@ -578,6 +790,25 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                 GenMethod probe; // free functions go through the same gates
                 probe.ret    = f.ret;
                 probe.params = f.params;
+                if (seq_touches(probe)) {
+                    if (lx_seq_eligible(probe, c)) {
+                        auto lambda = [&](bool tables) {
+                            const LxSeqSig    sig  = lx_seq_sig(f.params, tables);
+                            const std::string call = f.qualified + "(" + sig.args + ")";
+                            return "[](" + sig.decls + ") {\n" +
+                                   lx_seq_body(probe, sig, call) + "    }";
+                        };
+                        if (lx_seq_has_vectorish_param(f.params)) {
+                            body += "    m.set_function(\"" + f.name +
+                                    "\", sol::overload(\n        " + lambda(false) +
+                                    ",\n        " + lambda(true) + "));\n";
+                        } else {
+                            body += "    m.set_function(\"" + f.name + "\", " + lambda(true) +
+                                    ");\n";
+                        }
+                    }
+                    continue;
+                }
                 if (!lx_method_ok(probe, c)) {
                     continue;
                 }
@@ -596,6 +827,7 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
                               "do not edit by hand.\n";
             out += "#define SOL_ALL_SAFETIES_ON 1\n"
                    "#include <sol/sol.hpp>\n"
+                   "#include <algorithm>\n"
                    "#include <functional>\n"
                    "#include <stdexcept>\n"
                    "#include <string>\n"
@@ -649,7 +881,9 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
             auto dir = c.out_dir / "lua-expanded";
             write_file(dir / "auto_sol.cpp", lua_expanded_source(c));
             write_file(dir / "CMakeLists.txt", render_meta(LUAX_CMAKE, c));
-            write_file(dir / "README.md", readme("lua-expanded", c));
+            write_file(dir / "README.md",
+                       readme("lua-expanded", c,
+                              subst(LUAX_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail

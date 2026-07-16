@@ -55,6 +55,27 @@ target_link_libraries({{LIB}}_qml PRIVATE
     Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
 )CMK";
 
+        // README build section — kept next to QMLX_CMAKE so the documented
+        // steps can't drift from the template. No {{REFLECTION_FLAGS}}: the
+        // emitted sources are pre-expanded, stock C++17; moc only ever runs on
+        // rosetta's generic bridge header (its path is baked into the CMakeLists).
+        constexpr std::string_view QMLX_README_BUILD = R"MD(## Build
+
+Prerequisites: a stock C++17 compiler, CMake >= 3.18, and Qt 6 (>= 6.5 with the
+Core / Gui / Qml / Quick / QuickControls2 modules). No C++26 / reflection
+toolchain is needed — the sources are fully pre-expanded; moc only runs on
+rosetta's generic `qml_reflected_object.h` bridge. The CMakeLists defaults the
+Qt prefix to `~/Qt/6.8.3/macos`; point `QT_DIR` at yours if it lives elsewhere.
+
+```sh
+cmake -S . -B build -DQT_DIR=/path/to/Qt/6.x/<platform>
+cmake --build build
+./build/{{LIB}}_qml
+```
+
+The app opens a QtQuick inspector on the first default-constructible class.
+)MD";
+
         // Coarse type tag the Inspector.qml uses to pick an editor.
         inline std::string qmlx_tag(const GenType &t) {
             if (t.kind == "string")
@@ -310,7 +331,8 @@ target_link_libraries({{LIB}}_qml PRIVATE
             write_file(dir / "qml_bindings.cpp", s);
             write_file(dir / "main.cpp", m);
             write_file(dir / "CMakeLists.txt", render_meta(QMLX_CMAKE, c));
-            write_file(dir / "README.md", readme("qml-expanded", c));
+            write_file(dir / "README.md",
+                       readme("qml-expanded", c, subst(QMLX_README_BUILD, {{"LIB", c.lib}})));
         }
 
     } // namespace gen_detail
