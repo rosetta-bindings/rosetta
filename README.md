@@ -352,8 +352,9 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 |---|---|---|
 | [pmp-rosetta](https://github.com/rosetta-bindings/pmp-rosetta) | [PMP](https://www.pmp-library.org) — the Polygon Mesh Processing library (remeshing, smoothing, subdivision, decimation) | Python, Node.js, WebAssembly, TypeScript |
 | [geogram-rosetta](https://github.com/rosetta-bindings/geogram-rosetta) | [geogram](https://github.com/BrunoLevy/geogram) — Bruno Lévy's geometry-processing library (reconstruction, remeshing, parameterization, booleans/CSG) | Python, Node.js, WebAssembly, TypeScript, Lua |
-| [arch-rosetta](https://github.com/rosetta-bindings/arch-rosetta) | Arch — a 3-D boundary-element (BEM) geomechanics code | Python, Node.js, WebAssembly, TypeScript |
+| [arch-rosetta](https://github.com/rosetta-bindings/arch-rosetta) *(private)* | Arch — a 3-D boundary-element (BEM) geomechanics code | Python, Node.js, WebAssembly, TypeScript |
 | [cassini-rosetta](https://github.com/rosetta-bindings/cassini-rosetta) *(private)* | Cassini — FEM geomechanical restoration, bound through a single high-level C++ facade | Python, Node.js, WebAssembly, TypeScript |
+| [triax-rosetta](https://github.com/rosetta-bindings/triax-rosetta) | Triax — a discrete-element (DEM) triaxial compression simulator for granular packings | Python, Node.js, WebAssembly |
 
 </details>
 

@@ -1038,13 +1038,34 @@ static int init_manifest(const fs::path &path) {
 
 // Emit the generator project tree (bindings.h + <generator_name>.cpp +
 // CMakeLists.txt) — shared by the plain generate mode and --build.
-static void emit_generator_project(const Manifest &m, const fs::path &out_dir) {
-    const std::string target = m.target();
-    write_file(out_dir / "bindings.h", render_bindings_h(m));
-    write_file(out_dir / (target + ".cpp"), render_project_gen_cpp(m));
-    write_file(out_dir / "CMakeLists.txt", render_cmakelists(m));
-    std::fprintf(stderr, "wrote %s/{bindings.h, %s.cpp, CMakeLists.txt}\n",
-                 out_dir.string().c_str(), target.c_str());
+// write_file, but only when the content differs — re-emitting an unchanged
+// manifest leaves the files' mtimes alone, so an already-configured
+// out_dir/build recompiles nothing on the next `cmake --build`.
+static bool write_file_if_changed(const fs::path &p, const std::string &content) {
+    {
+        std::ifstream in(p, std::ios::binary);
+        if (in) {
+            std::ostringstream ss;
+            ss << in.rdbuf();
+            if (ss.str() == content) {
+                return false;
+            }
+        }
+    }
+    write_file(p, content);
+    return true;
+}
+
+// Returns whether any emitted file actually changed.
+static bool emit_generator_project(const Manifest &m, const fs::path &out_dir) {
+    const std::string target  = m.target();
+    bool              changed = false;
+    changed |= write_file_if_changed(out_dir / "bindings.h", render_bindings_h(m));
+    changed |= write_file_if_changed(out_dir / (target + ".cpp"), render_project_gen_cpp(m));
+    changed |= write_file_if_changed(out_dir / "CMakeLists.txt", render_cmakelists(m));
+    std::fprintf(stderr, "%s %s/{bindings.h, %s.cpp, CMakeLists.txt}\n",
+                 changed ? "wrote" : "unchanged:", out_dir.string().c_str(), target.c_str());
+    return changed;
 }
 
 // ---------------------------------------------------------------------------
@@ -1638,7 +1659,29 @@ int main(int argc, char **argv) {
         (argc == 3) ? fs::path(argv[2]) : fs::absolute(manifest_path).parent_path() / "generated";
 
     try {
-        emit_generator_project(load(manifest_path), out_dir);
+        const bool changed = emit_generator_project(load(manifest_path), out_dir);
+
+        // Plain mode ends here — the user configures / builds the emitted
+        // project themselves. Two footguns worth a printed note:
+        // - out_dir/build not configured yet (fresh checkout, or a --clean
+        //   removed it): `cmake --build` alone fails, so spell out the
+        //   configure step;
+        // - a generator binary from a previous emit still sits next to
+        //   out_dir: run without rebuilding, it would silently re-emit the
+        //   OLD bindings.
+        const fs::path build_dir = out_dir / "build";
+        if (!fs::exists(build_dir / "CMakeCache.txt")) {
+            std::fprintf(stderr,
+                         "next: cmake -S %s -B %s && cmake --build %s\n",
+                         out_dir.string().c_str(), build_dir.string().c_str(),
+                         build_dir.string().c_str());
+        } else if (changed) {
+            std::fprintf(stderr,
+                         "note: sources changed — rebuild the generator "
+                         "(cmake --build %s) before running it, or a stale "
+                         "binary will re-emit the previous bindings\n",
+                         build_dir.string().c_str());
+        }
     } catch (const std::exception &e) {
         std::fprintf(stderr, "rosetta_gen: %s\n", e.what());
         return 1;
