@@ -396,8 +396,36 @@ endif()
                 }
                 user_defs_block += ")";
             }
+            // {{BUILD_CONFIG}} — build type / optimization level (manifest
+            // "build_type" / "optimization"), spliced right after each
+            // template's set(CMAKE_CXX_STANDARD_REQUIRED ON) line so it
+            // precedes every target. The build type is only a default (kept
+            // inside if(NOT CMAKE_BUILD_TYPE), so -DCMAKE_BUILD_TYPE=... at
+            // configure time still wins); the optimization flag goes through
+            // add_compile_options / add_link_options, which land AFTER the
+            // build type's per-config flags on the command line — so this -O
+            // overrides the build type's own level (and reaches the wasm
+            // link, where emscripten's -O matters). Empty when the manifest
+            // sets neither, leaving the output unchanged.
+            std::string build_config;
+            if (!c.build_type.empty()) {
+                build_config +=
+                    "\n\n# Default build type (manifest \"build_type\") — override with\n"
+                    "# -DCMAKE_BUILD_TYPE=... at configure time.\n"
+                    "if(NOT CMAKE_BUILD_TYPE)\n"
+                    "    set(CMAKE_BUILD_TYPE " + c.build_type + ")\n"
+                    "endif()";
+            }
+            if (!c.optimization.empty()) {
+                build_config +=
+                    "\n\n# Optimization level (manifest \"optimization\") — added after the build\n"
+                    "# type's own per-config flags, so this -O is the one that wins.\n"
+                    "add_compile_options(" + c.optimization + ")\n"
+                    "add_link_options(" + c.optimization + ")";
+            }
             return subst(tmpl, {{"LIB", c.lib},
                                 {"HEADER_BLOCK", CMAKE_HEADER},
+                                {"BUILD_CONFIG", build_config},
                                 {"CPP26_ROOT", root},
                                 {"CPP26_CXX", cxx},
                                 {"CPP26_CC", cc},
@@ -1490,7 +1518,8 @@ namespace rosetta {
                                         opt.cpp26_root, opt.cpp26_cxx, opt.cpp26_cc,
                                         opt.cpp26_lib, opt.qt_dir, opt.user_lib_name,
                                         opt.user_lib_dir, opt.user_lib_link, user_sources,
-                                        opt.compile_definitions, t.link_options});
+                                        opt.compile_definitions, t.link_options,
+                                        opt.build_type, opt.optimization});
         }
     }
 

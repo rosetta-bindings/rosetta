@@ -46,6 +46,15 @@
 //     "qt_dir": "$ENV{HOME}/Qt/6.8.3/macos",        // optional: Qt 6 prefix for the
 //                                                   //   qt-expanded / qml-expanded
 //                                                   //   backends. Default that path.
+//     "build_type": "Release",                      // optional: default CMAKE_BUILD_TYPE
+//                                                   //   baked into every compiled backend's
+//                                                   //   CMakeLists (Debug | Release |
+//                                                   //   RelWithDebInfo | MinSizeRel);
+//                                                   //   -DCMAKE_BUILD_TYPE=... still wins
+//     "optimization": "-O2",                        // optional: explicit -O flag added
+//                                                   //   after the build type's own flags
+//                                                   //   (so it wins): -O0..-O3, -Os, -Oz,
+//                                                   //   -Og, -Ofast
 //     "user_lib": {                                 // optional: external library to link
 //       "name": "space",                            //   the bindings against (libspace.*).
 //       "dir":  "../space/bin",                      //   Use when the bound headers only
@@ -91,6 +100,7 @@
 // the manifest's `module_name` for a shorthand string target).
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -277,6 +287,8 @@ struct Manifest {
     std::string                user_lib_name; // optional external lib to link bindings against
     std::string                user_lib_dir;  // optional dir holding it (absolute; -L / rpath)
     std::string                user_lib_link; // "shared" (default) | "static"; wasm always static
+    std::string                build_type;    // optional default CMAKE_BUILD_TYPE for every binding
+    std::string                optimization;  // optional explicit -O flag overriding the build type's
 
     // CMake target / binary basename.
     std::string target() const { return generator_name; }
@@ -518,6 +530,53 @@ static Manifest load(const fs::path &manifest_path) {
         m.qt_dir = j.at("qt_dir").get<std::string>();
     }
 
+    // `build_type` is optional: the default CMAKE_BUILD_TYPE baked into every
+    // compiled backend's generated CMakeLists. Case-insensitive on input,
+    // stored in CMake's canonical spelling. Emitted inside
+    // if(NOT CMAKE_BUILD_TYPE), so -DCMAKE_BUILD_TYPE=... at configure time
+    // still wins.
+    if (j.contains("build_type")) {
+        std::string bt = j.at("build_type").get<std::string>();
+        std::string lo = bt;
+        std::transform(lo.begin(), lo.end(), lo.begin(),
+                       [](unsigned char ch) { return std::tolower(ch); });
+        static const std::pair<const char *, const char *> kBuildTypes[] = {
+            {"debug", "Debug"},
+            {"release", "Release"},
+            {"relwithdebinfo", "RelWithDebInfo"},
+            {"minsizerel", "MinSizeRel"}};
+        for (const auto &[lower, canon] : kBuildTypes) {
+            if (lo == lower) {
+                m.build_type = canon;
+                break;
+            }
+        }
+        if (m.build_type.empty()) {
+            throw std::runtime_error("build_type must be \"Debug\", \"Release\", "
+                                     "\"RelWithDebInfo\" or \"MinSizeRel\" (got \"" +
+                                     bt + "\")");
+        }
+    }
+    // `optimization` is optional: an explicit optimization level applied to
+    // every compiled backend after the build type's own flags — so this -O
+    // wins over the level the build type implies. The leading "-" may be
+    // omitted ("O2" ⇒ "-O2").
+    if (j.contains("optimization")) {
+        std::string o = j.at("optimization").get<std::string>();
+        if (!o.empty() && o[0] != '-') {
+            o = "-" + o;
+        }
+        static const char *kLevels[] = {"-O0", "-O1", "-O2", "-O3",
+                                        "-Os", "-Oz", "-Og", "-Ofast"};
+        if (std::find_if(std::begin(kLevels), std::end(kLevels),
+                         [&](const char *l) { return o == l; }) == std::end(kLevels)) {
+            throw std::runtime_error(
+                "optimization must be one of -O0, -O1, -O2, -O3, -Os, -Oz, -Og, "
+                "-Ofast (got \"" + j.at("optimization").get<std::string>() + "\")");
+        }
+        m.optimization = o;
+    }
+
     // `user_lib` is optional: an external library the generated bindings link
     // against. Use it when the bound headers only *declare* the API and its
     // bodies are compiled into a separate shared/static library. `name` is the
@@ -687,6 +746,14 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     }
     if (!m.qt_dir.empty()) {
         out << "    opt.qt_dir          = \"" << m.qt_dir << "\";\n";
+    }
+    // Build configuration baked into every compiled backend's CMakeLists
+    // (manifest "build_type" / "optimization").
+    if (!m.build_type.empty()) {
+        out << "    opt.build_type      = \"" << m.build_type << "\";\n";
+    }
+    if (!m.optimization.empty()) {
+        out << "    opt.optimization    = \"" << m.optimization << "\";\n";
     }
     // External library to link the bindings against (manifest "user_lib"). Only
     // the stock *-expanded backends consume these (see GenerateOptions).
@@ -889,7 +956,7 @@ static std::string render_cmakelists(const Manifest &m) {
 // A fully-commented example manifest, emitted by `--init`. It exercises every
 // commonly-used field — cpp26_* toolchain overrides, a multi-entry user_include,
 // rosetta_include, generator_name / module_name, user_sources,
-// compile_definitions, a representative
+// compile_definitions, build_type / optimization, a representative
 // spread of targets, and one example class and one example function — so the
 // user can delete what they don't need rather than hunt the docs for what exists.
 static std::string render_example_manifest() {
@@ -924,6 +991,10 @@ static std::string render_example_manifest() {
     "compile_definitions": [
         "MYLIB_SOME_SWITCH"
     ],
+
+    "//build": "Optional build configuration for every compiled backend's generated CMakeLists. build_type is the default CMAKE_BUILD_TYPE (Debug | Release | RelWithDebInfo | MinSizeRel; -DCMAKE_BUILD_TYPE=... at configure time still wins). optimization is an explicit -O flag (-O0..-O3, -Os, -Oz, -Og, -Ofast) added after the build type's own flags, so it overrides their -O level. Omit either if unused.",
+    "build_type": "Release",
+    "optimization": "-O2",
 
     "//targets": "A target is a bare string (\"python\", uses module_name) or {\"lang\": ..., \"name\": ...}. *-expanded backends fully expand the bindings so they build with a stock compiler.",
     "targets": [

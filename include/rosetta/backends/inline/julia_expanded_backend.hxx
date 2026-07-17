@@ -21,7 +21,7 @@ cmake_minimum_required(VERSION 3.18)
 project({{LIB}}_binding CXX)
 
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD_REQUIRED ON){{BUILD_CONFIG}}
 
 # Locate JlCxx (from libcxxwrap-julia / CxxWrap.jl). If it isn't hinted via
 # JlCxx_DIR or CMAKE_PREFIX_PATH, ask Julia's CxxWrap for the prefix that

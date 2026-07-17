@@ -75,6 +75,8 @@ cmake --build path/to/generated/build
 | `user_lib` | — | — | Link the generated bindings against a pre-built external library. See [Linking an external library](#linking-an-external-library-user_lib). |
 | `user_sources` | — | `[]` | List of user `.cpp` (or `.c`) files compiled directly into every generated binding target. See [Compiling user sources](#compiling-user-sources-user_sources). |
 | `compile_definitions` | — | `[]` | Preprocessor definitions (`"NAME"` or `"NAME=VALUE"`) applied to the generator driver and every compiled binding target. See [Preprocessor definitions](#preprocessor-definitions-compile_definitions). |
+| `build_type` | — | — | Default `CMAKE_BUILD_TYPE` baked into every compiled backend's generated `CMakeLists.txt` (`Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel`). See [Build type & optimization](#build-type--optimization-build_type-optimization). |
+| `optimization` | — | — | Explicit optimization flag (`-O0`…`-O3`, `-Os`, `-Oz`, `-Og`, `-Ofast`) applied to every compiled backend, overriding the build type's own `-O` level. See [Build type & optimization](#build-type--optimization-build_type-optimization). |
 | `plugins` | — | `[]` | Extra `.cpp` sources to compile into the generator driver (e.g. a custom backend). Paths relative to the manifest. |
 | `qt_dir` | — | a built-in path | Qt 6 install prefix used by the `qt` / `qml` (and `-expanded`) backends. e.g. `"$ENV{HOME}/Qt/6.8.3/macos"`. |
 | `cpp26_root` | — | `$ENV{HOME}/devs/c++/clang-p2996/build` | Root of the C++26 / P2996 reflection toolchain used by the *thin* backends. Moves `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` together. |
@@ -340,6 +342,24 @@ A single string is accepted as a one-element list. The text-only backends (`mark
 
 ---
 
+## Build type & optimization (`build_type`, `optimization`)
+
+Every compiled backend's generated `CMakeLists.txt` can carry a build configuration, so `cmake -S . -B build && cmake --build build` (and `rosetta_gen --build`) produces optimized or debuggable bindings without editing the output:
+
+```json
+"build_type": "Release",
+"optimization": "-O2"
+```
+
+Both are optional and independent:
+
+- **`build_type`** — one of `Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel` (case-insensitive). Emitted as a *default* inside `if(NOT CMAKE_BUILD_TYPE)`, so `-DCMAKE_BUILD_TYPE=...` at configure time still wins. Omitted ⇒ CMake's usual no-build-type behaviour.
+- **`optimization`** — an explicit optimization level: `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, `-Oz`, `-Og` or `-Ofast` (the leading `-` may be omitted). Emitted as `add_compile_options(...)` / `add_link_options(...)`, which land *after* the build type's own per-config flags on the compiler command line — so this `-O` overrides the level the build type implies (e.g. `"build_type": "Release", "optimization": "-O2"` builds `-DNDEBUG` but at `-O2` instead of Release's `-O3`). The link option matters for the wasm targets, where emscripten optimizes at link time too.
+
+The flags apply to the *bindings* (and any [`user_sources`](#compiling-user-sources-user_sources) compiled into them), in every compiled backend — thin and `-expanded` alike. The text-only backends compile nothing and ignore both.
+
+---
+
 ## Full reference example
 
 ```json
@@ -357,6 +377,10 @@ A single string is accepted as a one-element list. The text-only backends (`mark
   "cpp26_cxx":  "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang++",
   "cpp26_cc":   "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang",
   "cpp26_lib":  "$ENV{HOME}/devs/c++/clang-p2996/build/lib",
+
+  "//build": "Default build type + explicit -O level for every compiled backend.",
+  "build_type": "Release",
+  "optimization": "-O2",
 
   "targets": [
     { "lang": "python", "name": "geom" },

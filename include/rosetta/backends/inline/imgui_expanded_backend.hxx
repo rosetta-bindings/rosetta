@@ -48,7 +48,7 @@ if(ROSETTA_IMGUI_CPP26)
 else()
     set(CMAKE_CXX_STANDARD 20)
 endif()
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD_REQUIRED ON){{BUILD_CONFIG}}
 
 find_package(OpenGL REQUIRED)
 include(FetchContent)

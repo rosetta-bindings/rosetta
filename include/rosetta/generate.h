@@ -430,6 +430,23 @@ namespace rosetta {
         // target_compile_definitions(... PRIVATE ...); text-only backends
         // ignore them.
         std::vector<std::string> compile_definitions;
+
+        // Optional build configuration baked into every compiled backend's
+        // generated CMakeLists (text-only backends have none).
+        //
+        //   build_type   — default CMAKE_BUILD_TYPE ("Debug", "Release",
+        //                  "RelWithDebInfo", "MinSizeRel"), emitted inside
+        //                  if(NOT CMAKE_BUILD_TYPE) so -DCMAKE_BUILD_TYPE=...
+        //                  at configure time still wins. Empty ⇒ not emitted
+        //                  (CMake's usual no-build-type default applies).
+        //   optimization — explicit optimization flag ("-O0".."-O3", "-Os",
+        //                  "-Oz", "-Og", "-Ofast") added via
+        //                  add_compile_options / add_link_options, which land
+        //                  AFTER the build type's per-config flags on the
+        //                  command line — so this -O overrides the build
+        //                  type's own level. Empty ⇒ not emitted.
+        std::string build_type;
+        std::string optimization;
     };
 
     /**
@@ -454,6 +471,8 @@ namespace rosetta {
         std::vector<std::string> user_sources;    // user .cpp/.c files compiled into the binding target (abs paths)
         std::vector<std::string> compile_definitions; // "NAME"/"NAME=VALUE" defs for the binding target
         std::vector<std::string> link_options;    // extra linker flags for THIS target (TargetSpec::link_options)
+        std::string              build_type;      // default CMAKE_BUILD_TYPE ("" ⇒ not emitted)
+        std::string              optimization;    // explicit -O flag overriding the build type's ("" ⇒ not emitted)
     };
 
     /**
