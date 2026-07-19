@@ -195,12 +195,39 @@ Manifest load(const fs::path &manifest_path) {
         m.targets.push_back(std::move(e));
     }
 
+    // Optional shared defaults, factoring the per-entry repetition out of
+    // "classes" / "functions" / "extensions":
+    //   "namespace"  — default C++ namespace for entry names that carry no
+    //                  "::" of their own ("Serie" → "stressinv::Serie"). A
+    //                  name containing "::" is taken verbatim (so fully
+    //                  qualified spellings — incl. nested classes — keep
+    //                  working), and a leading "::" pins an entry to the
+    //                  global namespace ("::Thing" → "Thing").
+    //   "header_dir" — directory fragment prepended to every entry header
+    //                  ("Serie.h" → "stressinv/Serie.h").
+    const std::string default_ns =
+        j.contains("namespace") ? j.at("namespace").get<std::string>() : std::string{};
+    std::string header_dir =
+        j.contains("header_dir") ? j.at("header_dir").get<std::string>() : std::string{};
+    if (!header_dir.empty() && header_dir.back() != '/') {
+        header_dir += '/';
+    }
+    auto qualify = [&](std::string n) {
+        if (n.rfind("::", 0) == 0) {
+            return n.substr(2); // explicit global namespace
+        }
+        if (!default_ns.empty() && n.find("::") == std::string::npos) {
+            return default_ns + "::" + n;
+        }
+        return n;
+    };
+
     for (const auto &c : j.at("classes")) {
         ClassEntry e;
-        e.header = c.at("header").get<std::string>();
+        e.header = header_dir + c.at("header").get<std::string>();
         // `name` is optional; fall back to the header's basename (stem).
-        e.name = c.contains("name") ? c.at("name").get<std::string>()
-                                    : fs::path(e.header).stem().string();
+        e.name = qualify(c.contains("name") ? c.at("name").get<std::string>()
+                                            : fs::path(e.header).stem().string());
         // `annotations` is optional: an out-of-line annotation JSON side-car
         // (doc/range/readonly/combobox keyed by member name). Baked into
         // bindings.h at generation time, so the user's header stays clean.
@@ -218,8 +245,8 @@ Manifest load(const fs::path &manifest_path) {
         if (c.contains("extensions")) {
             for (const auto &x : c.at("extensions")) {
                 FunctionEntry xe;
-                xe.name   = x.at("name").get<std::string>();
-                xe.header = x.at("header").get<std::string>();
+                xe.name   = qualify(x.at("name").get<std::string>());
+                xe.header = header_dir + x.at("header").get<std::string>();
                 xe.doc    = x.contains("doc") ? x.at("doc").get<std::string>() : std::string{};
                 e.extensions.push_back(std::move(xe));
             }
@@ -234,8 +261,8 @@ Manifest load(const fs::path &manifest_path) {
     if (j.contains("functions")) {
         for (const auto &f : j.at("functions")) {
             FunctionEntry e;
-            e.name   = f.at("name").get<std::string>();
-            e.header = f.at("header").get<std::string>();
+            e.name   = qualify(f.at("name").get<std::string>());
+            e.header = header_dir + f.at("header").get<std::string>();
             e.doc    = f.contains("doc") ? f.at("doc").get<std::string>() : std::string{};
             m.functions.push_back(std::move(e));
         }

@@ -71,6 +71,8 @@ cmake --build path/to/generated/build
 | `targets` | ✅ | — | The language backends to emit. See [Targets](#targets). |
 | `classes` | ✅ | — | The classes / structs / enums to bind. See [Classes](#classes). |
 | `functions` | — | `[]` | Free (non-member) functions to bind. See [Functions](#functions). |
+| `namespace` | — | — | Default C++ namespace for `classes` / `functions` / `extensions` names carrying no `::` of their own. See [Shared defaults](#shared-defaults-namespace-header_dir). |
+| `header_dir` | — | — | Directory fragment prepended to every `classes` / `functions` / `extensions` header. See [Shared defaults](#shared-defaults-namespace-header_dir). |
 | `sequences` | — | `[]` | Foreign sequence containers (qualified template names, one type parameter — `"GEO::vector"`) that marshal like `std::vector<T>`. See [Foreign sequence containers](#foreign-sequence-containers-sequences). |
 | `user_lib` | — | — | Link the generated bindings against a pre-built external library. See [Linking an external library](#linking-an-external-library-user_lib). |
 | `user_sources` | — | `[]` | List of user `.cpp` (or `.c`) files compiled directly into every generated binding target. See [Compiling user sources](#compiling-user-sources-user_sources). |
@@ -111,6 +113,42 @@ Keys beginning with `//` (e.g. `"//1"`, `"//note"`) are treated as comments and 
 | `final` | — | `false` | Treat the class as non-overridable from the host language: **no trampoline** is generated even when it has public virtual methods (they still bind as ordinary callable methods). Also what makes a class *with* virtuals eligible as a node member-object property (`mesh.vertices` — the aliased wrap stores a `T*`, which requires the wrapped type to be `T`, not `Js_T`). |
 
 Inheritance, multiple constructors, enums, nested user types and `std::vector` members are discovered automatically — no entry needed per base class, just list the most-derived type you want bound.
+
+---
+
+## Shared defaults (`namespace`, `header_dir`)
+
+When every entry repeats the same namespace and the same header folder —
+
+```json
+"classes": [
+  {"name": "stressinv::Serie",      "header": "stressinv/Serie.h"},
+  {"name": "stressinv::Data",       "header": "stressinv/Data.h"},
+  {"name": "stressinv::CostMetric", "header": "stressinv/cost.h"}
+]
+```
+
+— factor them out with the two optional top-level defaults:
+
+```json
+"namespace": "stressinv",
+"header_dir": "stressinv",
+"classes": [
+  {"header": "Serie.h"},
+  {"header": "Data.h"},
+  {"name": "CostMetric", "header": "cost.h"}
+]
+```
+
+(`Serie` and `Data` also drop their `name`, since it defaults from the header stem — and the derived name is namespace-qualified too.)
+
+Rules, applied identically to `classes`, `functions` and `extensions`:
+
+- `namespace` qualifies an entry name only when it carries **no `::` of its own**: `"Serie"` → `stressinv::Serie`. A name containing `::` passes **verbatim** — so fully qualified spellings, nested classes (`stressinv::Model::Inner`) and sub-namespaces (`stressinv::detail::helper`) keep working unchanged, and mixing shortened and full spellings in one manifest is fine.
+- A **leading `::`** pins an entry to the global namespace: `"::c_entry"` → `c_entry`. This is the escape hatch for the odd global function (e.g. `extern "C"`) in an otherwise-namespaced manifest.
+- `header_dir` is prepended to **every** entry header (a `/` is inserted if missing): `"Serie.h"` → `stressinv/Serie.h`. A header living elsewhere can step out relative to it (`"../other/x.h"`), or you can keep `header_dir` unset and spell every path in full.
+
+`rosetta_gen --init <src_dir>` factors its scanned output the same way: when every found name shares one namespace (and every header one first-level folder), the generated manifest uses these defaults instead of repeating them per entry.
 
 Members the emitted binding could not compile are **skipped** rather than fatal: a public field whose type is a non-copyable class (e.g. a member object holding a back-reference to its owner), a method returning a reference to such a type, or a by-value parameter of one. The class still binds — as an opaque handle plus whatever members do marshal — and [extension methods (#extension-methods-extensions) fill the gaps.
 

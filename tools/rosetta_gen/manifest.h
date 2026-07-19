@@ -49,6 +49,15 @@
 //       "XXX_WITH_HLBFGS"                           //   the driver AND every compiled
 //     ],                                            //   binding target (they reach the bound
 //                                                   //   headers and user_sources alike).
+//     "namespace": "stressinv",                     // optional: default namespace for
+//                                                   //   class/function/extension names
+//                                                   //   without a "::" of their own
+//                                                   //   ("Serie" -> "stressinv::Serie";
+//                                                   //   qualified names pass verbatim,
+//                                                   //   leading "::" = global namespace)
+//     "header_dir": "stressinv",                    // optional: dir fragment prepended
+//                                                   //   to every entry header
+//                                                   //   ("Serie.h" -> "stressinv/Serie.h")
 //     "targets": [                                  // shared by every class
 //       { "lang": "python", "name": "pygeom" },     // per-target module name
 //       { "lang": "wasm-expanded",                  // optional per-target linker

@@ -70,14 +70,18 @@ static std::string render_example_manifest() {
         "markdown"
     ],
 
-    "//classes": "Each class: its (optionally qualified) name and the header declaring it. \"name\" may be omitted to derive it from the header stem. \"annotations\" points at an optional out-of-line annotation JSON side-car.",
+    "//defaults": "Optional shared defaults, factoring the repetition out of the class/function entries below. \"namespace\" qualifies every entry name that has no \"::\" of its own (a qualified name passes verbatim; a leading \"::\" pins an entry to the global namespace). \"header_dir\" is prepended to every entry header. Omit either if unused.",
+    "namespace": "mylib",
+    "header_dir": "mylib",
+
+    "//classes": "Each class: its name and the header declaring it (\"mylib/widget.h\" here, via header_dir; \"Widget\" becomes \"mylib::Widget\" via namespace). \"name\" may be omitted to derive it from the header stem. \"annotations\" points at an optional out-of-line annotation JSON side-car.",
     "classes": [
-        {"doc": "An example bound class.", "name": "mylib::Widget", "header": "widget.h"}
+        {"doc": "An example bound class.", "name": "Widget", "header": "widget.h"}
     ],
 
-    "//functions": "Free (non-member) functions to bind. \"name\" may be qualified (mylib::compute); \"doc\" is an optional description. Overloaded or template function names cannot be bound (^^name is ill-formed for them).",
+    "//functions": "Free (non-member) functions to bind. \"name\" may be qualified (other::compute) to override the default namespace; \"doc\" is an optional description. Overloaded or template function names cannot be bound (^^name is ill-formed for them).",
     "functions": [
-        {"header": "widget.h", "name": "mylib::compute", "doc": "An example bound free function."}
+        {"header": "widget.h", "name": "compute", "doc": "An example bound free function."}
     ]
 }
 )JSON";
@@ -655,6 +659,79 @@ static std::string render_scanned_manifest(const fs::path &manifest_path,
         name = "mylib";
     }
 
+    // Factor shared spelling out of the entries, into the manifest-level
+    // "namespace" / "header_dir" defaults load() applies back: the namespace
+    // when every qualified scanned name opens with the same component, the
+    // header dir when every header lives under the same first-level folder.
+    std::string ns;
+    {
+        bool uniform = true;
+        auto visit   = [&](const std::vector<ScannedDecl> &decls) {
+            for (const auto &d : decls) {
+                const auto p = d.name.find("::");
+                if (p == std::string::npos) {
+                    continue;
+                }
+                const std::string first = d.name.substr(0, p);
+                if (ns.empty()) {
+                    ns = first;
+                } else if (ns != first) {
+                    uniform = false;
+                }
+            }
+        };
+        visit(r.classes);
+        visit(r.functions);
+        if (!uniform) {
+            ns.clear();
+        }
+    }
+    std::string hdir;
+    {
+        bool uniform = !r.classes.empty() || !r.functions.empty();
+        auto visit   = [&](const std::vector<ScannedDecl> &decls) {
+            for (const auto &d : decls) {
+                const auto p = d.header.find('/');
+                const std::string first =
+                    (p == std::string::npos) ? std::string{} : d.header.substr(0, p);
+                if (first.empty() || (!hdir.empty() && hdir != first)) {
+                    uniform = false;
+                } else {
+                    hdir = first;
+                }
+            }
+        };
+        visit(r.classes);
+        visit(r.functions);
+        if (!uniform) {
+            hdir.clear();
+        }
+    }
+    // "ns::Simple" shortens to "Simple"; a deeper name (nested class,
+    // sub-namespace) stays fully qualified — load() takes any name with a
+    // "::" verbatim, so it round-trips unchanged. A global-namespace name
+    // (extern "C" functions, un-namespaced classes) must be pinned with the
+    // leading-"::" escape, or load() would default-qualify it.
+    auto short_name = [&](const std::string &n) {
+        if (ns.empty()) {
+            return n;
+        }
+        if (n.rfind(ns + "::", 0) == 0) {
+            const std::string rest = n.substr(ns.size() + 2);
+            if (rest.find("::") == std::string::npos) {
+                return rest;
+            }
+            return n;
+        }
+        if (n.find("::") == std::string::npos) {
+            return "::" + n; // global namespace, kept global on reload
+        }
+        return n;
+    };
+    auto short_header = [&](const std::string &h) {
+        return hdir.empty() ? h : h.substr(hdir.size() + 1);
+    };
+
     nlohmann::ordered_json j;
     j["//"] = "Pre-filled by `rosetta_gen --init` from a heuristic scan of " + inc +
               ". Review before building: drop what should not be bound; template classes, "
@@ -668,6 +745,12 @@ static std::string render_scanned_manifest(const fs::path &manifest_path,
     }
     j["generator_name"] = "generator_" + name;
     j["module_name"]    = name;
+    if (!ns.empty()) {
+        j["namespace"] = ns;
+    }
+    if (!hdir.empty()) {
+        j["header_dir"] = hdir;
+    }
     if (!r.sources.empty()) {
         auto &us = j["user_sources"] = nlohmann::ordered_json::array();
         for (const auto &s : r.sources) {
@@ -679,12 +762,12 @@ static std::string render_scanned_manifest(const fs::path &manifest_path,
     j["targets"] = nlohmann::ordered_json::array({"python", "typescript"});
     auto &cls = j["classes"] = nlohmann::ordered_json::array();
     for (const auto &c : r.classes) {
-        cls.push_back({{"name", c.name}, {"header", c.header}});
+        cls.push_back({{"name", short_name(c.name)}, {"header", short_header(c.header)}});
     }
     if (!r.functions.empty()) {
         auto &fns = j["functions"] = nlohmann::ordered_json::array();
         for (const auto &f : r.functions) {
-            fns.push_back({{"name", f.name}, {"header", f.header}});
+            fns.push_back({{"name", short_name(f.name)}, {"header", short_header(f.header)}});
         }
     }
     return j.dump(4) + "\n";
