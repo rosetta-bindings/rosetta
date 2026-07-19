@@ -31,5 +31,12 @@ FetchContent_MakeAvailable(json)
 # Drop the binary in <repo>/bin rather than the build tree.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../../bin)
 
-add_executable(rosetta_gen rosetta_gen.cpp)
+add_executable(rosetta_gen
+    rosetta_gen.cpp # main() + help text
+    manifest.cpp    # manifest.json -> Manifest (load + glob expansion)
+    emit.cpp        # generator-project emission (bindings.h / driver / CMake)
+    init.cpp        # --init (example manifest + heuristic source scan)
+    build.cpp       # --build (the whole pipeline in one command)
+    clean.cpp       # --clean
+    util.cpp)       # file I/O + portable command running
 target_include_directories(rosetta_gen PRIVATE ${json_SOURCE_DIR}/include)
