@@ -447,6 +447,16 @@ namespace rosetta {
         //                  type's own level. Empty ⇒ not emitted.
         std::string build_type;
         std::string optimization;
+
+        // Optional C++ standard the user_sources compile with ("17", "20",
+        // "23", "26"). Use e.g. "17" when the user sources (or their vendored
+        // third parties) are not C++20-clean. Emitted as per-source
+        // COMPILE_OPTIONS "-std=c++NN", which lands after the target's own
+        // standard flag and so wins for those files only — the generated
+        // binding TU keeps its backend's standard (C++20 expanded, C++26
+        // thin), which its runtime headers require. Empty (or "20") ⇒ no
+        // per-source flag. C sources (.c) are never touched.
+        std::string cxx_standard;
     };
 
     /**
@@ -473,6 +483,7 @@ namespace rosetta {
         std::vector<std::string> link_options;    // extra linker flags for THIS target (TargetSpec::link_options)
         std::string              build_type;      // default CMAKE_BUILD_TYPE ("" ⇒ not emitted)
         std::string              optimization;    // explicit -O flag overriding the build type's ("" ⇒ not emitted)
+        std::string              cxx_standard;    // per-source -std for the user sources ("" or "20" ⇒ none)
     };
 
     /**

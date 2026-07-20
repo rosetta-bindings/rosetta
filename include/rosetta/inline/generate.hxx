@@ -253,6 +253,36 @@ endif()
             return false;
         }
 
+        // set_source_files_properties block pinning the user sources to the
+        // manifest's "cxx_standard". The generated binding TU keeps the
+        // template's C++20 (the node runtime, e.g., is not C++17-clean); the
+        // per-source -std lands after the target's standard flag on the
+        // command line, so it wins for those files only. Empty when the
+        // manifest is silent, asks for the stock 20, or there are no user
+        // sources. C translation units (.c) are skipped — -std=c++NN is not
+        // theirs.
+        inline std::string user_sources_std_block(const GenContext &c) {
+            if (c.cxx_standard.empty() || c.cxx_standard == "20" || c.user_sources.empty()) {
+                return {};
+            }
+            std::string body;
+            for (const auto &src : c.user_sources) {
+                if (src.size() > 2 && src.compare(src.size() - 2, 2, ".c") == 0) {
+                    continue;
+                }
+                body += "    " + src + "\n";
+            }
+            if (body.empty()) {
+                return {};
+            }
+            std::string s;
+            s += "# C++ standard of the user sources (manifest \"cxx_standard\") — the\n";
+            s += "# generated binding TU stays C++20; this per-source -std wins over it.\n";
+            s += "set_source_files_properties(\n" + body;
+            s += "    PROPERTIES COMPILE_OPTIONS \"-std=c++" + c.cxx_standard + "\")";
+            return s;
+        }
+
         inline std::string user_lib_block(const GenContext &c) {
             if (c.user_lib_name.empty() && c.user_sources.empty() &&
                 c.compile_definitions.empty() && c.link_options.empty()) {
@@ -280,6 +310,10 @@ endif()
                     s += "    " + src + "\n";
                 }
                 s += ")\n";
+                const std::string src_std = user_sources_std_block(c);
+                if (!src_std.empty()) {
+                    s += src_std + "\n";
+                }
             }
 
             // Preprocessor definitions (manifest "compile_definitions") applied to
@@ -395,6 +429,15 @@ endif()
                     user_defs_block += "\n    \"" + opt + "\"";
                 }
                 user_defs_block += ")";
+            }
+            // The wasm templates splice their user sources straight into
+            // add_executable (no {{USER_LIB_BLOCK}}), so the per-source C++
+            // standard block rides along here instead.
+            {
+                const std::string src_std = user_sources_std_block(c);
+                if (!src_std.empty()) {
+                    user_defs_block += "\n\n" + src_std;
+                }
             }
             // {{BUILD_CONFIG}} — build type / optimization level (manifest
             // "build_type" / "optimization"), spliced right after each
@@ -1519,7 +1562,8 @@ namespace rosetta {
                                         opt.cpp26_lib, opt.qt_dir, opt.user_lib_name,
                                         opt.user_lib_dir, opt.user_lib_link, user_sources,
                                         opt.compile_definitions, t.link_options,
-                                        opt.build_type, opt.optimization});
+                                        opt.build_type, opt.optimization,
+                                        opt.cxx_standard});
         }
     }
 

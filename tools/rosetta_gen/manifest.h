@@ -33,6 +33,15 @@
 //                                                   //   after the build type's own flags
 //                                                   //   (so it wins): -O0..-O3, -Os, -Oz,
 //                                                   //   -Og, -Ofast
+//     "cxx_standard": 17,                           // optional: C++ standard the
+//                                                   //   user_sources compile with
+//                                                   //   (11|14|17|20|23|26, number or
+//                                                   //   string) — per-source -std that
+//                                                   //   wins over the target's. The
+//                                                   //   generated binding TU keeps its
+//                                                   //   backend's standard (C++20
+//                                                   //   expanded / C++26 thin), which
+//                                                   //   its runtime headers require.
 //     "user_lib": {                                 // optional: external library to link
 //       "name": "space",                            //   the bindings against (libspace.*).
 //       "dir":  "../space/bin",                     //   Use when the bound headers only
@@ -169,6 +178,7 @@ struct Manifest {
     std::string                user_lib_link; // "shared" (default) | "static"; wasm always static
     std::string                build_type;    // optional default CMAKE_BUILD_TYPE for every binding
     std::string                optimization;  // optional explicit -O flag overriding the build type's
+    std::string                cxx_standard;  // optional per-source -std for the user_sources ("" ⇒ target's own)
 
     // CMake target / binary basename.
     std::string target() const { return generator_name; }

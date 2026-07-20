@@ -141,6 +141,11 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     if (!m.optimization.empty()) {
         out << "    opt.optimization    = \"" << m.optimization << "\";\n";
     }
+    // C++ standard the user sources compile with (manifest "cxx_standard");
+    // absent ⇒ they build at each target's own standard.
+    if (!m.cxx_standard.empty()) {
+        out << "    opt.cxx_standard    = \"" << m.cxx_standard << "\";\n";
+    }
     // External library to link the bindings against (manifest "user_lib"). Only
     // the stock *-expanded backends consume these (see GenerateOptions).
     if (!m.user_lib_name.empty()) {

@@ -542,6 +542,25 @@ Manifest load(const fs::path &manifest_path) {
         }
         m.optimization = o;
     }
+    // `cxx_standard` is optional: the C++ standard the user_sources compile
+    // with, emitted as a per-source -std that wins over the target's own
+    // standard for those files only (the generated binding TU keeps its
+    // backend's standard, which its runtime headers require). A number or a
+    // string is accepted ("17" or 17).
+    if (j.contains("cxx_standard")) {
+        const auto &cs = j.at("cxx_standard");
+        std::string std_str =
+            cs.is_number() ? std::to_string(cs.get<int>()) : cs.get<std::string>();
+        static const char *kStandards[] = {"11", "14", "17", "20", "23", "26"};
+        if (std::find_if(std::begin(kStandards), std::end(kStandards),
+                         [&](const char *s) { return std_str == s; }) ==
+            std::end(kStandards)) {
+            throw std::runtime_error(
+                "cxx_standard must be one of 11, 14, 17, 20, 23, 26 (got \"" +
+                std_str + "\")");
+        }
+        m.cxx_standard = std_str;
+    }
 
     // `user_lib` is optional: an external library the generated bindings link
     // against. Use it when the bound headers only *declare* the API and its
