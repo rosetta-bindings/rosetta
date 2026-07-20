@@ -150,6 +150,44 @@ Rules, applied identically to `classes`, `functions` and `extensions`:
 
 `rosetta_gen --init <src_dir>` factors its scanned output the same way: when every found name shares one namespace (and every header one first-level folder), the generated manifest uses these defaults instead of repeating them per entry.
 
+### Grouped entries
+
+One pair of top-level defaults can't cover a library whose headers live in several folders (`solvers/`, `postprocess/`, `algos/stress-inversion/`) or that uses sub-namespaces. For that, an element of `classes` or `functions` may be a **group**: an object carrying `"entries"` (a nested entry list) plus its own local defaults, instead of being an entry itself.
+
+```json
+"namespace": "arch",
+"header_dir": "Arch",
+"classes": [
+  {"name": "Vector3", "header": "math/math.h"},
+
+  {"header_dir": "solvers", "entries": [
+    {"name": "GmresSolver", "header": "Gmres.h"},
+    {"header": "ParallelSolver.h"}
+  ]},
+
+  {"header_dir": "algos", "entries": [
+    {"header": "DataSuperposition.h"},
+    {"namespace": "sinv", "header_dir": "stress-inversion", "entries": [
+      {"header": "JointData.h"},
+      {"header": "types.h", "entries": [
+        {"name": "MCMCConfig"},
+        {"name": "MCMCResult"}
+      ]}
+    ]}
+  ]}
+]
+```
+
+Group rules:
+
+- A group's `header_dir` **appends below** the inherited dir: `Arch` + `solvers` ⇒ `Arch/solvers/Gmres.h`.
+- A group's `namespace` **appends to** the inherited one: `arch` + `sinv` ⇒ `arch::sinv::JointData`. A leading `::` makes it absolute instead of appending.
+- A group may set a `header`: the default header for entries that spell none — the natural shape for a run of classes declared by one header (`types.h` above ⇒ `arch::sinv::MCMCConfig` et al., all from `Arch/algos/stress-inversion/types.h`). Such entries need an explicit `name` (the stem fallback would give every one the same name).
+- Groups **nest**, **mix freely with plain entries** in the same array, and work identically under `functions` — where a shared-header group reads especially well (a dozen shape generators all declared by `shapes.h`).
+- A group cannot carry a `name`, and `//`-comment keys are ignored on groups like everywhere else.
+
+Everything is resolved at load time, so backends and generated output are byte-identical to the fully spelled form.
+
 Members the emitted binding could not compile are **skipped** rather than fatal: a public field whose type is a non-copyable class (e.g. a member object holding a back-reference to its owner), a method returning a reference to such a type, or a by-value parameter of one. The class still binds — as an opaque handle plus whatever members do marshal — and [extension methods (#extension-methods-extensions) fill the gaps.
 
 ---
@@ -342,7 +380,13 @@ Each entry may be a **shell glob**, expanded at generation time:
 "user_sources": ["./extern/pmp/src/pmp/algorithms/*.cpp"]
 ```
 
-`*`, `?` and `[...]` are supported within a path component (POSIX glob — not recursive `**`). Matches are sorted for reproducible output, and the final list is de-duplicated, so mixing a literal path with a glob that also covers it is safe. A pattern that matches nothing emits a warning and is skipped. Because globs expand when `rosetta_gen` runs, **re-run it after adding or removing matching files**.
+`*`, `?` and `[...]` are supported within a path component, and a component that is exactly `**` matches **zero or more directories** (bash-globstar style) — so one pattern covers a whole source tree instead of one line per subdirectory:
+
+```json
+"user_sources": ["extern/arch/src/**/*.cxx"]
+```
+
+matches `src/a.cxx` as well as `src/algos/stress-inversion/b.cxx`. Like the other wildcards, `**` does not enter hidden (dot) directories. Matches are sorted for reproducible output, and the final list is de-duplicated, so mixing a literal path with a glob that also covers it is safe. A pattern that matches nothing emits a warning and is skipped. Because globs expand when `rosetta_gen` runs, **re-run it after adding or removing matching files**.
 
 `user_sources` and `user_lib` are independent — use either, or both. The text-only backends (`markdown`, `html`, `json`, `typescript`, `openapi`, `paraview`) compile nothing and ignore it.
 

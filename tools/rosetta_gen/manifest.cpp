@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <utility>
@@ -86,9 +87,12 @@ static bool glob_match(const std::string &pat, const std::string &str) {
 // Expand a shell glob (relative to `base`) into the matching files, sorted for
 // reproducible output. Used by `user_sources` so a manifest can say
 // "src/algorithms/*.cpp" instead of listing every file. Expands `*`, `?` and
-// `[...]` within a path component (not recursive `**`); a pattern that matches
-// nothing yields an empty list (the caller warns). std::filesystem-based so it
-// behaves identically on POSIX and Windows.
+// `[...]` within a path component, and a component that is exactly `**`
+// matches ZERO or more directories (bash-globstar style): "src/**/*.cxx"
+// covers src/a.cxx and src/algos/deep/b.cxx alike, replacing one line per
+// subdirectory. Like the other wildcards, `**` does not enter dot-dirs. A
+// pattern that matches nothing yields an empty list (the caller warns).
+// std::filesystem-based so it behaves identically on POSIX and Windows.
 static std::vector<fs::path> expand_glob(const fs::path &base, const std::string &pattern) {
     const fs::path full = fs::absolute(base / fs::path(pattern)).lexically_normal();
 
@@ -96,6 +100,32 @@ static std::vector<fs::path> expand_glob(const fs::path &base, const std::string
     for (const auto &part : full.relative_path()) {
         const std::string     comp = part.string();
         std::vector<fs::path> next;
+        if (comp == "**") {
+            // Zero or more directories: every frontier dir itself, plus every
+            // non-hidden directory anywhere below it.
+            for (const auto &dir : frontier) {
+                std::error_code ec;
+                if (!fs::is_directory(dir, ec)) {
+                    continue;
+                }
+                next.push_back(dir);
+                for (fs::recursive_directory_iterator it(dir, ec), end; !ec && it != end;
+                     it.increment(ec)) {
+                    std::error_code ec2;
+                    if (!it->is_directory(ec2)) {
+                        continue;
+                    }
+                    const std::string name = it->path().filename().string();
+                    if (!name.empty() && name[0] == '.') {
+                        it.disable_recursion_pending();
+                        continue;
+                    }
+                    next.push_back(it->path());
+                }
+            }
+            frontier = std::move(next);
+            continue;
+        }
         for (const auto &dir : frontier) {
             std::error_code ec;
             if (!is_glob_pattern(comp)) {
@@ -205,67 +235,140 @@ Manifest load(const fs::path &manifest_path) {
     //                  global namespace ("::Thing" → "Thing").
     //   "header_dir" — directory fragment prepended to every entry header
     //                  ("Serie.h" → "stressinv/Serie.h").
-    const std::string default_ns =
-        j.contains("namespace") ? j.at("namespace").get<std::string>() : std::string{};
-    std::string header_dir =
-        j.contains("header_dir") ? j.at("header_dir").get<std::string>() : std::string{};
-    if (!header_dir.empty() && header_dir.back() != '/') {
-        header_dir += '/';
-    }
-    auto qualify = [&](std::string n) {
+    //
+    // Both also appear on GROUP entries: an object inside "classes" /
+    // "functions" carrying "entries" (a nested entry list) instead of being
+    // an entry itself. A group's "namespace" appends to the inherited one
+    // ("sinv" under "arch" → arch::sinv; a leading "::" makes it absolute
+    // instead), its "header_dir" appends below the inherited dir, and an
+    // optional group "header" is the default header for entries that spell
+    // none — for a run of classes declared by one header. Groups nest, and
+    // mix freely with plain entries in the same array.
+    auto with_slash = [](std::string d) {
+        if (!d.empty() && d.back() != '/') {
+            d += '/';
+        }
+        return d;
+    };
+    auto qualify = [](const std::string &ns, const std::string &n) -> std::string {
         if (n.rfind("::", 0) == 0) {
             return n.substr(2); // explicit global namespace
         }
-        if (!default_ns.empty() && n.find("::") == std::string::npos) {
-            return default_ns + "::" + n;
+        if (!ns.empty() && n.find("::") == std::string::npos) {
+            return ns + "::" + n;
         }
         return n;
     };
 
-    for (const auto &c : j.at("classes")) {
-        ClassEntry e;
-        e.header = header_dir + c.at("header").get<std::string>();
-        // `name` is optional; fall back to the header's basename (stem).
-        e.name = qualify(c.contains("name") ? c.at("name").get<std::string>()
-                                            : fs::path(e.header).stem().string());
-        // `annotations` is optional: an out-of-line annotation JSON side-car
-        // (doc/range/readonly/combobox keyed by member name). Baked into
-        // bindings.h at generation time, so the user's header stays clean.
-        if (c.contains("annotations")) {
-            e.annotations =
-                fs::weakly_canonical(base / fs::path(c.at("annotations").get<std::string>()));
+    // The defaults inherited by an entry: the composed namespace, the
+    // composed ('/'-terminated) header dir, and the group's default header.
+    struct EntryCtx {
+        std::string ns;
+        std::string dir;
+        std::string header;
+    };
+    auto group_ctx = [&](const json &g, const EntryCtx &outer) {
+        EntryCtx ctx = outer;
+        if (g.contains("namespace")) {
+            const std::string ns = g.at("namespace").get<std::string>();
+            ctx.ns = (ns.rfind("::", 0) == 0) ? ns.substr(2)
+                     : outer.ns.empty()       ? ns
+                                              : outer.ns + "::" + ns;
         }
-        // `final` is optional: suppress the trampoline (see ClassEntry::final_).
-        if (c.contains("final")) {
-            e.final_ = c.at("final").get<bool>();
+        if (g.contains("header_dir")) {
+            ctx.dir = outer.dir + with_slash(g.at("header_dir").get<std::string>());
         }
-        // `extensions` is optional: free functions (first parameter `Cls&`)
-        // exposed as instance methods of this class — same entry shape as
-        // "functions" (see ClassEntry::extensions).
-        if (c.contains("extensions")) {
-            for (const auto &x : c.at("extensions")) {
-                FunctionEntry xe;
-                xe.name   = qualify(x.at("name").get<std::string>());
-                xe.header = header_dir + x.at("header").get<std::string>();
-                xe.doc    = x.contains("doc") ? x.at("doc").get<std::string>() : std::string{};
-                e.extensions.push_back(std::move(xe));
+        if (g.contains("header")) {
+            ctx.header = g.at("header").get<std::string>();
+        }
+        return ctx;
+    };
+    auto entry_header = [](const json &e, const EntryCtx &ctx, const char *what) {
+        const std::string h =
+            e.contains("header") ? e.at("header").get<std::string>() : ctx.header;
+        if (h.empty()) {
+            throw std::runtime_error(std::string(what) +
+                                     " entry has no \"header\" (and its group sets no default)");
+        }
+        return ctx.dir + h;
+    };
+    const EntryCtx top{
+        j.contains("namespace") ? j.at("namespace").get<std::string>() : std::string{},
+        with_slash(j.contains("header_dir") ? j.at("header_dir").get<std::string>()
+                                            : std::string{}),
+        std::string{}};
+
+    std::function<void(const json &, const EntryCtx &)> add_classes =
+        [&](const json &arr, const EntryCtx &ctx) {
+            for (const auto &c : arr) {
+                // A group: local defaults plus a nested entry list.
+                if (c.contains("entries")) {
+                    if (c.contains("name")) {
+                        throw std::runtime_error(
+                            "a group (object with \"entries\") cannot carry \"name\"");
+                    }
+                    add_classes(c.at("entries"), group_ctx(c, ctx));
+                    continue;
+                }
+                ClassEntry e;
+                e.header = entry_header(c, ctx, "class");
+                // `name` is optional; fall back to the header's basename (stem).
+                e.name = qualify(ctx.ns, c.contains("name") ? c.at("name").get<std::string>()
+                                                            : fs::path(e.header).stem().string());
+                // `annotations` is optional: an out-of-line annotation JSON side-car
+                // (doc/range/readonly/combobox keyed by member name). Baked into
+                // bindings.h at generation time, so the user's header stays clean.
+                if (c.contains("annotations")) {
+                    e.annotations = fs::weakly_canonical(
+                        base / fs::path(c.at("annotations").get<std::string>()));
+                }
+                // `final` is optional: suppress the trampoline (see ClassEntry::final_).
+                if (c.contains("final")) {
+                    e.final_ = c.at("final").get<bool>();
+                }
+                // `extensions` is optional: free functions (first parameter `Cls&`)
+                // exposed as instance methods of this class — same entry shape as
+                // "functions" (see ClassEntry::extensions).
+                if (c.contains("extensions")) {
+                    for (const auto &x : c.at("extensions")) {
+                        FunctionEntry xe;
+                        xe.name   = qualify(ctx.ns, x.at("name").get<std::string>());
+                        xe.header = ctx.dir + x.at("header").get<std::string>();
+                        xe.doc =
+                            x.contains("doc") ? x.at("doc").get<std::string>() : std::string{};
+                        e.extensions.push_back(std::move(xe));
+                    }
+                }
+                m.classes.push_back(std::move(e));
             }
-        }
-        m.classes.push_back(std::move(e));
-    }
+        };
+    add_classes(j.at("classes"), top);
 
     // `functions` is optional: free (non-member) functions to bind. Each entry
     // gives the (optionally qualified) function name and its declaring header;
     // `doc` is an optional description (free functions carry no in-source
-    // annotation, keeping the user's headers untouched).
+    // annotation, keeping the user's headers untouched). Same group support
+    // as "classes" — a shared-header group reads especially well here.
     if (j.contains("functions")) {
-        for (const auto &f : j.at("functions")) {
-            FunctionEntry e;
-            e.name   = qualify(f.at("name").get<std::string>());
-            e.header = header_dir + f.at("header").get<std::string>();
-            e.doc    = f.contains("doc") ? f.at("doc").get<std::string>() : std::string{};
-            m.functions.push_back(std::move(e));
-        }
+        std::function<void(const json &, const EntryCtx &)> add_functions =
+            [&](const json &arr, const EntryCtx &ctx) {
+                for (const auto &f : arr) {
+                    if (f.contains("entries")) {
+                        if (f.contains("name")) {
+                            throw std::runtime_error(
+                                "a group (object with \"entries\") cannot carry \"name\"");
+                        }
+                        add_functions(f.at("entries"), group_ctx(f, ctx));
+                        continue;
+                    }
+                    FunctionEntry e;
+                    e.name   = qualify(ctx.ns, f.at("name").get<std::string>());
+                    e.header = entry_header(f, ctx, "function");
+                    e.doc    = f.contains("doc") ? f.at("doc").get<std::string>() : std::string{};
+                    m.functions.push_back(std::move(e));
+                }
+            };
+        add_functions(j.at("functions"), top);
     }
 
     // `sequences` is optional: foreign sequence containers, each a qualified
@@ -294,23 +397,33 @@ Manifest load(const fs::path &manifest_path) {
     // declare the API and you want the bodies built in rather than linked from a
     // pre-built user_lib). A single string is accepted as a one-element list.
     // Each entry is resolved relative to the manifest (or taken absolute) and may
-    // be a shell glob ("src/algorithms/*.cpp"), expanded here at generation time.
+    // be a shell glob ("src/algorithms/*.cpp"; "src/**/*.cxx" recurses —
+    // see expand_glob), expanded here at generation time. An entry starting
+    // with '!' is an EXCLUSION (same glob syntax): after all inclusions
+    // expand, the files it matches are dropped — so a near-complete tree is
+    // one recursive glob plus the odd carve-out:
+    //   ["src/**/*.cxx", "!src/mesh_imp/volume_mesh/tetgenMesh.cxx"]
+    // Exclusions are order-independent (they apply to the final list).
     if (j.contains("user_sources")) {
-        const auto &us  = j.at("user_sources");
-        auto        add = [&](const std::string &p) {
+        const auto &us = j.at("user_sources");
+        std::vector<std::string> excluded;
+        auto add = [&](const std::string &entry) {
+            const bool  excl = !entry.empty() && entry[0] == '!';
+            const std::string p = excl ? entry.substr(1) : entry;
+            auto       &dst  = excl ? excluded : m.user_sources;
             if (is_glob_pattern(p)) {
                 std::vector<fs::path> matches = expand_glob(base, p);
                 if (matches.empty()) {
                     std::fprintf(stderr,
-                                 "rosetta_gen: warning: \"user_sources\" pattern matched "
+                                 "rosetta_gen: warning: \"user_sources\" %s matched "
                                  "no files: %s\n",
-                                 p.c_str());
+                                 excl ? "exclusion" : "pattern", p.c_str());
                 }
                 for (const auto &mt : matches) {
-                    m.user_sources.push_back(mt.string());
+                    dst.push_back(mt.string());
                 }
             } else {
-                m.user_sources.push_back(fs::weakly_canonical(base / fs::path(p)).string());
+                dst.push_back(fs::weakly_canonical(base / fs::path(p)).string());
             }
         };
         if (us.is_array()) {
@@ -320,11 +433,15 @@ Manifest load(const fs::path &manifest_path) {
         } else {
             add(us.get<std::string>());
         }
-        // Drop duplicates (a file named literally and also matched by a glob, or
-        // overlapping globs) — keeping first-seen order — so a target never lists
-        // the same source twice (which CMake rejects).
+        // Apply the '!' exclusions, then drop duplicates (a file named
+        // literally and also matched by a glob, or overlapping globs) —
+        // keeping first-seen order — so a target never lists the same source
+        // twice (which CMake rejects).
         std::vector<std::string> deduped;
         for (const auto &src : m.user_sources) {
+            if (std::find(excluded.begin(), excluded.end(), src) != excluded.end()) {
+                continue;
+            }
             if (std::find(deduped.begin(), deduped.end(), src) == deduped.end()) {
                 deduped.push_back(src);
             }

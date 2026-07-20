@@ -44,7 +44,7 @@ static std::string render_example_manifest() {
     "generator_name": "mylib",
     "module_name": "mylib",
 
-    "//user_sources": "Optional .cpp (or .c) files compiled straight into every binding target. Use when the bound headers only DECLARE the API and the bodies live in these sources (rather than a pre-built library). Entries may be shell globs, e.g. \"./src/algorithms/*.cpp\". C sources make the generated CMakeLists enable_language(C) automatically.",
+    "//user_sources": "Optional .cpp (or .c) files compiled straight into every binding target. Use when the bound headers only DECLARE the API and the bodies live in these sources (rather than a pre-built library). Entries may be shell globs, e.g. \"./src/algorithms/*.cpp\"; a \"**\" component matches zero or more directories, so \"./src/**/*.cpp\" covers a whole tree. C sources make the generated CMakeLists enable_language(C) automatically.",
     "user_sources": [
         "./src/widget.cpp",
         "./src/algorithms/*.cpp"

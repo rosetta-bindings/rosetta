@@ -58,6 +58,19 @@
 //     "header_dir": "stressinv",                    // optional: dir fragment prepended
 //                                                   //   to every entry header
 //                                                   //   ("Serie.h" -> "stressinv/Serie.h")
+//                                                   // Both also appear on GROUPS inside
+//                                                   //   "classes"/"functions": an object
+//                                                   //   with "entries" (a nested list)
+//                                                   //   scoping local defaults —
+//                                                   //   namespace appends (":: " prefix
+//                                                   //   = absolute), header_dir appends,
+//                                                   //   optional "header" is the default
+//                                                   //   for entries spelling none.
+//                                                   //   Groups nest and mix with plain
+//                                                   //   entries:
+//                                                   //   { "header_dir": "solvers",
+//                                                   //     "entries": [
+//                                                   //       {"header": "Gmres.h"} ] }
 //     "targets": [                                  // shared by every class
 //       { "lang": "python", "name": "pygeom" },     // per-target module name
 //       { "lang": "wasm-expanded",                  // optional per-target linker
