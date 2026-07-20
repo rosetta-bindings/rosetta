@@ -308,6 +308,8 @@ The object form also accepts **`link_options`** — extra linker flags applied t
 ]
 ```
 
+The flags are emitted **after** the template's own `target_link_options`, so on the wasm targets — where emcc honors the *last* occurrence of a repeated `-s` setting — they can also **override** a template default, e.g. `"-sALLOW_MEMORY_GROWTH=0"` for a fixed-size heap.
+
 ### Available `lang` values
 
 Thin (reflection re-runs at the target's compile time — needs the C++26 toolchain to build) and **expanded** (reflection runs once on the host; the generated code builds with a stock compiler).

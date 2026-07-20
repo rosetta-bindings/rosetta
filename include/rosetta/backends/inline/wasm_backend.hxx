@@ -36,7 +36,7 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 target_include_directories({{LIB}} PRIVATE
     {{USER_INCLUDE}}
-    {{ROSETTA_INCLUDE}}){{USER_DEFS_BLOCK}}
+    {{ROSETTA_INCLUDE}})
 
 # Optional external user library (manifest "user_lib"). WebAssembly cannot link a
 # native .dylib/.so and has no rpath, so the manifest's `link` choice is overridden
@@ -60,7 +60,7 @@ target_compile_options({{LIB}} PRIVATE
 
 target_link_options({{LIB}} PRIVATE
     --bind -sMODULARIZE=1 -sEXPORT_NAME=createModule
-    -sENVIRONMENT=node,web -sALLOW_MEMORY_GROWTH=1 -sDISABLE_EXCEPTION_CATCHING=0)
+    -sENVIRONMENT=node,web -sALLOW_MEMORY_GROWTH=1 -sDISABLE_EXCEPTION_CATCHING=0){{USER_DEFS_BLOCK}}
 
 set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
 )CMK";

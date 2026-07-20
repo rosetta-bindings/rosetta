@@ -31,7 +31,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON){{BUILD_CONFIG}}
 
 # Only the user's headers — rosetta's include dir is deliberately absent.
 target_include_directories({{LIB}} PRIVATE
-    {{USER_INCLUDE}}){{USER_DEFS_BLOCK}}
+    {{USER_INCLUDE}})
 
 # Optional external user library (manifest "user_lib"). WebAssembly cannot link a
 # native .dylib/.so and has no rpath, so the manifest's `link` choice is overridden
@@ -61,7 +61,7 @@ target_link_options({{LIB}} PRIVATE
     # it in and export the FS/NODEFS runtime objects (M.FS, M.NODEFS).
     -sFORCE_FILESYSTEM=1
     -sEXPORTED_RUNTIME_METHODS=FS,NODEFS
-    -lnodefs.js)
+    -lnodefs.js){{USER_DEFS_BLOCK}}
 
 set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
 )CMK";
