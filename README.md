@@ -262,6 +262,8 @@ Once the scaffolder is built (first block below), one command runs the rest of t
 /path/to/rosetta/bin/rosetta_gen --build manifest.json    # → bindings/, compiled; --help lists the options
 ```
 
+Every `rosetta_gen` mode and option (`--build`, `--clean`, `--init`, plain mode) is documented with worked cases in [`docs/ROSETTA_GEN.md`](./docs/ROSETTA_GEN.md).
+
 Or step by step — generate, build, and run the project-specific tool it emits:
 
 ```bash
@@ -286,7 +288,7 @@ Result: `bindings/{python,node}/` — each a self-contained CMake project exposi
 
 > `generator_name` and `module_name` are optional manifest fields: `generator_name` (the generated `.cpp` / usage name) defaults to the manifest's folder name, and a bare-string target like `"node"` falls back to `module_name` for its module name.
 
-The full walkthrough is in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md); every manifest field is documented in [`docs/MANIFEST.md`](./docs/MANIFEST.md); the `binding_info<T>` trait and the layered tooling model are in [`docs/GENERATE.md`](./docs/GENERATE.md). The worked examples live in `examples/manifest/` and `examples/geom-lib/`.
+The full walkthrough is in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md); every manifest field is documented in [`docs/MANIFEST.md`](./docs/MANIFEST.md); the `rosetta_gen` tool and its modes are in [`docs/ROSETTA_GEN.md`](./docs/ROSETTA_GEN.md); the `binding_info<T>` trait and the layered tooling model are in [`docs/GENERATE.md`](./docs/GENERATE.md). The worked examples live in `examples/manifest/` and `examples/geom-lib/`.
 
 </details>
 

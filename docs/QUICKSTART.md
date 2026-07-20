@@ -127,6 +127,8 @@ absent is skipped with a note, and the run ends with a per-backend summary):
 # back to sources: removes gen/, bindings/ and the generator binary (never the manifest)
 ```
 
+Every `rosetta_gen` mode and option is documented with worked cases in [ROSETTA_GEN.md](ROSETTA_GEN.md).
+
 The manual steps it automates:
 
 ## 3. Build the framework tool (one time)

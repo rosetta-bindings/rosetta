@@ -30,12 +30,28 @@ manifest.json ──► rosetta_gen ──► generated/  ──cmake──► <
 
 ## Minimal example
 
+Start from a blank binding project scaffolded by `tools/rosetta_init.py` — it writes a `rosetta/` folder next to your library (`manifest.json` skeleton, a bootstrap `CMakeLists.txt` that fetches rosetta into `extern/` and builds `rosetta_gen`, `.gitignore`, `README.md`).
+
+Download the script for scaffolding: [**rosetta_init.py**](https://github.com/rosetta-bindings/rosetta/blob/main/tools/rosetta_init.py), then:
+
+```bash
+# 1. scaffold an empty starting project inside (or next to) your library
+python3 rosetta_init.py --dir my_lib/rosetta --name my_lib
+```
+
+```sh
+cd my_lib/rosetta
+```
+
+Fill in the generated `manifest.json` — the scaffold leaves `classes` empty; add the types you want bound:
+
 ```json
 {
-  "user_include": "../my_lib",
-  "rosetta_include": "../../include",
-  "generator_name": "my_person_gen",
-  "targets": ["python", "node", "rest", "wasm"],
+  "user_include": ["./include"],
+  "user_sources": ["./src/*.cxx"],
+  "rosetta_include": "./extern/rosetta/include",
+  "generator_name": "my_lib_gen",
+  "targets": ["python-expanded", "node-expanded", "rest-expanded", "wasm-expanded"],
   "classes": [
     { "name": "Person", "header": "person.h" }
   ]
@@ -45,18 +61,16 @@ manifest.json ──► rosetta_gen ──► generated/  ──cmake──► <
 Build & run:
 
 ```bash
-# 1. build the framework tool once
-cmake -G Ninja -S tools/rosetta_gen -B tools/rosetta_gen/build
-cmake --build tools/rosetta_gen/build
+# 2. one-time bootstrap: fetch rosetta into extern/ and build rosetta_gen
+#    (binary lands in extern/rosetta/bin)
+cmake -B build && cmake --build build
 
-# 2. manifest → project generator source
-./tools/rosetta_gen/build/rosetta_gen path/to/manifest.json
-
-# 3. build & run the generated <generator_name>
-cmake -G Ninja -S path/to/generated -B path/to/generated/build
-cmake --build path/to/generated/build
-./path/to/generated/build/my_person_gen path/to/output
+# 3. the whole pipeline in one command: emit + build + run the generator,
+#    then compile every backend the manifest declares
+./extern/rosetta/bin/rosetta_gen --build manifest.json
 ```
+
+`--build --help` lists the options (`--only`/`--skip` backends, `--jobs`, `--fresh`, …), and `rosetta_gen --clean manifest.json` removes everything it generated. Every mode and option of the tool — including running the steps `--build` automates by hand — is documented in [ROSETTA_GEN.md](ROSETTA_GEN.md).
 
 ---
 
@@ -98,8 +112,7 @@ Keys beginning with `//` (e.g. `"//1"`, `"//note"`) are treated as comments and 
 "classes": [
   { "name": "Model", "header": "Model.h", "doc": "the model class" },
   { "header": "Point.h" },
-  { "name": "space::Vector3", "header": "Vector3.h",
-    "annotations": "Vector3.ann.json" }
+  { "name": "space::Vector3", "header": "Vector3.h", "annotations": "Vector3.ann.json" }
 ]
 ```
 
@@ -134,9 +147,9 @@ When every entry repeats the same namespace and the same header folder —
 "namespace": "stressinv",
 "header_dir": "stressinv",
 "classes": [
-  {"header": "Serie.h"},
-  {"header": "Data.h"},
-  {"name": "CostMetric", "header": "cost.h"}
+    {"header": "Serie.h"},
+    {"header": "Data.h"},
+    {"name": "CostMetric", "header": "cost.h"}
 ]
 ```
 
@@ -448,7 +461,7 @@ The flags apply to the *bindings* (and any [`user_sources`](#compiling-user-sour
 
 ```json
 {
-  "//": "Bindings for the geom library, mixing per-target module names,",
+  "//1": "Bindings for the geom library, mixing per-target module names,",
   "//2": "out-of-line annotations and a free function.",
 
   "user_include": "./geom",
@@ -467,9 +480,9 @@ The flags apply to the *bindings* (and any [`user_sources`](#compiling-user-sour
   "optimization": "-O2",
 
   "targets": [
-    { "lang": "python", "name": "geom" },
-    { "lang": "nanobind", "name": "geom" },
-    { "lang": "node", "name": "geom" },
+    { "lang": "python-expanded", "name": "geom" },
+    { "lang": "nanobind-expanded", "name": "geom" },
+    { "lang": "node-expanded", "name": "geom" },
     { "lang": "wasm-expanded", "name": "geom" },
     { "lang": "typescript" },
     { "lang": "markdown" },
