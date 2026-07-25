@@ -239,7 +239,10 @@ python3 -c "import {{LIB}}"
                     }
                     continue; // adapter or nothing (see px_seq_method)
                 }
-                if (!px_method_ok(m, c)) {
+                // px_method_ok no longer rejects an overload set (the pybind
+                // emitter disambiguates with a static_cast); this emitter
+                // still spells the bare `&T::name`, so keep skipping the set.
+                if (m.is_overloaded || !px_method_ok(m, c)) {
                     continue; // signature the emitted line could not compile
                 }
                 segs.push_back(nbx_method_segment(k, m));

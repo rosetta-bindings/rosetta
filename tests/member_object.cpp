@@ -109,9 +109,13 @@ TEST(MemberObject, PythonStillBindsPlainFieldAndStoreMethods) {
     EXPECT_NE(s.find("c.def(\"grow\", &MoStore::grow"), std::string::npos);
 }
 
-TEST(MemberObject, PythonSkipsOverloadSetKeepsPlain) {
+TEST(MemberObject, PythonBindsOverloadSurvivorViaCastKeepsPlain) {
     const std::string s = source_for("python-expanded");
-    EXPECT_EQ(s.find("&MoOver::f"), std::string::npos); // ambiguous — skipped
+    // The surviving (first-declared) overload binds through an explicit
+    // static_cast to its exact signature — the bare &MoOver::f would be
+    // ambiguous.
+    EXPECT_NE(s.find("c.def(\"f\", static_cast<int (MoOver::*)() const>(&MoOver::f)"),
+              std::string::npos);
     EXPECT_NE(s.find("c.def(\"g\", &MoOver::g"), std::string::npos);
 }
 
@@ -123,9 +127,13 @@ TEST(MemberObject, NodeEmitsAliasedAccessor) {
     EXPECT_NE(s.find("set_field_readonly<&MoOwner::store, \"store\">"), std::string::npos);
 }
 
-TEST(MemberObject, NodeSkipsOverloadSetKeepsPlain) {
+TEST(MemberObject, NodeBindsOverloadSurvivorViaAdapterKeepsPlain) {
     const std::string s = source_for("node-expanded");
+    // No bare member pointer for the set — the survivor binds through a free
+    // adapter that calls by name (overload resolution happens in the adapter).
     EXPECT_EQ(s.find("&MoOver::f"), std::string::npos);
+    EXPECT_NE(s.find("ovl_MoOver_f"), std::string::npos);
+    EXPECT_NE(s.find("ext_method<&rosetta_nx_seq::ovl_MoOver_f>"), std::string::npos);
     EXPECT_NE(s.find("call_method<&MoOver::g>"), std::string::npos);
 }
 
@@ -191,9 +199,13 @@ TEST(MemberObject, FinalSuppressesPythonTrampoline) {
 
 // ---- gates stay conservative where not implemented ---------------------------
 
-TEST(MemberObject, WasmAndLuaSkipOverloadSet) {
-    for (const char *lang : {"wasm-expanded", "lua-expanded"}) {
-        const std::string s = source_for(lang);
-        EXPECT_EQ(s.find("&MoOver::f"), std::string::npos) << lang;
-    }
+TEST(MemberObject, WasmBindsOverloadSurvivorLuaSkips) {
+    // wasm always spells an explicit-signature cast, so the surviving
+    // (first-declared) overload binds; lua still spells the bare member
+    // pointer and keeps skipping the set.
+    const std::string w = source_for("wasm-expanded");
+    EXPECT_NE(w.find("static_cast<int (MoOver::*)() const>(&MoOver::f)"),
+              std::string::npos);
+    const std::string l = source_for("lua-expanded");
+    EXPECT_EQ(l.find("&MoOver::f"), std::string::npos);
 }

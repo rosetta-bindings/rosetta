@@ -395,11 +395,9 @@ namespace rosetta_wx {
         }
 
         inline bool wx_method_ok(const GenMethod &m, const GenContext &c) {
-            // Overload set: the bare `&T::name` the emitter spells would be
-            // ambiguous — skip the whole set.
-            if (m.is_overloaded) {
-                return false;
-            }
+            // An overload set is fine here: the emitter always spells an
+            // explicit static_cast to the exact signature, so the surviving
+            // (first-declared) entry binds unambiguously.
             if (m.ret.kind != "void" && !wx_marshalable(m.ret, c)) {
                 return false;
             }

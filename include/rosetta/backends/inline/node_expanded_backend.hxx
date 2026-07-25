@@ -387,6 +387,28 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     }
                     continue;
                 }
+                if (m.is_overloaded && !m.is_extension) {
+                    // Overload set: `&T::name` in the thunk template argument
+                    // would be ambiguous. Bind the surviving (first-declared)
+                    // entry through a free adapter that calls by NAME with
+                    // concrete arguments — same trick as the sequence path.
+                    GenMethod probe    = m;
+                    probe.is_overloaded = false;
+                    if (!nx_method_ok(probe)) {
+                        continue; // the survivor's own signature fails the gates
+                    }
+                    const std::string an = "ovl_" + kx + "_" + m.name;
+                    if (m.is_static) {
+                        adapters += nx_seq_adapter_def(an, "", m, self + "::" + m.name);
+                        s += "        props.push_back(This::StaticMethod<&This::call_static<"
+                             "&rosetta_nx_seq::" + an + ">>(\"" + m.name + "\"));\n";
+                    } else {
+                        adapters += nx_seq_adapter_def(an, self, m, "self." + m.name);
+                        s += "        props.push_back(This::InstanceMethod<&This::ext_method<"
+                             "&rosetta_nx_seq::" + an + ">>(\"" + m.name + "\"));\n";
+                    }
+                    continue;
+                }
                 if (!nx_method_ok(m)) {
                     continue;
                 }

@@ -204,6 +204,15 @@ python3 -c "import {{LIB}}"
             if (t.is_pointer) {
                 return px_is_bound_class(t, c);
             }
+            if (t.is_callback) {
+                return true; // pybind11/functional.h marshals std::function
+            }
+            if (t.kind == "unknown" && !t.is_sequence) {
+                // A raw C array (Matrix33::data() -> double[3][3]&) or another
+                // exotic the IR could not classify: no caster, and its exact
+                // spelling cannot even ride the overload-survivor static_cast.
+                return false;
+            }
             if (t.kind == "vector" && !t.element.empty()) {
                 return px_marshalable(t.element.front(), c);
             }
@@ -215,11 +224,11 @@ python3 -c "import {{LIB}}"
         }
 
         inline bool px_method_ok(const GenMethod &m, const GenContext &c) {
-            // An overload set: the bare `&T::name` member pointer the emitter
-            // spells would be ambiguous — skip the whole set.
-            if (m.is_overloaded) {
-                return false;
-            }
+            // An overload set is NOT rejected here: the walk keeps its
+            // first-declared entry, and expanded_method() spells an explicit
+            // static_cast to that entry's exact signature, so the member
+            // pointer is unambiguous. The remaining gates below check the
+            // survivor's own signature as usual.
             if (!px_marshalable(m.ret, c)) {
                 return false;
             }
@@ -473,20 +482,54 @@ python3 -c "import {{LIB}}"
         }
 
         // Explicit pybind for one method. Overloads are deduped by name in the
-        // walk and the surviving IR entry is flagged is_overloaded (px_method_ok
-        // skips it), so the bare &T::m member pointer here is unambiguous. An
+        // walk; the surviving (first-declared) entry is flagged is_overloaded
+        // and binds through an explicit static_cast to its exact signature —
+        // the bare &T::m member pointer would be ambiguous for the set. An
         // extension method binds its free function instead — pybind treats a
         // free function whose first parameter is T& as an instance method.
+        //
+        // A raw-pointer return (Model::addSurface() -> Surface*) rides
+        // reference_internal (plain reference for a static): pybind's automatic
+        // policy would TAKE OWNERSHIP of the pointer, double-freeing an object
+        // the C++ side still owns.
         inline std::string expanded_method(const GenClass &k, const GenMethod &m) {
             const std::string dq = doc_arg(m.doc);
             if (m.is_extension) {
                 return "    c.def(\"" + m.name + "\", &" + m.ext_qualified + dq + ");\n";
             }
-            const std::string mp = "&" + qualified_of(k) + "::" + m.name;
-            if (m.is_static) {
-                return "    c.def_static(\"" + m.name + "\", " + mp + dq + ");\n";
+            const std::string kq = qualified_of(k);
+            std::string       mp = "&" + kq + "::" + m.name;
+            if (m.is_overloaded) {
+                std::string args;
+                for (std::size_t j = 0; j < m.param_cpp.size(); ++j) {
+                    std::string one = qualify_std(m.param_cpp[j]);
+                    if (j < m.params.size()) {
+                        one = qualify_objects(std::move(one), m.params[j].type);
+                    }
+                    args += (j ? ", " : "") + one;
+                }
+                std::string quals;
+                if (m.is_const) {
+                    quals += " const";
+                }
+                if (m.is_noexcept) {
+                    quals += " noexcept";
+                }
+                const std::string ret = qualify_objects(qualify_std(m.ret_cpp), m.ret);
+                const std::string fp  = m.is_static
+                                            ? (ret + " (*)(" + args + ")" + quals)
+                                            : (ret + " (" + kq + "::*)(" + args + ")" + quals);
+                mp = "static_cast<" + fp + ">(" + mp + ")";
             }
-            return "    c.def(\"" + m.name + "\", " + mp + dq + ");\n";
+            const std::string policy =
+                m.ret.is_pointer
+                    ? (m.is_static ? ", py::return_value_policy::reference"
+                                   : ", py::return_value_policy::reference_internal")
+                    : "";
+            if (m.is_static) {
+                return "    c.def_static(\"" + m.name + "\", " + mp + policy + dq + ");\n";
+            }
+            return "    c.def(\"" + m.name + "\", " + mp + policy + dq + ");\n";
         }
 
         // The constructors, as py::init<...>() lines. Exact param spellings come

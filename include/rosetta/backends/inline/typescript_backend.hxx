@@ -121,19 +121,19 @@ namespace rosetta {
                 }
 
                 for (const auto &m : k.methods) {
-                    // Same visibility rule as the runtime backends: an
-                    // overload set, a non-copyable class return, or a
-                    // non-copyable by-value parameter is skipped there, so
-                    // don't declare it here either. A signature touching a
-                    // foreign sequence follows the adapter rule instead:
-                    // declared iff adaptable (even when overloaded — the
-                    // adapter calls by name), hidden otherwise.
+                    // Same visibility rule as the runtime backends: a
+                    // non-copyable class return or a non-copyable by-value
+                    // parameter is skipped there, so don't declare it here
+                    // either. An overload set IS declared — the runtime
+                    // backends bind its surviving (first-declared) entry via
+                    // an explicit-signature cast / a by-name adapter. A
+                    // signature touching a foreign sequence follows the
+                    // adapter rule: declared iff adaptable, hidden otherwise.
                     bool visible;
                     if (seq_touches(m)) {
                         visible = seq_adaptable(m);
                     } else {
-                        visible = !m.is_overloaded &&
-                                  !(m.ret.kind == "object" && !m.ret.copy_constructible);
+                        visible = !(m.ret.kind == "object" && !m.ret.copy_constructible);
                     }
                     for (const auto &p : m.params) {
                         visible = visible && !(p.type.kind == "object" && !p.is_ref &&
