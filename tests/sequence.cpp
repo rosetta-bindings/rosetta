@@ -164,15 +164,15 @@ TEST(Sequence, TypescriptDeclaresArrays) {
     ASSERT_FALSE(c.classes.empty());
     for (const auto &f : c.classes.front().fields) {
         if (f.name == "weights") {
-            EXPECT_EQ(ts_type(f.type), "number[]");
+            EXPECT_EQ(ts_type(f.type, c), "number[]");
         }
     }
     for (const auto &m : c.classes.front().methods) {
         if (m.name == "points") {
-            EXPECT_EQ(ts_type(m.ret), "number[]");
+            EXPECT_EQ(ts_type(m.ret, c), "number[]");
         }
         if (m.name == "make") {
-            EXPECT_EQ(ts_type(m.ret), "number[]");
+            EXPECT_EQ(ts_type(m.ret, c), "number[]");
         }
     }
 }

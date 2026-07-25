@@ -150,7 +150,9 @@ namespace rosetta_wx {
                        ">";
             }
             if (t.kind == "object" || t.kind == "enum") {
-                return t.object;
+                // Qualified when known: the unqualified identifier is ambiguous
+                // once two bound namespaces declare it (the "expose" case).
+                return t.object_qualified.empty() ? t.object : t.object_qualified;
             }
             if (t.kind == "string") {
                 return "std::string";
@@ -170,11 +172,14 @@ namespace rosetta_wx {
         // Can embind marshal this type? Scalars, bool, string, enums, user
         // objects, and vectors of marshalable types qualify; std::function and
         // anything else the IR tagged "unknown" do not.
-        // Is `name` (unqualified) one of the bound classes? A raw pointer is only
-        // marshalable when its pointee is itself registered with embind.
-        inline bool wx_is_bound(const std::string &name, const GenContext &c) {
+        // Is the IR type one of the bound classes? Compared by qualified
+        // spelling when the IR carries it (two bound classes may share an
+        // unqualified identifier — the "expose" rename case). A raw pointer is
+        // only marshalable when its pointee is itself registered with embind.
+        inline bool wx_is_bound(const GenType &t, const GenContext &c) {
             for (const auto &k : c.classes) {
-                if (k.name == name) {
+                if (t.object_qualified.empty() ? (k.name == t.object)
+                                               : (qualified_of(k) == t.object_qualified)) {
                     return true;
                 }
             }
@@ -186,7 +191,7 @@ namespace rosetta_wx {
             // allow_raw_pointers (non-owning), returning/accepting a JS handle to
             // the C++ object.
             if (t.is_pointer) {
-                return wx_is_bound(t.object, c);
+                return wx_is_bound(t, c);
             }
             if (t.kind == "unknown") {
                 return false;
@@ -196,7 +201,7 @@ namespace rosetta_wx {
             // std::initializer_list, a forward-declared helper like ModelRegions —
             // has no embind type and would abort the build.
             if (t.kind == "object") {
-                return wx_is_bound(t.object, c);
+                return wx_is_bound(t, c);
             }
             if (t.kind == "vector") {
                 if (t.element.empty()) {
@@ -236,7 +241,7 @@ namespace rosetta_wx {
                 if (qualify_std(t.spelling).rfind("std::array<", 0) == 0) {
                     return true; // handled element-wise by the rosetta_wx helper
                 }
-                return wx_is_bound(t.object, c); // registered class ↔ emscripten::val
+                return wx_is_bound(t, c); // registered class ↔ emscripten::val
             }
             return false;
         }
@@ -361,7 +366,7 @@ namespace rosetta_wx {
                     o.pre += seq_decl_stmts(t, an, sn, "            ");
                     o.args += sn;
                 } else if (exact) {
-                    o.decls += qualify_std(param_cpp[j]) + " " + an;
+                    o.decls += qualify_objects(qualify_std(param_cpp[j]), t) + " " + an;
                     o.args += an;
                 } else if (t.kind == "object") {
                     o.decls += wx_cpp_type(t) + " &" + an;
@@ -459,10 +464,13 @@ namespace rosetta_wx {
                 }
                 if (params[j].type.is_callback) {
                     a.decls += "emscripten::val " + an;
-                    a.args += "rosetta_wx::make_fn<" + qualify_std(params[j].type.spelling) + ">(" +
-                              an + ")";
+                    a.args += "rosetta_wx::make_fn<" +
+                              qualify_objects(qualify_std(params[j].type.spelling),
+                                              params[j].type) +
+                              ">(" + an + ")";
                 } else {
-                    a.decls += qualify_std(param_cpp[j]) + " " + an;
+                    a.decls += qualify_objects(qualify_std(param_cpp[j]), params[j].type) +
+                               " " + an;
                     a.args += an;
                 }
             }
@@ -569,7 +577,7 @@ namespace rosetta_wx {
         // EmscriptenVisitor::field: readonly -> getter + throwing setter; range +
         // arithmetic -> validating setter; otherwise the member-pointer property.
         inline std::string wx_field_segment(const GenClass &k, const GenField &f) {
-            const std::string self = k.name;
+            const std::string self = qualified_of(k);
             if (f.is_readonly) {
                 const std::string ty = wx_cpp_type(f.type);
                 return ".property(\"" + f.name + "\",\n            +[](const " + self +
@@ -592,19 +600,19 @@ namespace rosetta_wx {
 
         inline std::string wx_class(const GenClass &k, const GenContext &c) {
             std::vector<std::string> segs;
+            // Qualified spelling for emitted C++, exposed name for the JS side —
+            // see the "expose" rename notes in generate.h.
+            const std::string kn = qualified_of(k);
 
             // First bound base, spelled with emscripten::base<> so embind wires up
             // the prototype chain and up-casts. embind supports single inheritance,
             // so only the first base that is itself bound is used.
             std::string base_arg;
             {
-                auto qualified = [](const GenClass &g) {
-                    return g.name_space.empty() ? g.name : g.name_space + "::" + g.name;
-                };
                 for (const auto &b : k.bases) {
                     bool bound = false;
                     for (const auto &g : c.classes) {
-                        if (qualified(g) == b) {
+                        if (qualified_of(g) == b) {
                             bound = true;
                             break;
                         }
@@ -657,14 +665,18 @@ namespace rosetta_wx {
                     // that receives the callback as an emscripten::val, wraps it, and
                     // heap-allocates the object (embind owns the returned pointer).
                     const WxAdapterParams ad = wx_adapter_params(params, ir);
-                    segs.push_back(".constructor(+[](" + ad.decls + ") -> " + k.name +
-                                   " * {\n            return new " + k.name + "(" + ad.args +
+                    segs.push_back(".constructor(+[](" + ad.decls + ") -> " + kn +
+                                   " * {\n            return new " + kn + "(" + ad.args +
                                    ");\n        }, emscripten::allow_raw_pointers())");
                     continue;
                 }
                 std::string args;
                 for (std::size_t j = 0; j < params.size(); ++j) {
-                    args += (j ? ", " : "") + qualify_std(params[j]);
+                    std::string one = qualify_std(params[j]);
+                    if (j < ir.size()) {
+                        one = qualify_objects(std::move(one), ir[j].type);
+                    }
+                    args += (j ? ", " : "") + one;
                 }
                 const std::string policy = raw_ptr ? "emscripten::allow_raw_pointers()" : "";
                 segs.push_back(".constructor<" + args + ">(" + policy + ")");
@@ -680,15 +692,15 @@ namespace rosetta_wx {
                     // would name the unregistered foreign type).
                     if (seq_ok(f.type)) {
                         const std::string vt  = seq_boundary_cpp(f.type);
-                        const std::string get = "+[](const " + k.name + " &s) { return " +
+                        const std::string get = "+[](const " + kn + " &s) { return " +
                                                 seq_from_expr(f.type, "s." + f.name) + "; }";
                         std::string set;
                         if (f.is_readonly) {
-                            set = "+[](" + k.name + " &, " + vt +
+                            set = "+[](" + kn + " &, " + vt +
                                   ") { throw std::runtime_error(\"" + f.name +
                                   " is read-only\"); }";
                         } else {
-                            set = "+[](" + k.name + " &s, " + vt + " v) { s." + f.name +
+                            set = "+[](" + kn + " &s, " + vt + " v) { s." + f.name +
                                   ".resize(v.size()); std::copy(v.begin(), v.end(), s." +
                                   f.name + ".begin()); }";
                         }
@@ -709,8 +721,8 @@ namespace rosetta_wx {
                     for (const auto &m : k.methods) {
                         clashes = clashes || m.name == f.name;
                     }
-                    if (f.type.kind == "object" && wx_is_bound(f.type.object, c) && !clashes) {
-                        segs.push_back(".function(\"" + f.name + "\", +[](" + k.name +
+                    if (f.type.kind == "object" && wx_is_bound(f.type, c) && !clashes) {
+                        segs.push_back(".function(\"" + f.name + "\", +[](" + kn +
                                        " &s) { return &s." + f.name +
                                        "; }, emscripten::allow_raw_pointers())");
                     }
@@ -728,15 +740,15 @@ namespace rosetta_wx {
                     const WxSeqSig sig = wx_seq_sig(m.params, m.param_cpp);
                     std::string    decls, call;
                     if (m.is_extension) {
-                        decls = k.name + " &self" +
+                        decls = kn + " &self" +
                                 (sig.decls.empty() ? "" : ", " + sig.decls);
                         call = m.ext_qualified + "(self" +
                                (sig.args.empty() ? "" : ", " + sig.args) + ")";
                     } else if (m.is_static) {
                         decls = sig.decls;
-                        call  = k.name + "::" + m.name + "(" + sig.args + ")";
+                        call  = kn + "::" + m.name + "(" + sig.args + ")";
                     } else {
-                        decls = k.name + " &self" +
+                        decls = kn + " &self" +
                                 (sig.decls.empty() ? "" : ", " + sig.decls);
                         call = "self." + m.name + "(" + sig.args + ")";
                     }
@@ -766,7 +778,7 @@ namespace rosetta_wx {
                     }
                     const WxAdapterParams ad = wx_adapter_params(m.param_cpp, m.params);
                     const std::string     decls =
-                        k.name + " &self" + (ad.decls.empty() ? "" : ", " + ad.decls);
+                        kn + " &self" + (ad.decls.empty() ? "" : ", " + ad.decls);
                     const std::string call = "self." + m.name + "(" + ad.args + ")";
                     const std::string body = (m.ret.kind == "void")
                                                  ? ("            " + call + ";\n")
@@ -782,7 +794,11 @@ namespace rosetta_wx {
                 // overloaded method (embind then reports "no matching function").
                 std::string args;
                 for (std::size_t j = 0; j < m.param_cpp.size(); ++j) {
-                    args += (j ? ", " : "") + qualify_std(m.param_cpp[j]);
+                    std::string one = qualify_std(m.param_cpp[j]);
+                    if (j < m.params.size()) {
+                        one = qualify_objects(std::move(one), m.params[j].type);
+                    }
+                    args += (j ? ", " : "") + one;
                 }
                 std::string quals;
                 if (m.is_const) {
@@ -791,12 +807,12 @@ namespace rosetta_wx {
                 if (m.is_noexcept) {
                     quals += " noexcept";
                 }
-                const std::string ret = qualify_std(m.ret_cpp);
+                const std::string ret = qualify_objects(qualify_std(m.ret_cpp), m.ret);
                 const std::string fp =
                     m.is_static ? (ret + " (*)(" + args + ")" + quals)
-                                : (ret + " (" + k.name + "::*)(" + args + ")" + quals);
+                                : (ret + " (" + kn + "::*)(" + args + ")" + quals);
                 const std::string mp =
-                    "static_cast<" + fp + ">(&" + k.name + "::" + m.name + ")";
+                    "static_cast<" + fp + ">(&" + kn + "::" + m.name + ")";
                 // A raw pointer to a bound class needs the allow_raw_pointers policy.
                 const std::string policy =
                     wx_method_has_raw_ptr(m) ? ", emscripten::allow_raw_pointers()" : "";
@@ -805,7 +821,7 @@ namespace rosetta_wx {
             }
 
             std::string s =
-                "    emscripten::class_<" + k.name + base_arg + ">(\"" + k.name + "\")";
+                "    emscripten::class_<" + kn + base_arg + ">(\"" + exposed_of(k) + "\")";
             if (segs.empty()) {
                 return s + ";\n";
             }

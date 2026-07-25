@@ -123,6 +123,13 @@ struct ClassEntry {
     std::string header;
     fs::path    annotations; // optional out-of-line annotation JSON (absolute); empty if none
 
+    // Optional "expose": the binding name, overriding the C++ identifier —
+    // how two classes sharing an unqualified name (arch::Data and
+    // arch::sinv::Data) coexist in one module. Emitted as
+    // binding_info<T>::expose; empty means the class binds under its own
+    // (unqualified) identifier.
+    std::string expose;
+
     // Optional "final": true — no trampoline even when the class has public
     // virtual methods (they still bind as callable methods; host-language
     // overriding is off). Also what makes the class eligible as a node

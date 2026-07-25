@@ -12,8 +12,12 @@
 namespace rosetta {
     namespace gen_detail {
 
-        // Render a neutral GenType as a TypeScript type expression.
-        inline std::string ts_type(const GenType &t) {
+        // Render a neutral GenType as a TypeScript type expression. A class /
+        // enum reference resolves against the bound-class list so it names the
+        // EXPOSED class (manifest "expose" may rename it; two bound classes may
+        // even share an unqualified C++ identifier). Unresolved objects keep the
+        // reflected identifier, matching the previous behavior.
+        inline std::string ts_type(const GenType &t, const GenContext &c) {
             if (t.kind == "number") {
                 return "number";
             }
@@ -27,26 +31,37 @@ namespace rosetta {
                 return "void";
             }
             if (t.kind == "object" || t.kind == "enum") {
-                return t.object.empty() ? "any" : t.object;
+                if (t.object.empty()) {
+                    return "any";
+                }
+                for (const auto &k : c.classes) {
+                    if (t.object_qualified.empty() ? (k.name == t.object)
+                                                   : (qualified_of(k) == t.object_qualified)) {
+                        return exposed_of(k);
+                    }
+                }
+                return t.object;
             }
             if (t.kind == "vector") {
-                return (t.element.empty() ? std::string("any") : ts_type(t.element.front())) + "[]";
+                return (t.element.empty() ? std::string("any")
+                                          : ts_type(t.element.front(), c)) +
+                       "[]";
             }
             if (t.is_sequence && !t.element.empty()) {
                 // A trait-registered foreign sequence marshals as an array of
                 // its element in the opted-in runtime backends.
-                return ts_type(t.element.front()) + "[]";
+                return ts_type(t.element.front(), c) + "[]";
             }
             return "any"; // unknown (e.g. std::function, unsupported types)
         }
 
-        inline std::string ts_params(const std::vector<GenParam> &ps) {
+        inline std::string ts_params(const std::vector<GenParam> &ps, const GenContext &c) {
             std::string s;
             for (std::size_t i = 0; i < ps.size(); ++i) {
                 if (i) {
                     s += ", ";
                 }
-                s += ps[i].name + ": " + ts_type(ps[i].type);
+                s += ps[i].name + ": " + ts_type(ps[i].type, c);
             }
             return s;
         }
@@ -64,10 +79,10 @@ namespace rosetta {
             }
 
             for (const auto &k : c.classes) {
-                out += "    export class " + k.name + " {\n";
+                out += "    export class " + exposed_of(k) + " {\n";
 
                 for (const auto &ct : k.ctors) {
-                    out += "        constructor(" + ts_params(ct) + ");\n";
+                    out += "        constructor(" + ts_params(ct, c) + ");\n";
                 }
 
                 for (const auto &f : k.fields) {
@@ -82,7 +97,9 @@ namespace rosetta {
                         // anything else non-copyable stays hidden.
                         bool bound = false;
                         for (const auto &kk : c.classes) {
-                            bound = bound || kk.name == f.type.object;
+                            bound = bound || (f.type.object_qualified.empty()
+                                                  ? kk.name == f.type.object
+                                                  : qualified_of(kk) == f.type.object_qualified);
                         }
                         bool clashes = false;
                         for (const auto &m : k.methods) {
@@ -92,7 +109,7 @@ namespace rosetta {
                             if (!f.doc.empty()) {
                                 out += "        /** " + f.doc + " */\n";
                             }
-                            out += "        readonly " + f.name + ": " + ts_type(f.type) + ";\n";
+                            out += "        readonly " + f.name + ": " + ts_type(f.type, c) + ";\n";
                         }
                         continue;
                     }
@@ -100,7 +117,7 @@ namespace rosetta {
                         out += "        /** " + f.doc + " */\n";
                     }
                     out += "        " + std::string(f.is_readonly ? "readonly " : "") + f.name +
-                           ": " + ts_type(f.type) + ";\n";
+                           ": " + ts_type(f.type, c) + ";\n";
                 }
 
                 for (const auto &m : k.methods) {
@@ -129,7 +146,7 @@ namespace rosetta {
                         out += "        /** " + m.doc + " */\n";
                     }
                     out += "        " + std::string(m.is_static ? "static " : "") + m.name + "(" +
-                           ts_params(m.params) + "): " + ts_type(m.ret) + ";\n";
+                           ts_params(m.params, c) + "): " + ts_type(m.ret, c) + ";\n";
                 }
 
                 out += "    }\n";
@@ -139,8 +156,8 @@ namespace rosetta {
                 if (!f.doc.empty()) {
                     out += "    /** " + f.doc + " */\n";
                 }
-                out += "    export function " + f.name + "(" + ts_params(f.params) +
-                       "): " + ts_type(f.ret) + ";\n";
+                out += "    export function " + f.name + "(" + ts_params(f.params, c) +
+                       "): " + ts_type(f.ret, c) + ";\n";
             }
 
             out += "}\n";

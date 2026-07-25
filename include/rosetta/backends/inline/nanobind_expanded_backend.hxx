@@ -203,7 +203,7 @@ python3 -c "import {{LIB}}"
             return ".def(\"" + m.name + "\", " + mp + dq + ")";
         }
 
-        inline std::string nbx_class(const GenClass &k) {
+        inline std::string nbx_class(const GenClass &k, const GenContext &c) {
             std::vector<std::string> segs;
 
             bool saw_default = false;
@@ -227,19 +227,19 @@ python3 -c "import {{LIB}}"
                     }
                     continue; // never hand nanobind the casterless foreign type
                 }
-                if (!px_field_ok(f)) {
+                if (!px_field_ok(f, c)) {
                     continue; // non-copyable member object (shared pybind gate)
                 }
                 segs.push_back(nbx_field_segment(k, f));
             }
             for (const auto &m : k.methods) {
                 if (seq_touches(m)) {
-                    if (seq_adaptable(m) && px_seq_rest_ok(m)) {
+                    if (seq_adaptable(m) && px_seq_rest_ok(m, c)) {
                         segs.push_back(nbx_seq_method_segment(k, m));
                     }
                     continue; // adapter or nothing (see px_seq_method)
                 }
-                if (!px_method_ok(m)) {
+                if (!px_method_ok(m, c)) {
                     continue; // signature the emitted line could not compile
                 }
                 segs.push_back(nbx_method_segment(k, m));
@@ -259,14 +259,14 @@ python3 -c "import {{LIB}}"
                 body += nbx_enum(e);
             }
             for (const auto &k : c.classes) {
-                body += nbx_class(k);
+                body += nbx_class(k, c);
             }
             for (const auto &f : c.functions) {
                 GenMethod probe; // free functions go through the same gates
                 probe.ret    = f.ret;
                 probe.params = f.params;
                 if (seq_touches(probe)) {
-                    if (seq_adaptable(probe) && px_seq_rest_ok(probe)) {
+                    if (seq_adaptable(probe) && px_seq_rest_ok(probe, c)) {
                         const PxSeqSig    sig  = px_seq_sig(f.params, {});
                         const std::string call = f.qualified + "(" + sig.args + ")";
                         std::string       fb   = sig.pre;
@@ -283,7 +283,7 @@ python3 -c "import {{LIB}}"
                     }
                     continue;
                 }
-                if (!px_method_ok(probe)) {
+                if (!px_method_ok(probe, c)) {
                     continue;
                 }
                 body += "    m.def(\"" + f.name + "\", &" + f.qualified + nbx_doc_arg(f.doc) + ");\n";

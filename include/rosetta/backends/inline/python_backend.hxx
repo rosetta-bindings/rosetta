@@ -124,13 +124,17 @@ python3 -c "import {{LIB}}"
         // virtual> };`. Each override reproduces the base signature exactly
         // (cv/ref/noexcept) — otherwise it would hide rather than override — and
         // routes through PYBIND11_OVERRIDE[_PURE] so a Python subclass can take over.
+        // Named after the EXPOSED name (unique across the module) and derived
+        // from the QUALIFIED spelling, so two bound classes sharing an
+        // unqualified identifier (the "expose" rename case) coexist in one TU.
         inline std::string trampoline_for(const GenClass &k) {
             const auto virts = virtual_methods(k);
             if (virts.empty()) {
                 return {};
             }
-            std::string s = "class Py_" + k.name + " : public " + k.name + " {\npublic:\n";
-            s += "    using " + k.name + "::" + k.name + ";\n";
+            const std::string kq = qualified_of(k);
+            std::string s = "class Py_" + exposed_of(k) + " : public " + kq + " {\npublic:\n";
+            s += "    using " + kq + "::" + k.name + ";\n";
             for (const GenMethod *m : virts) {
                 // A virtual whose signature pybind11 can't cast (e.g. a pointer to an
                 // incomplete type) would make PYBIND11_OVERRIDE fail to compile. Skip
@@ -139,11 +143,19 @@ python3 -c "import {{LIB}}"
                 if (!m->sig_bindable) {
                     continue;
                 }
-                std::string sig = "    " + m->ret_cpp + " " + m->name + "(";
+                // Exact spellings re-qualified per the IR: an unqualified user
+                // token ("Data &") is ambiguous once two bound namespaces
+                // declare it (see qualify_objects).
+                const std::string rq  = qualify_objects(m->ret_cpp, m->ret);
+                std::string sig = "    " + rq + " " + m->name + "(";
                 std::string fwd; // forwarded argument names for the macro
                 for (std::size_t i = 0; i < m->param_cpp.size(); ++i) {
                     const std::string pn = "p" + std::to_string(i);
-                    sig += (i ? ", " : "") + m->param_cpp[i] + " " + pn;
+                    std::string       pt = m->param_cpp[i];
+                    if (i < m->params.size()) {
+                        pt = qualify_objects(std::move(pt), m->params[i].type);
+                    }
+                    sig += (i ? ", " : "") + pt + " " + pn;
                     fwd += (i ? ", " : "") + pn;
                 }
                 sig += ")";
@@ -155,8 +167,8 @@ python3 -c "import {{LIB}}"
                 }
                 sig += " override {\n";
                 sig += std::string("        ") +
-                       (m->is_pure ? "PYBIND11_OVERRIDE_PURE(" : "PYBIND11_OVERRIDE(") + m->ret_cpp +
-                       ", " + k.name + ", " + m->name + ", " + fwd + ");\n    }\n";
+                       (m->is_pure ? "PYBIND11_OVERRIDE_PURE(" : "PYBIND11_OVERRIDE(") + rq +
+                       ", " + kq + ", " + m->name + ", " + fwd + ");\n    }\n";
                 s += sig;
             }
             s += "};\n";
@@ -184,15 +196,11 @@ python3 -c "import {{LIB}}"
         }
 
         inline std::string python_bindings(const GenContext &c) {
-            // Qualified name of a bound class, to match against GenClass::bases.
-            auto qualified = [](const GenClass &k) {
-                return k.name_space.empty() ? k.name : k.name_space + "::" + k.name;
-            };
             // Set of bound qualified names: a base is only registered with
             // py::class_ when it is itself bound (pybind needs it registered).
             std::vector<std::string> bound;
             for (const auto &k : c.classes) {
-                bound.push_back(qualified(k));
+                bound.push_back(qualified_of(k));
             }
             auto is_bound = [&](const std::string &n) {
                 for (const auto &b : bound) {
@@ -217,16 +225,18 @@ python3 -c "import {{LIB}}"
                         base_args += ", " + b;
                     }
                 }
+                const std::string kq = qualified_of(k);
+                const std::string kx = exposed_of(k);
                 if (!virtual_methods(k).empty()) {
-                    binds += "    rosetta::bind_pybind<" + k.name + ", rosetta_py::Py_" + k.name +
-                             base_args + ">(m, \"" + k.name + "\");\n";
+                    binds += "    rosetta::bind_pybind<" + kq + ", rosetta_py::Py_" + kx +
+                             base_args + ">(m, \"" + kx + "\");\n";
                 } else if (!base_args.empty()) {
                     // No trampoline: spell Trampoline explicitly as T so the bases
                     // land in the right template-parameter positions.
-                    binds += "    rosetta::bind_pybind<" + k.name + ", " + k.name + base_args +
-                             ">(m, \"" + k.name + "\");\n";
+                    binds += "    rosetta::bind_pybind<" + kq + ", " + kq + base_args +
+                             ">(m, \"" + kx + "\");\n";
                 } else {
-                    binds += "    rosetta::bind_pybind<" + k.name + ">(m, \"" + k.name + "\");\n";
+                    binds += "    rosetta::bind_pybind<" + kq + ">(m, \"" + kx + "\");\n";
                 }
             }
             for (const auto &f : c.functions) {

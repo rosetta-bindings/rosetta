@@ -151,6 +151,7 @@ python3 -c "import {{LIB}}"
                             "#include <pybind11/stl.h>\n"
                             "#include <pybind11/functional.h>\n"
                             "#include <algorithm>\n"
+                            "#include <type_traits>\n"
                             "#include <vector>\n";
             auto add = [&](const std::string &h) { append_include(s, h); };
             for (const auto &k : c.classes) {
@@ -190,14 +191,36 @@ python3 -c "import {{LIB}}"
             return true;
         }
 
-        inline bool px_field_ok(const GenField &f) {
-            return px_copyable(f.type);
+        // Forward declaration — defined with the member-object helpers below.
+        inline bool px_is_bound_class(const GenType &t, const GenContext &c);
+
+        // Can pybind even INSTANTIATE a caster for this type? It compiles one
+        // for every complete type, so the hole is a raw pointer: `typeid` of an
+        // incomplete pointee is a hard error at the binding's compile time
+        // (Model::tabularMedium() returning a forward-declared TabularMedium*).
+        // Gate a pointer on its pointee being itself bound — a bound class is
+        // complete, and the handle is actually usable from the script side.
+        inline bool px_marshalable(const GenType &t, const GenContext &c) {
+            if (t.is_pointer) {
+                return px_is_bound_class(t, c);
+            }
+            if (t.kind == "vector" && !t.element.empty()) {
+                return px_marshalable(t.element.front(), c);
+            }
+            return true;
         }
 
-        inline bool px_method_ok(const GenMethod &m) {
+        inline bool px_field_ok(const GenField &f, const GenContext &c) {
+            return px_marshalable(f.type, c) && px_copyable(f.type);
+        }
+
+        inline bool px_method_ok(const GenMethod &m, const GenContext &c) {
             // An overload set: the bare `&T::name` member pointer the emitter
             // spells would be ambiguous — skip the whole set.
             if (m.is_overloaded) {
+                return false;
+            }
+            if (!px_marshalable(m.ret, c)) {
                 return false;
             }
             // Lvalue-ref class return: policy `automatic` copies it; a by-value
@@ -210,6 +233,9 @@ python3 -c "import {{LIB}}"
                 return false;
             }
             for (const auto &p : m.params) {
+                if (!px_marshalable(p.type, c)) {
+                    return false;
+                }
                 if (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) {
                     return false; // by-value class parameter copy-constructs
                 }
@@ -235,7 +261,7 @@ python3 -c "import {{LIB}}"
         // otherwise def_readwrite. Member pointers keep the field type implicit,
         // so no type spelling is needed except for the range setter's parameter.
         inline std::string expanded_field(const GenClass &k, const GenField &f) {
-            const std::string self  = k.name;
+            const std::string self  = qualified_of(k);
             const std::string mp    = "&" + self + "::" + f.name; // member pointer
             const std::string dq    = doc_arg(f.doc);
             if (f.is_readonly) {
@@ -266,9 +292,14 @@ python3 -c "import {{LIB}}"
         // `mesh.vertices` hands out the real MeshVertices living inside the
         // mesh. This is what makes struct-of-member-objects APIs (GEO::Mesh)
         // reachable without a flat-array facade.
-        inline bool px_is_bound_class(const std::string &obj, const GenContext &c) {
+        // Resolve a field/param class type against the bound-class list. The
+        // qualified spelling is compared when the IR carries it (two bound
+        // classes may share an unqualified identifier — the "expose" rename
+        // case); the unqualified fallback keeps hand-built IR working.
+        inline bool px_is_bound_class(const GenType &t, const GenContext &c) {
             for (const auto &k : c.classes) {
-                if (k.name == obj) {
+                if (t.object_qualified.empty() ? (k.name == t.object)
+                                               : (qualified_of(k) == t.object_qualified)) {
                     return true;
                 }
             }
@@ -277,9 +308,11 @@ python3 -c "import {{LIB}}"
 
         inline std::string expanded_member_object(const GenClass &k, const GenField &f) {
             const std::string dq = doc_arg(f.doc);
+            const std::string ft =
+                f.type.object_qualified.empty() ? f.type.object : f.type.object_qualified;
             std::string s;
             s += "    c.def_property_readonly(\"" + f.name + "\",\n";
-            s += "        [](" + k.name + " &s) -> " + f.type.object + " & { return s." +
+            s += "        [](" + qualified_of(k) + " &s) -> " + ft + " & { return s." +
                  f.name + "; },\n";
             s += "        py::return_value_policy::reference_internal" + dq + ");\n";
             return s;
@@ -306,7 +339,9 @@ python3 -c "import {{LIB}}"
                        ">";
             }
             if (t.kind == "object" || t.kind == "enum") {
-                return t.object;
+                // Qualified when known: the unqualified identifier is ambiguous
+                // once two bound namespaces declare it (the "expose" case).
+                return t.object_qualified.empty() ? t.object : t.object_qualified;
             }
             if (t.kind == "string") {
                 return "std::string";
@@ -323,7 +358,10 @@ python3 -c "import {{LIB}}"
         // Do the NON-sequence parts of the signature still satisfy the python
         // gates? (The sequence parts go through the adapter, which lifts the
         // vector-copy and overload restrictions.)
-        inline bool px_seq_rest_ok(const GenMethod &m) {
+        inline bool px_seq_rest_ok(const GenMethod &m, const GenContext &c) {
+            if (!m.ret.is_sequence && !px_marshalable(m.ret, c)) {
+                return false;
+            }
             if (m.ret.kind == "object" && !m.ret.copy_constructible) {
                 return false;
             }
@@ -333,6 +371,9 @@ python3 -c "import {{LIB}}"
             for (const auto &p : m.params) {
                 if (p.type.is_sequence) {
                     continue;
+                }
+                if (!px_marshalable(p.type, c)) {
+                    return false;
                 }
                 if (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) {
                     return false;
@@ -367,7 +408,7 @@ python3 -c "import {{LIB}}"
                     o.pre += seq_decl_stmts(t, an, sn, "        ");
                     o.args += sn;
                 } else if (exact) {
-                    o.decls += qualify_std(param_cpp[j]) + " " + an;
+                    o.decls += qualify_objects(qualify_std(param_cpp[j]), t) + " " + an;
                     o.args += an;
                 } else if (t.kind == "object") {
                     o.decls += px_cpp_type(t) + " &" + an; // bound class, by ref
@@ -383,16 +424,17 @@ python3 -c "import {{LIB}}"
         // The full def(...) for a sequence-adapted method / extension / static.
         inline std::string px_seq_method(const GenClass &k, const GenMethod &m) {
             const PxSeqSig    sig = px_seq_sig(m.params, m.param_cpp);
+            const std::string kq  = qualified_of(k);
             std::string       decls, call;
             if (m.is_extension) {
-                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                decls = kq + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
                 call  = m.ext_qualified + "(self" + (sig.args.empty() ? "" : ", " + sig.args) +
                        ")";
             } else if (m.is_static) {
                 decls = sig.decls;
-                call  = k.name + "::" + m.name + "(" + sig.args + ")";
+                call  = kq + "::" + m.name + "(" + sig.args + ")";
             } else {
-                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                decls = kq + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
                 call  = "self." + m.name + "(" + sig.args + ")";
             }
             std::string body = sig.pre;
@@ -440,7 +482,7 @@ python3 -c "import {{LIB}}"
             if (m.is_extension) {
                 return "    c.def(\"" + m.name + "\", &" + m.ext_qualified + dq + ");\n";
             }
-            const std::string mp = "&" + k.name + "::" + m.name;
+            const std::string mp = "&" + qualified_of(k) + "::" + m.name;
             if (m.is_static) {
                 return "    c.def_static(\"" + m.name + "\", " + mp + dq + ");\n";
             }
@@ -449,36 +491,99 @@ python3 -c "import {{LIB}}"
 
         // The constructors, as py::init<...>() lines. Exact param spellings come
         // from GenClass::ctor_param_cpp; a synthetic py::init<>() is added when T
-        // is default-constructible but no zero-arg ctor was enumerated.
-        inline std::string expanded_ctors(const GenClass &k) {
+        // is default-constructible but no zero-arg ctor was enumerated. A ctor
+        // whose signature pybind cannot even instantiate a caster for (raw
+        // pointer to an unbound class — `typeid` of an incomplete type) is
+        // skipped, mirroring the method gates.
+        //
+        // For an abstract class the init lines allocate the trampoline, and a
+        // pure virtual the trampoline could NOT override (protected, or an
+        // unbindable signature) leaves Py_X itself abstract — undetectable from
+        // the IR. So the block is emitted inside a generic lambda behind
+        // `if constexpr (!std::is_abstract_v<Py_X>)`: when the trampoline is
+        // complete the constructors bind (Python subclassing keeps working),
+        // otherwise the block compiles away instead of breaking the build.
+        inline std::string expanded_ctors(const GenClass &k, const GenContext &c,
+                                          bool has_tramp) {
             std::string s;
             bool        saw_default = false;
-            for (const auto &params : k.ctor_param_cpp) {
+            for (std::size_t i = 0; i < k.ctor_param_cpp.size(); ++i) {
+                bool ok = true;
+                if (i < k.ctors.size()) {
+                    for (const auto &p : k.ctors[i]) {
+                        ok = ok && px_marshalable(p.type, c) &&
+                             !(p.type.kind == "object" && !p.is_ref &&
+                               !p.type.copy_constructible) &&
+                             !(p.type.kind == "vector" && !px_copyable(p.type));
+                    }
+                }
+                if (!ok) {
+                    continue;
+                }
+                const auto &params = k.ctor_param_cpp[i];
                 if (params.empty()) {
                     saw_default = true;
                 }
                 std::string args;
-                for (std::size_t i = 0; i < params.size(); ++i) {
-                    args += (i ? ", " : "") + qualify_std(params[i]);
+                for (std::size_t j = 0; j < params.size(); ++j) {
+                    std::string one = qualify_std(params[j]);
+                    if (i < k.ctors.size() && j < k.ctors[i].size()) {
+                        one = qualify_objects(std::move(one), k.ctors[i][j].type);
+                    }
+                    args += (j ? ", " : "") + one;
                 }
                 s += "    c.def(py::init<" + args + ">());\n";
             }
             if (!saw_default && k.is_default_constructible) {
                 s += "    c.def(py::init<>());\n";
             }
-            return s;
+            if (s.empty() || !k.is_abstract) {
+                return s;
+            }
+            if (!has_tramp) {
+                return {}; // abstract, no trampoline — never instantiable
+            }
+            std::string guarded =
+                "    [](auto &c) {\n"
+                "        if constexpr (!std::is_abstract_v<rosetta_py::Py_" +
+                exposed_of(k) + ">) {\n";
+            std::size_t i = 0;
+            while (i < s.size()) {
+                std::size_t nl = s.find('\n', i);
+                if (nl == std::string::npos) {
+                    nl = s.size();
+                }
+                guarded += "        " + s.substr(i, nl - i + 1);
+                i = nl + 1;
+            }
+            guarded += "        }\n    }(c);\n";
+            return guarded;
         }
 
         // One class block: an open scope so the local `c` never leaks. Uses the
         // trampoline (py::class_<T, Py_T>) when the class has virtual methods —
         // the trampoline classes themselves are emitted, verbatim, by the
-        // existing reflection-free trampolines_of() helper.
+        // existing reflection-free trampolines_of() helper. Bound base classes
+        // ride as extra template args so pybind accepts a derived instance
+        // where a base is expected (a base must be registered before its
+        // derived — that follows from manifest order).
         inline std::string expanded_class(const GenClass &k, const GenContext &c) {
             const bool        has_tramp = !virtual_methods(k).empty();
-            const std::string decl = has_tramp ? "py::class_<" + k.name + ", rosetta_py::Py_" +
-                                                     k.name + ">"
-                                               : "py::class_<" + k.name + ">";
-            std::string s = "    {\n        " + decl + " c(m, \"" + k.name + "\");\n";
+            const std::string kq        = qualified_of(k);
+            std::string       extra;
+            if (has_tramp) {
+                extra += ", rosetta_py::Py_" + exposed_of(k);
+            }
+            for (const auto &b : k.bases) {
+                for (const auto &g : c.classes) {
+                    if (qualified_of(g) == b) {
+                        extra += ", " + b;
+                        break;
+                    }
+                }
+            }
+            const std::string decl = "py::class_<" + kq + extra + ">";
+            std::string s = "    {\n        " + decl + " c(m, \"" + exposed_of(k) + "\");\n";
             // The block-local helper lines are written at one indent; reuse the
             // module-level emitters and shift them in by four spaces.
             auto indent = [](const std::string &block) {
@@ -494,7 +599,7 @@ python3 -c "import {{LIB}}"
                 }
                 return out;
             };
-            s += indent(expanded_ctors(k));
+            s += indent(expanded_ctors(k, c, has_tramp));
             for (const auto &f : k.fields) {
                 if (f.type.is_sequence) {
                     if (seq_ok(f.type)) {
@@ -502,7 +607,7 @@ python3 -c "import {{LIB}}"
                     }
                     continue; // never hand pybind the casterless foreign type
                 }
-                if (!px_field_ok(f)) {
+                if (!px_field_ok(f, c)) {
                     // A non-copyable member object of a BOUND class becomes a
                     // reference property (methods win on a name clash — e.g. a
                     // manifest extension already named like the field).
@@ -510,7 +615,7 @@ python3 -c "import {{LIB}}"
                     for (const auto &m : k.methods) {
                         clashes = clashes || m.name == f.name;
                     }
-                    if (f.type.kind == "object" && px_is_bound_class(f.type.object, c) &&
+                    if (f.type.kind == "object" && px_is_bound_class(f.type, c) &&
                         !clashes) {
                         s += indent(expanded_member_object(k, f));
                     }
@@ -524,12 +629,12 @@ python3 -c "import {{LIB}}"
                     // the member-pointer path would hand pybind the casterless
                     // foreign type (and an overloaded set is fine here, see
                     // px_seq_method).
-                    if (seq_adaptable(m) && px_seq_rest_ok(m)) {
+                    if (seq_adaptable(m) && px_seq_rest_ok(m, c)) {
                         s += indent(px_seq_method(k, m));
                     }
                     continue;
                 }
-                if (!px_method_ok(m)) {
+                if (!px_method_ok(m, c)) {
                     continue; // signature the emitted pybind line could not compile
                 }
                 s += indent(expanded_method(k, m));
@@ -551,7 +656,7 @@ python3 -c "import {{LIB}}"
                 probe.ret    = f.ret;
                 probe.params = f.params;
                 if (seq_touches(probe)) {
-                    if (seq_adaptable(probe) && px_seq_rest_ok(probe)) {
+                    if (seq_adaptable(probe) && px_seq_rest_ok(probe, c)) {
                         const PxSeqSig sig = px_seq_sig(f.params, {});
                         std::string body2 = sig.pre;
                         const std::string call = f.qualified + "(" + sig.args + ")";
@@ -568,7 +673,7 @@ python3 -c "import {{LIB}}"
                     }
                     continue;
                 }
-                if (!px_method_ok(probe)) {
+                if (!px_method_ok(probe, c)) {
                     continue;
                 }
                 body += "    m.def(\"" + f.name + "\", &" + f.qualified + doc_arg(f.doc) + ");\n";

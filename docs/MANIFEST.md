@@ -120,12 +120,38 @@ Keys beginning with `//` (e.g. `"//1"`, `"//note"`) are treated as comments and 
 |---|:---:|---|---|
 | `header` | ✅ | — | Filename emitted into `#include "..."`. Resolved against `user_include`. |
 | `name` | — | header basename | C++ type name, must be reachable after including `header`. May be namespace-qualified (`space::Vector3`). |
+| `expose` | — | unqualified `name` | The **binding name** — what scripts see (Python attribute, JS export, TypeScript class) and what the generated trampoline is suffixed with (`Py_<expose>` / `Js_<expose>`). Must be a plain identifier. See [Renaming a class (`expose`)](#renaming-a-class-expose). |
 | `annotations` | — | — | Path (relative to the manifest) to an out-of-line annotation JSON side-car, baked into `bindings.h` so the header stays clean. See [OUT_OF_LINE_ANNOTATIONS](OUT_OF_LINE_ANNOTATIONS.md). |
 | `doc` | — | — | A description string for the class (used by doc backends). |
 | `extensions` | — | `[]` | Free functions exposed as **instance methods** of this class. See [Extension methods](#extension-methods-extensions). |
 | `final` | — | `false` | Treat the class as non-overridable from the host language: **no trampoline** is generated even when it has public virtual methods (they still bind as ordinary callable methods). Also what makes a class *with* virtuals eligible as a node member-object property (`mesh.vertices` — the aliased wrap stores a `T*`, which requires the wrapped type to be `T`, not `Js_T`). |
 
 Inheritance, multiple constructors, enums, nested user types and `std::vector` members are discovered automatically — no entry needed per base class, just list the most-derived type you want bound.
+
+---
+
+## Renaming a class (`expose`)
+
+Every class binds under **one module-level name**: its `expose` override, or its unqualified C++ identifier. Two entries resolving to the same name is a `rosetta_gen` error — the module attribute and the generated trampoline (`Py_<name>` / `Js_<name>`) would collide.
+
+That happens as soon as two bound namespaces declare the same identifier — e.g. a slip-inversion `arch::Data` next to a stress-inversion `arch::sinv::Data`. Rename one side with `expose`:
+
+```json
+"classes": [
+  {"//": "stress inversion", "namespace": "sinv", "header_dir": "stress-inversion", "entries": [
+      {"header": "Data.h"},
+      {"header": "GpsData.h"}
+  ]},
+  {"//": "slip inversion", "header_dir": "slip-inversion", "entries": [
+      {"header": "Data.h",    "expose": "SlipData"},
+      {"header": "GpsData.h", "expose": "SlipGpsData"}
+  ]}
+]
+```
+
+Python then sees `arch.Data` (the `sinv` one) and `arch.SlipData`; C++ is untouched. Cross-references follow the rename automatically — a TypeScript signature touching `arch::Data` says `SlipData`, and the emitted C++ spells every bound class by its **qualified** name, so the shared identifier never becomes ambiguous in the generated TU.
+
+`expose` is honored by the runtime code backends (`python`, `python-expanded`, `node`, `node-expanded`, `wasm-expanded`) and `typescript`, and by the doc heading; other text/UI backends currently keep the C++ identifier.
 
 ---
 

@@ -52,6 +52,14 @@ namespace rosetta {
      * Required static member:
      *   - `header` — `const char*` basename used in `#include "..."`
      *
+     * Optional static member:
+     *   - `expose` — `const char*` binding name overriding the reflected
+     *     identifier (manifest "expose"). Lets two classes that share an
+     *     unqualified C++ name (arch::Data and arch::sinv::Data) coexist in
+     *     one module: each is exposed — and its trampoline named — after
+     *     this override, while the emitted C++ spells the class by its
+     *     qualified name.
+     *
      * The module / library name and the target backends are no longer
      * per-class — they live in `GenerateOptions` because one generator
      * call emits a single combined module per backend exposing every
@@ -95,6 +103,14 @@ namespace rosetta {
     struct GenType {
         std::string          kind    = "unknown";
         std::string          object;  // class / enum identifier ("object" / "enum")
+
+        // Namespace-qualified spelling of `object` ("arch::sinv::Data"; equal
+        // to `object` for a global type). `object` alone cannot tell two bound
+        // classes apart once they share an unqualified name (the "expose"
+        // rename feature), so emitters that spell the type in C++ or resolve
+        // it against the bound-class list use this instead. Empty only when
+        // `object` is empty.
+        std::string          object_qualified;
         std::vector<GenType> element; // 0 or 1 entry, the element when "vector"
         bool                 integer = false; // kind == "number" and integral (vs floating)
         std::string          spelling; // prettified C++ type spelling (for human docs)
@@ -281,6 +297,14 @@ namespace rosetta {
     struct GenClass {
         std::string name;       // reflected (unqualified) C++ identifier
         std::string name_space; // enclosing namespace ("" if global, "a::b" if nested)
+
+        // The name the class binds under (module attribute, JS export,
+        // TypeScript class, trampoline suffix). Defaults to `name`; overridden
+        // by binding_info<T>::expose (manifest "expose") so two classes with
+        // the same unqualified C++ name can coexist in one module. Emitters
+        // use this for every host-language-visible name and the qualified
+        // `name_space::name` for every C++ spelling.
+        std::string expose;
         std::string header; // binding_info<T>::header — basename for #include
 
         // Qualified names of the direct *public* base classes (e.g.

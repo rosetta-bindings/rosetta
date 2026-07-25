@@ -1,7 +1,8 @@
 # Naming & visibility per backend
 
 - alias("foo") / rename_for("python", "foo_bar") — override the exposed name; lets you keep snake_case in Python and 
-camelCase in JS from a single C++ source. 
+camelCase in JS from a single C++ source. (Class-level renaming exists today via the manifest "expose" field —
+see MANIFEST.md; the per-member / per-backend annotation form is what's still open.)
 - hidden (or internal) — exclude from all bindings; useful for cache/scratch fields you can't make private for ABI reasons.
 - writeonly — the dual of readonly. Passwords, set-once tokens: bind a setter but no getter. 
 

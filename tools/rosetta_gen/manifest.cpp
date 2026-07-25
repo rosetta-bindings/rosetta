@@ -315,6 +315,23 @@ Manifest load(const fs::path &manifest_path) {
                 // `name` is optional; fall back to the header's basename (stem).
                 e.name = qualify(ctx.ns, c.contains("name") ? c.at("name").get<std::string>()
                                                             : fs::path(e.header).stem().string());
+                // `expose` is optional: the binding name, overriding the C++
+                // identifier (see ClassEntry::expose). Must be a plain
+                // identifier — it names a module attribute and a trampoline.
+                if (c.contains("expose")) {
+                    e.expose = c.at("expose").get<std::string>();
+                    const bool ident =
+                        !e.expose.empty() &&
+                        (std::isalpha(static_cast<unsigned char>(e.expose[0])) ||
+                         e.expose[0] == '_') &&
+                        std::all_of(e.expose.begin(), e.expose.end(), [](char ch) {
+                            return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+                        });
+                    if (!ident) {
+                        throw std::runtime_error("class \"" + e.name + "\": \"expose\" (\"" +
+                                                 e.expose + "\") must be a plain identifier");
+                    }
+                }
                 // `annotations` is optional: an out-of-line annotation JSON side-car
                 // (doc/range/readonly/combobox keyed by member name). Baked into
                 // bindings.h at generation time, so the user's header stays clean.
@@ -598,6 +615,31 @@ Manifest load(const fs::path &manifest_path) {
     }
     if (m.classes.empty()) {
         throw std::runtime_error("manifest has no class entries");
+    }
+
+    // Every class binds under ONE module-level name: its "expose" override, or
+    // its unqualified C++ identifier. Two entries resolving to the same name
+    // would collide in the generated module (and the generated trampolines
+    // Py_<name> / Js_<name> would collide in C++) — catch it here, where the
+    // fix ("expose" one of them) is a one-line manifest edit.
+    {
+        auto exposed = [](const ClassEntry &e) {
+            if (!e.expose.empty()) {
+                return e.expose;
+            }
+            const auto pos = e.name.rfind("::");
+            return pos == std::string::npos ? e.name : e.name.substr(pos + 2);
+        };
+        for (std::size_t i = 0; i < m.classes.size(); ++i) {
+            for (std::size_t j = i + 1; j < m.classes.size(); ++j) {
+                if (exposed(m.classes[i]) == exposed(m.classes[j])) {
+                    throw std::runtime_error(
+                        "classes \"" + m.classes[i].name + "\" and \"" + m.classes[j].name +
+                        "\" both bind as \"" + exposed(m.classes[i]) +
+                        "\" — rename one with \"expose\"");
+                }
+            }
+        }
     }
 
     return m;

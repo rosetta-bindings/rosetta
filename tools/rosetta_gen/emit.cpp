@@ -70,8 +70,11 @@ static std::string render_bindings_h(const Manifest &m) {
     }
     for (const auto &c : m.classes) {
         out << "template <> struct rosetta::binding_info<" << c.name << "> {\n"
-            << "    static constexpr const char *header = \"" << c.header << "\";\n"
-            << "};\n\n";
+            << "    static constexpr const char *header = \"" << c.header << "\";\n";
+        if (!c.expose.empty()) {
+            out << "    static constexpr const char *expose = \"" << c.expose << "\";\n";
+        }
+        out << "};\n\n";
     }
     // Out-of-line annotations: bake each side-car JSON into an
     // ann_json_source<T> specialization. This TU includes the class header

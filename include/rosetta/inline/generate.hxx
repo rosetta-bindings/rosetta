@@ -74,6 +74,32 @@ namespace rosetta {
             return std::string(n);
         }
 
+        // Namespace-qualified spelling of T ("arch::sinv::Data"; the bare
+        // identifier for a global type). Distinct from qualified_class_name()
+        // below, which also walks enclosing CLASSES but requires an identifier;
+        // this one inherits class_name()'s display-string fallback, so template
+        // specializations (std::array<double, 9>) stay safe.
+        template <typename T> inline std::string ns_qualified_name() {
+            const std::string ns = class_namespace<T>();
+            return ns.empty() ? class_name<T>() : ns + "::" + class_name<T>();
+        }
+
+        // The qualified C++ spelling of a bound class, for emitted code. Always
+        // unambiguous — unlike the unqualified `name`, which needs the
+        // `using namespace` directives and breaks down as soon as two bound
+        // namespaces declare the same identifier (the "expose" rename case).
+        inline std::string qualified_of(const GenClass &k) {
+            return k.name_space.empty() ? k.name : k.name_space + "::" + k.name;
+        }
+
+        // The host-language-visible name of a bound class: the manifest
+        // "expose" override when set, else the reflected identifier. Falls back
+        // to `name` so hand-built GenClass values (tests, render callers) keep
+        // working without filling `expose`.
+        inline std::string exposed_of(const GenClass &k) {
+            return k.expose.empty() ? k.name : k.expose;
+        }
+
         // -------- shared CMake fragment --------
 
         // Defaults used when the manifest does not set a field. The cache vars
@@ -177,11 +203,13 @@ endif()
                     std::snprintf(buf, sizeof buf, "char(0x%02x), ", ch);
                     bytes += buf;
                 }
-                anns += "template <> inline constexpr auto rosetta::detail::ann_storage<" + k.name +
+                const std::string kq = qualified_of(k); // unambiguous even when two
+                                                        // bound classes share an identifier
+                anns += "template <> inline constexpr auto rosetta::detail::ann_storage<" + kq +
                         "> =\n    std::to_array<char>({" + bytes + "'\\0'});\n" +
                         "template <> inline constexpr std::string_view rosetta::ann_json_source<" +
-                        k.name + "> =\n    std::string_view{rosetta::detail::ann_storage<" +
-                        k.name + ">.data(), rosetta::detail::ann_storage<" + k.name +
+                        kq + "> =\n    std::string_view{rosetta::detail::ann_storage<" +
+                        kq + ">.data(), rosetta::detail::ann_storage<" + kq +
                         ">.size() - 1};\n";
             }
             if (!anns.empty()) {
@@ -692,8 +720,9 @@ endif()
                 g.element.push_back(type_descriptor<typename U::value_type>());
                 g.seq_cpp = sequence_spelling<U>();
             } else if constexpr (std::is_enum_v<U>) {
-                g.kind   = "enum";
-                g.object = class_name<U>();
+                g.kind             = "enum";
+                g.object           = class_name<U>();
+                g.object_qualified = ns_qualified_name<U>();
                 template for (constexpr auto e : std::define_static_array(
                                   std::meta::enumerators_of(std::meta::dealias(^^U)))) {
                     constexpr const char *en =
@@ -705,11 +734,13 @@ endif()
                 // Raw pointer to a class: keep kind "unknown" (backends that can't
                 // marshal a pointer keep skipping it), but record the pointee so an
                 // opt-in backend can bind it (e.g. embind allow_raw_pointers).
-                g.is_pointer = true;
-                g.object     = class_name<std::remove_cv_t<std::remove_pointer_t<U>>>();
+                g.is_pointer       = true;
+                g.object           = class_name<std::remove_cv_t<std::remove_pointer_t<U>>>();
+                g.object_qualified = ns_qualified_name<std::remove_cv_t<std::remove_pointer_t<U>>>();
             } else if constexpr (std::is_class_v<U>) {
-                g.kind   = "object";
-                g.object = class_name<U>();
+                g.kind             = "object";
+                g.object           = class_name<U>();
+                g.object_qualified = ns_qualified_name<U>();
                 // Copyability, so emitters can skip/downgrade what would not
                 // compile (see GenType). Guarded on completeness: traits on an
                 // incomplete type are ill-formed, and an incomplete type can't
@@ -801,6 +832,28 @@ endif()
                 } else {
                     pos = end;
                 }
+            }
+            return s;
+        }
+
+        // Re-qualify the user-class token of an IR type inside an EXACT spelling
+        // (ret_cpp / param_cpp / ctor_param_cpp). display_string_of prints user
+        // types unqualified ("Data &"); the emitted `using namespace` directives
+        // resolve that — until two bound namespaces declare the same identifier
+        // (the "expose" rename case), where the bare token is ambiguous. The IR
+        // knows which class the type actually is, so swap the token for its
+        // qualified form (recursing into vector elements and callback
+        // signatures). Already-qualified occurrences are left alone.
+        inline std::string qualify_objects(std::string s, const GenType &t) {
+            if (!t.object.empty() && !t.object_qualified.empty() &&
+                t.object != t.object_qualified) {
+                s = replace_type_token(std::move(s), t.object, t.object_qualified);
+            }
+            for (const auto &e : t.element) {
+                s = qualify_objects(std::move(s), e);
+            }
+            for (const auto &cb : t.callback_sig) {
+                s = qualify_objects(std::move(s), cb);
             }
             return s;
         }
@@ -1123,7 +1176,7 @@ endif()
         // the markdown backend) and by rosetta::to_markdown<T>(). Mirrors what the
         // former <rosetta/docgen.h> produced, but from GenClass rather than a walk.
         inline std::string class_markdown(const GenClass &gc) {
-            std::string out = "# " + gc.name + "\n\n";
+            std::string out = "# " + exposed_of(gc) + "\n\n";
             if (!gc.fields.empty()) {
                 out +=
                     "## Fields\n\n| Name | Type | Description |\n|------|------|-------------|\n";
@@ -1177,6 +1230,12 @@ endif()
             GenClass gc;
             gc.name       = class_name<T>();
             gc.name_space = class_namespace<T>();
+            // The binding name: the trait's `expose` override (manifest
+            // "expose") when present, else the reflected identifier.
+            gc.expose = gc.name;
+            if constexpr (requires { binding_info<T>::expose; }) {
+                gc.expose = binding_info<T>::expose;
+            }
             // binding_info<T>::header is the #include basename — needed by code
             // backends, but not by render-to-string callers (to_markdown / to_html),
             // which may have no specialization. Use it only when present.

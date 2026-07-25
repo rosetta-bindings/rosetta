@@ -199,7 +199,9 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                        ">";
             }
             if (t.kind == "object" || t.kind == "enum") {
-                return t.object;
+                // Qualified when known: the unqualified identifier is ambiguous
+                // once two bound namespaces declare it (the "expose" case).
+                return t.object_qualified.empty() ? t.object : t.object_qualified;
             }
             if (t.kind == "string") {
                 return "std::string";
@@ -239,7 +241,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     pre += seq_decl_stmts(t, an, sn, "        ");
                     args += sn;
                 } else if (exact) {
-                    decls += qualify_std(m.param_cpp[j]) + " " + an;
+                    decls += qualify_objects(qualify_std(m.param_cpp[j]), t) + " " + an;
                     args += an;
                 } else if (t.kind == "object") {
                     decls += nx_cpp_type(t) + " &" + an;
@@ -292,9 +294,10 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
         // the member-object property path: the field's class must itself be
         // bound (it provides the JS constructor the aliased wrap rides on) and
         // must have no virtuals (the alias stores a T*, not a trampoline).
-        inline const GenClass *nx_bound_class(const std::string &obj, const GenContext &c) {
+        inline const GenClass *nx_bound_class(const GenType &t, const GenContext &c) {
             for (const auto &k : c.classes) {
-                if (k.name == obj) {
+                if (t.object_qualified.empty() ? (k.name == t.object)
+                                               : (qualified_of(k) == t.object_qualified)) {
                     return &k;
                 }
             }
@@ -304,9 +307,10 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
         inline std::string node_expanded_class(const GenClass &k, const GenContext &c,
                                                std::string &adapters) {
             const auto        virts = node_virtual_methods(k);
+            const std::string kx    = exposed_of(k);
             const std::string held =
-                virts.empty() ? k.name : "rosetta_node::Js_" + k.name;
-            const std::string self = k.name;
+                virts.empty() ? qualified_of(k) : "rosetta_node::Js_" + kx;
+            const std::string self = qualified_of(k);
             const std::string th   = "rosetta::Wrap<" + self + ", " + held + ">";
 
             std::string s = "    {\n";
@@ -323,7 +327,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 if (!nx_marshalable(f.type) || !nx_ret_ok(f.type) ||
                     (f.type.kind == "object" && !f.type.copy_assignable)) {
                     const GenClass *fk = f.type.kind == "object"
-                                             ? nx_bound_class(f.type.object, c)
+                                             ? nx_bound_class(f.type, c)
                                              : nullptr;
                     bool clashes = false;
                     for (const auto &m : k.methods) {
@@ -365,7 +369,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     if (!seq_adaptable(m) || !nx_seq_rest_ok(m)) {
                         continue;
                     }
-                    const std::string an = "seq_" + self + "_" + m.name;
+                    const std::string an = "seq_" + kx + "_" + m.name; // identifier-safe
                     if (m.is_extension) {
                         adapters +=
                             nx_seq_adapter_def(an, self, m, m.ext_qualified, true);
@@ -401,7 +405,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 }
             }
 
-            s += "        Napi::Function ctor = This::DefineClass(env, \"" + self + "\", props);\n";
+            s += "        Napi::Function ctor = This::DefineClass(env, \"" + kx + "\", props);\n";
             s += "        rosetta::ctor_ref<" + self + ">() = Napi::Persistent(ctor);\n";
             s += "        rosetta::ctor_ref<" + self + ">().SuppressDestruct();\n";
 
@@ -429,8 +433,12 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 }
                 std::string args;
                 for (std::size_t j = 0; j < params.size(); ++j) {
+                    std::string one = qualify_std(params[j]);
+                    if (j < ir.size()) {
+                        one = qualify_objects(std::move(one), ir[j].type);
+                    }
                     args += (j ? ", " : "") + std::string("rosetta::from_napi<std::remove_cvref_t<") +
-                            qualify_std(params[j]) + ">>(info[" + std::to_string(j) + "])";
+                            one + ">>(info[" + std::to_string(j) + "])";
                 }
                 s += "        rosetta::ctor_table<" + held + ">()[" + std::to_string(params.size()) +
                      "] =\n            [](const Napi::CallbackInfo &info) { return " + held + "(" +
@@ -457,7 +465,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 s += "        }\n";
             }
 
-            s += "        exports.Set(\"" + self + "\", ctor);\n";
+            s += "        exports.Set(\"" + kx + "\", ctor);\n";
             s += "    }\n";
             return s;
         }

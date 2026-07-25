@@ -143,9 +143,12 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             if (virts.empty()) {
                 return {};
             }
+            // Named after the EXPOSED name (unique across the module) and derived
+            // from the QUALIFIED spelling — see the python trampoline notes.
+            const std::string kq = qualified_of(k);
             std::string s =
-                "class Js_" + k.name + " : public " + k.name + ", public rosetta::NapiTrampoline {\npublic:\n";
-            s += "    using " + k.name + "::" + k.name + ";\n";
+                "class Js_" + exposed_of(k) + " : public " + kq + ", public rosetta::NapiTrampoline {\npublic:\n";
+            s += "    using " + kq + "::" + k.name + ";\n";
             for (const GenMethod *m : virts) {
                 // Skip a virtual whose signature has no Node-API marshalling (e.g. a
                 // pointer to a type left incomplete in this TU): napi_call_override
@@ -154,12 +157,30 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 if (!m->sig_bindable) {
                     continue;
                 }
+                // A reference-returning virtual (AlgoBuilder::model() -> const
+                // Model&): from_napi hands back a value, which cannot bind to
+                // the lvalue reference the override must return — skip it. A
+                // skipped PURE virtual leaves Js_T abstract; that only occurs
+                // when T itself is abstract, and an abstract T never gets
+                // ctor_table entries (its constructibility traits are false),
+                // so nothing ever constructs the abstract Js_T.
+                if (m->ret_is_ref) {
+                    continue;
+                }
                 const bool  is_void = (m->ret_cpp == "void");
-                std::string sig     = "    " + m->ret_cpp + " " + m->name + "(";
+                // Exact spellings re-qualified per the IR: an unqualified user
+                // token ("Data &") is ambiguous once two bound namespaces
+                // declare it (see qualify_objects).
+                const std::string rq  = qualify_objects(m->ret_cpp, m->ret);
+                std::string sig     = "    " + rq + " " + m->name + "(";
                 std::string names;  // p0, p1, ... — base-call + JS-forward args
                 for (std::size_t i = 0; i < m->param_cpp.size(); ++i) {
                     const std::string pn = "p" + std::to_string(i);
-                    sig += (i ? ", " : "") + m->param_cpp[i] + " " + pn;
+                    std::string       pt = m->param_cpp[i];
+                    if (i < m->params.size()) {
+                        pt = qualify_objects(std::move(pt), m->params[i].type);
+                    }
+                    sig += (i ? ", " : "") + pt + " " + pn;
                     names += (i ? ", " : "") + pn;
                 }
                 sig += ")";
@@ -174,12 +195,12 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 const std::string ret   = is_void ? "" : "return ";
                 const std::string targs = names.empty() ? "" : ", " + names;
                 if (m->is_pure) {
-                    s += sig + ret + "rosetta::napi_call_override_pure<" + k.name + ", " +
-                         m->ret_cpp + ">(*this, \"" + m->name + "\"" + targs + ");\n    }\n";
+                    s += sig + ret + "rosetta::napi_call_override_pure<" + kq + ", " +
+                         rq + ">(*this, \"" + m->name + "\"" + targs + ");\n    }\n";
                 } else {
                     const std::string thunk = "[&]{ " + (is_void ? std::string() : std::string("return ")) +
-                                              "this->" + k.name + "::" + m->name + "(" + names + "); }";
-                    s += sig + ret + "rosetta::napi_call_override<" + k.name + ", " + m->ret_cpp +
+                                              "this->" + kq + "::" + m->name + "(" + names + "); }";
+                    s += sig + ret + "rosetta::napi_call_override<" + kq + ", " + rq +
                          ">(*this, \"" + m->name + "\", " + thunk + targs + ");\n    }\n";
                 }
             }
@@ -210,12 +231,14 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                          ">(env));\n";
             }
             for (const auto &k : c.classes) {
+                const std::string kq = qualified_of(k);
+                const std::string kx = exposed_of(k);
                 if (node_virtual_methods(k).empty()) {
-                    binds += "    exports.Set(\"" + k.name + "\", rosetta::bind_napi<" + k.name +
-                             ">(env, \"" + k.name + "\"));\n";
+                    binds += "    exports.Set(\"" + kx + "\", rosetta::bind_napi<" + kq +
+                             ">(env, \"" + kx + "\"));\n";
                 } else {
-                    binds += "    exports.Set(\"" + k.name + "\", rosetta::bind_napi<" + k.name +
-                             ", rosetta_node::Js_" + k.name + ">(env, \"" + k.name + "\"));\n";
+                    binds += "    exports.Set(\"" + kx + "\", rosetta::bind_napi<" + kq +
+                             ", rosetta_node::Js_" + kx + ">(env, \"" + kx + "\"));\n";
                 }
             }
             for (const auto &f : c.functions) {
