@@ -149,14 +149,16 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     if (!m.cxx_standard.empty()) {
         out << "    opt.cxx_standard    = \"" << m.cxx_standard << "\";\n";
     }
-    // External library to link the bindings against (manifest "user_lib"). Only
-    // the stock *-expanded backends consume these (see GenerateOptions).
-    if (!m.user_lib_name.empty()) {
-        out << "    opt.user_lib_name   = \"" << m.user_lib_name << "\";\n";
-        out << "    opt.user_lib_dir    = \"" << m.user_lib_dir << "\";\n";
-        if (!m.user_lib_link.empty()) {
-            out << "    opt.user_lib_link   = \"" << m.user_lib_link << "\";\n";
+    // External libraries to link the bindings against (manifest "user_lib"),
+    // in link order. Only the stock *-expanded backends consume these (see
+    // GenerateOptions).
+    if (!m.user_libs.empty()) {
+        out << "    opt.user_libs       = {\n";
+        for (const auto &u : m.user_libs) {
+            out << "        {\"" << u.name << "\", \"" << u.dir << "\", \""
+                << (u.link.empty() ? "shared" : u.link) << "\"},\n";
         }
+        out << "    };\n";
     }
     // User .cpp sources compiled into each binding target (manifest "user_sources").
     if (!m.user_sources.empty()) {
@@ -193,7 +195,7 @@ static std::string render_project_gen_cpp(const Manifest &m) {
         out << "    opt.functions       = {\n";
         for (const auto &f : m.functions) {
             out << "        rosetta::make_function<^^" << f.name << ">(\"" << f.name << "\", \""
-                << f.header << "\", \"" << f.doc << "\"),\n";
+                << f.header << "\", \"" << f.doc << "\", \"" << f.expose << "\"),\n";
         }
         out << "    };\n";
     }
@@ -210,7 +212,7 @@ static std::string render_project_gen_cpp(const Manifest &m) {
                 for (const auto &x : c.extensions) {
                     out << "        {\"" << c.name << "\", rosetta::make_function<^^" << x.name
                         << ">(\"" << x.name << "\", \"" << x.header << "\", \"" << x.doc
-                        << "\")},\n";
+                        << "\", \"" << x.expose << "\")},\n";
                 }
             }
             out << "    };\n";
@@ -312,37 +314,48 @@ static std::string render_cmakelists(const Manifest &m) {
     // the driver links against it too: the reflection walk instantiates each
     // bound type (e.g. to read default-constructed field values), so it needs
     // the out-of-line definitions at link AND run time (hence rpath).
-    if (!m.user_lib_name.empty()) {
-        const std::string link = m.user_lib_link.empty() ? "shared" : m.user_lib_link;
-        out << "\n# External user library (manifest \"user_lib\"). `link` (\"shared\" |\n"
+    if (!m.user_libs.empty()) {
+        out << "\n# External user libraries (manifest \"user_lib\"), in link order — the\n"
+               "# bound library plus the pre-built ones it depends on. `link` (\"shared\" |\n"
                "# \"static\") picks the preferred form; we fall back to whichever is present\n"
                "# and reference it by full path (never mistaken for a same-named target).\n"
-            << "set(ROSETTA_USER_LIB \"" << m.user_lib_name << "\")\n"
-            << "set(ROSETTA_USER_LIB_DIR \"" << m.user_lib_dir << "\")\n"
-            << "set(ROSETTA_USER_LIB_LINK \"" << link << "\")\n"
-            << "set(_rosetta_shared \"${ROSETTA_USER_LIB_DIR}/${CMAKE_SHARED_LIBRARY_PREFIX}"
-               "${ROSETTA_USER_LIB}${CMAKE_SHARED_LIBRARY_SUFFIX}\")\n"
-            << "set(_rosetta_static \"${ROSETTA_USER_LIB_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}"
-               "${ROSETTA_USER_LIB}${CMAKE_STATIC_LIBRARY_SUFFIX}\")\n"
-            << "if(ROSETTA_USER_LIB_LINK STREQUAL \"static\")\n"
-            << "    set(_rosetta_order \"${_rosetta_static}\" \"${_rosetta_shared}\")\n"
-            << "else()\n"
-            << "    set(_rosetta_order \"${_rosetta_shared}\" \"${_rosetta_static}\")\n"
-            << "endif()\n"
-            << "set(_rosetta_lib \"\")\n"
-            << "foreach(_cand IN LISTS _rosetta_order)\n"
-            << "    if(EXISTS \"${_cand}\")\n"
-            << "        set(_rosetta_lib \"${_cand}\")\n"
-            << "        break()\n"
-            << "    endif()\n"
-            << "endforeach()\n"
-            << "if(NOT _rosetta_lib)\n"
-            << "    set(_rosetta_lib \"-l${ROSETTA_USER_LIB}\")\n"
-            << "endif()\n"
-            << "target_link_directories(" << target << " PRIVATE ${ROSETTA_USER_LIB_DIR})\n"
-            << "target_link_libraries(" << target << " PRIVATE \"${_rosetta_lib}\")\n"
+            << "set(_rosetta_rpath \"\")\n";
+        for (std::size_t i = 0; i < m.user_libs.size(); ++i) {
+            const auto       &u    = m.user_libs[i];
+            const std::string n    = std::to_string(i);
+            const std::string link = u.link.empty() ? "shared" : u.link;
+            out << "set(ROSETTA_USER_LIB_" << n << " \"" << u.name << "\")\n"
+                << "set(ROSETTA_USER_LIB_DIR_" << n << " \"" << u.dir << "\")\n"
+                << "set(ROSETTA_USER_LIB_LINK_" << n << " \"" << link << "\")\n"
+                << "set(_rosetta_shared \"${ROSETTA_USER_LIB_DIR_" << n
+                << "}/${CMAKE_SHARED_LIBRARY_PREFIX}"
+                   "${ROSETTA_USER_LIB_" << n << "}${CMAKE_SHARED_LIBRARY_SUFFIX}\")\n"
+                << "set(_rosetta_static \"${ROSETTA_USER_LIB_DIR_" << n
+                << "}/${CMAKE_STATIC_LIBRARY_PREFIX}"
+                   "${ROSETTA_USER_LIB_" << n << "}${CMAKE_STATIC_LIBRARY_SUFFIX}\")\n"
+                << "if(ROSETTA_USER_LIB_LINK_" << n << " STREQUAL \"static\")\n"
+                << "    set(_rosetta_order \"${_rosetta_static}\" \"${_rosetta_shared}\")\n"
+                << "else()\n"
+                << "    set(_rosetta_order \"${_rosetta_shared}\" \"${_rosetta_static}\")\n"
+                << "endif()\n"
+                << "set(_rosetta_lib \"\")\n"
+                << "foreach(_cand IN LISTS _rosetta_order)\n"
+                << "    if(EXISTS \"${_cand}\")\n"
+                << "        set(_rosetta_lib \"${_cand}\")\n"
+                << "        break()\n"
+                << "    endif()\n"
+                << "endforeach()\n"
+                << "if(NOT _rosetta_lib)\n"
+                << "    set(_rosetta_lib \"-l${ROSETTA_USER_LIB_" << n << "}\")\n"
+                << "endif()\n"
+                << "target_link_directories(" << target << " PRIVATE ${ROSETTA_USER_LIB_DIR_" << n
+                << "})\n"
+                << "target_link_libraries(" << target << " PRIVATE \"${_rosetta_lib}\")\n"
+                << "list(APPEND _rosetta_rpath \"${ROSETTA_USER_LIB_DIR_" << n << "}\")\n";
+        }
+        out << "list(REMOVE_DUPLICATES _rosetta_rpath)\n"
             << "set_target_properties(" << target << " PROPERTIES\n"
-            << "    BUILD_RPATH \"${ROSETTA_USER_LIB_DIR}\")\n";
+            << "    BUILD_RPATH \"${_rosetta_rpath}\")\n";
     }
     return out.str();
 }

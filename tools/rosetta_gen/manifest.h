@@ -53,6 +53,13 @@
 //                                                   //   preferred form, with fallback to
 //                                                   //   whichever is built. wasm is always
 //                                                   //   static (no native .so in wasm).
+//                                                   //   May also be an ARRAY of such objects
+//                                                   //   — the bound library plus the ones it
+//                                                   //   depends on, linked in order:
+//                                                   //   "user_lib": [
+//                                                   //     {"name":"space","dir":"../space/bin"},
+//                                                   //     {"name":"foo","dir":"/opt/foo/lib",
+//                                                   //      "link":"static"} ]
 //     "compile_definitions": [                      // optional: preprocessor definitions
 //       "XXX_USE_BUILTIN_DEPS",                     //   ("NAME" or "NAME=VALUE") applied to
 //       "XXX_WITH_HLBFGS"                           //   the driver AND every compiled
@@ -97,8 +104,12 @@
 //       { "header": "Point.h" }                     // name derived from header stem
 //     ],
 //     "functions": [                                // optional: free (non-member) fns
-//       { "name": "transform", "header": "common.h", "doc": "..." }
-//     ],                                            // name may be qualified (api::add)
+//       { "name": "transform", "header": "common.h", "doc": "...",
+//         "expose": "warp" }                        // optional: binding name, overriding
+//     ],                                            //   the identifier (same rule as a
+//                                                   //   class's "expose"; also valid on
+//                                                   //   an "extensions" entry). Name may
+//                                                   //   be qualified (api::add).
 //     "sequences": [                                // optional: foreign sequence
 //       "GEO::vector"                               //   containers (ONE type param) —
 //     ]                                             //   marshal like std::vector<T>
@@ -116,6 +127,13 @@ struct FunctionEntry {
     std::string name;   // (optionally qualified) C++ function name, e.g. "api::add"
     std::string header; // header declaring it
     std::string doc;    // optional manifest doc string
+
+    // Optional "expose": the binding name, overriding the C++ identifier —
+    // how two free functions sharing an unqualified name (arch::solve and
+    // arch::sinv::solve) coexist in one module, and how an extension method
+    // is renamed on the class it attaches to. Empty means the function binds
+    // under its own (unqualified) identifier.
+    std::string expose;
 };
 
 struct ClassEntry {
@@ -143,6 +161,15 @@ struct ClassEntry {
     // helpers): the glue shrinks to stateless free functions — no wrapper
     // class — and scripts keep holding the real C++ objects.
     std::vector<FunctionEntry> extensions;
+};
+
+// One entry of the manifest's "user_lib": a pre-built library the generated
+// bindings (and the generator driver) link against. Several may be listed —
+// the bound library plus the ones it depends on — and they link in order.
+struct UserLibEntry {
+    std::string name; // library base name ("space" ⇒ libspace.dylib / .so / .a)
+    std::string dir;  // absolute dir holding it (-L / rpath)
+    std::string link; // "shared" (default) | "static"; wasm always static
 };
 
 struct TargetEntry {
@@ -180,9 +207,10 @@ struct Manifest {
     std::string                cpp26_cc;   // optional C compiler (name or path)
     std::string                cpp26_lib;  // optional fork stdlib dir (libc++/libc++abi)
     std::string                qt_dir;     // optional Qt 6 prefix (qt/qml backends)
-    std::string                user_lib_name; // optional external lib to link bindings against
-    std::string                user_lib_dir;  // optional dir holding it (absolute; -L / rpath)
-    std::string                user_lib_link; // "shared" (default) | "static"; wasm always static
+    // Optional external libraries the bindings link against ("user_lib"): one
+    // object, or an array of them when the bound library itself depends on
+    // other pre-built libraries. Order is the link order.
+    std::vector<UserLibEntry>  user_libs;
     std::string                build_type;    // optional default CMAKE_BUILD_TYPE for every binding
     std::string                optimization;  // optional explicit -O flag overriding the build type's
     std::string                cxx_standard;  // optional per-source -std for the user_sources ("" ⇒ target's own)

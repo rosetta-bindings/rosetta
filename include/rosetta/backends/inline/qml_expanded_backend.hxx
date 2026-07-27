@@ -245,9 +245,9 @@ The app opens a QtQuick inspector on the first default-constructible class.
         }
 
         inline std::string qmlx_bind_fn(const GenClass &k) {
-            std::string s = "void rosetta_qml::bind_" + k.name + "(rosetta::ReflectedObject *obj, " +
-                            k.name + " &t) {\n";
-            s += "    " + k.name + " *self = &t;\n    (void)self;\n";
+            std::string s = "void rosetta_qml::bind_" + exposed_of(k) +
+                            "(rosetta::ReflectedObject *obj, " + qualified_of(k) + " &t) {\n";
+            s += "    " + qualified_of(k) + " *self = &t;\n    (void)self;\n";
             for (const auto &f : k.fields) {
                 s += qmlx_field(f);
             }
@@ -255,7 +255,7 @@ The app opens a QtQuick inspector on the first default-constructible class.
                 if (m.is_extension) {
                     continue; // extensions: no member pointer
                 }
-                s += qmlx_method(k.name, m);
+                s += qmlx_method(qualified_of(k), m);
             }
             s += "}\n\n";
             return s;
@@ -295,7 +295,8 @@ The app opens a QtQuick inspector on the first default-constructible class.
             h += using_namespaces_of(c); // `using namespace` for namespaced user types
             h += "\nnamespace rosetta_qml {\n";
             for (const auto &k : c.classes) {
-                h += "    void bind_" + k.name + "(rosetta::ReflectedObject *obj, " + k.name +
+                h += "    void bind_" + exposed_of(k) + "(rosetta::ReflectedObject *obj, " +
+                     qualified_of(k) +
                      " &target);\n";
             }
             h += "} // namespace rosetta_qml\n";

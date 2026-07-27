@@ -214,7 +214,8 @@ python3 -c "import {{LIB}}"
             std::string binds;
             // Enums first so class fields/methods can resolve them.
             for (const auto &e : c.enums) {
-                binds += "    rosetta::bind_pybind_enum<" + e.name + ">(m, \"" + e.name + "\");\n";
+                binds += "    rosetta::bind_pybind_enum<" + qualified_of(e) + ">(m, \"" +
+                         exposed_of(e) + "\");\n";
             }
             for (const auto &k : c.classes) {
                 // Trailing template args: the bound base classes. A base must be

@@ -292,6 +292,28 @@ Manifest load(const fs::path &manifest_path) {
         }
         return ctx.dir + h;
     };
+    // An entry's optional "expose": the binding name, overriding the C++
+    // identifier. It names a module attribute (and, for a class, a generated
+    // trampoline), so it must be a plain identifier. Shared by classes, free
+    // functions and extension methods.
+    auto entry_expose = [](const json &e, const std::string &name, const char *what) {
+        std::string expose;
+        if (e.contains("expose")) {
+            expose             = e.at("expose").get<std::string>();
+            const bool ident   = !expose.empty() &&
+                               (std::isalpha(static_cast<unsigned char>(expose[0])) ||
+                                expose[0] == '_') &&
+                               std::all_of(expose.begin(), expose.end(), [](char ch) {
+                                   return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+                               });
+            if (!ident) {
+                throw std::runtime_error(std::string(what) + " \"" + name + "\": \"expose\" (\"" +
+                                         expose + "\") must be a plain identifier");
+            }
+        }
+        return expose;
+    };
+
     const EntryCtx top{
         j.contains("namespace") ? j.at("namespace").get<std::string>() : std::string{},
         with_slash(j.contains("header_dir") ? j.at("header_dir").get<std::string>()
@@ -318,20 +340,7 @@ Manifest load(const fs::path &manifest_path) {
                 // `expose` is optional: the binding name, overriding the C++
                 // identifier (see ClassEntry::expose). Must be a plain
                 // identifier — it names a module attribute and a trampoline.
-                if (c.contains("expose")) {
-                    e.expose = c.at("expose").get<std::string>();
-                    const bool ident =
-                        !e.expose.empty() &&
-                        (std::isalpha(static_cast<unsigned char>(e.expose[0])) ||
-                         e.expose[0] == '_') &&
-                        std::all_of(e.expose.begin(), e.expose.end(), [](char ch) {
-                            return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
-                        });
-                    if (!ident) {
-                        throw std::runtime_error("class \"" + e.name + "\": \"expose\" (\"" +
-                                                 e.expose + "\") must be a plain identifier");
-                    }
-                }
+                e.expose = entry_expose(c, e.name, "class");
                 // `annotations` is optional: an out-of-line annotation JSON side-car
                 // (doc/range/readonly/combobox keyed by member name). Baked into
                 // bindings.h at generation time, so the user's header stays clean.
@@ -353,6 +362,8 @@ Manifest load(const fs::path &manifest_path) {
                         xe.header = ctx.dir + x.at("header").get<std::string>();
                         xe.doc =
                             x.contains("doc") ? x.at("doc").get<std::string>() : std::string{};
+                        // `expose` renames the method on the class it attaches to.
+                        xe.expose = entry_expose(x, xe.name, "extension");
                         e.extensions.push_back(std::move(xe));
                     }
                 }
@@ -382,6 +393,9 @@ Manifest load(const fs::path &manifest_path) {
                     e.name   = qualify(ctx.ns, f.at("name").get<std::string>());
                     e.header = entry_header(f, ctx, "function");
                     e.doc    = f.contains("doc") ? f.at("doc").get<std::string>() : std::string{};
+                    // `expose` is optional: the binding name, overriding the C++
+                    // identifier (see FunctionEntry::expose).
+                    e.expose = entry_expose(f, e.name, "function");
                     m.functions.push_back(std::move(e));
                 }
             };
@@ -579,30 +593,61 @@ Manifest load(const fs::path &manifest_path) {
         m.cxx_standard = std_str;
     }
 
-    // `user_lib` is optional: an external library the generated bindings link
+    // `user_lib` is optional: the external libraries the generated bindings link
     // against. Use it when the bound headers only *declare* the API and its
-    // bodies are compiled into a separate shared/static library. `name` is the
+    // bodies are compiled into separate shared/static libraries. `name` is the
     // library base name (-l<name>); `dir` is the directory holding it, resolved
     // to an absolute path (relative to the manifest) for -L / rpath.
+    //
+    // It is either ONE object or an ARRAY of them — the bound library plus the
+    // pre-built libraries it depends on. Array order is the link order, so list
+    // dependents before their dependencies when linking static archives.
     if (j.contains("user_lib")) {
         const auto &ul = j.at("user_lib");
-        m.user_lib_name = ul.at("name").get<std::string>();
-        m.user_lib_dir =
-            fs::weakly_canonical(base / fs::path(ul.at("dir").get<std::string>())).string();
-        // Optional "link": prefer linking the shared or the static form of the
-        // library. "dynamic" is accepted as an alias for "shared". Default shared.
-        // (WebAssembly always links static regardless — see the wasm backend.)
-        if (ul.contains("link")) {
-            std::string link = ul.at("link").get<std::string>();
-            if (link == "dynamic") {
-                link = "shared";
+        if (!ul.is_object() && !ul.is_array()) {
+            throw std::runtime_error(
+                "\"user_lib\" must be an object {name, dir, link} or an array of them");
+        }
+        if (ul.is_array() && ul.empty()) {
+            throw std::runtime_error("\"user_lib\" array must not be empty");
+        }
+        const auto parse_one = [&](const nlohmann::json &e) {
+            if (!e.is_object()) {
+                throw std::runtime_error("each \"user_lib\" entry must be an object {name, dir, link}");
             }
-            if (link != "shared" && link != "static") {
+            if (!e.contains("name") || !e.contains("dir")) {
                 throw std::runtime_error(
-                    "user_lib.link must be \"shared\", \"dynamic\", or \"static\" (got \"" + link +
-                    "\")");
+                    "each \"user_lib\" entry needs a \"name\" and a \"dir\"");
             }
-            m.user_lib_link = link;
+            UserLibEntry u;
+            u.name = e.at("name").get<std::string>();
+            if (u.name.empty()) {
+                throw std::runtime_error("\"user_lib\" entry has an empty \"name\"");
+            }
+            u.dir = fs::weakly_canonical(base / fs::path(e.at("dir").get<std::string>())).string();
+            // Optional "link": prefer linking the shared or the static form of the
+            // library. "dynamic" is accepted as an alias for "shared". Default shared.
+            // (WebAssembly always links static regardless — see the wasm backend.)
+            if (e.contains("link")) {
+                std::string link = e.at("link").get<std::string>();
+                if (link == "dynamic") {
+                    link = "shared";
+                }
+                if (link != "shared" && link != "static") {
+                    throw std::runtime_error(
+                        "user_lib.link must be \"shared\", \"dynamic\", or \"static\" (got \"" +
+                        link + "\")");
+                }
+                u.link = link;
+            }
+            m.user_libs.push_back(std::move(u));
+        };
+        if (ul.is_object()) {
+            parse_one(ul);
+        } else {
+            for (const auto &e : ul) {
+                parse_one(e);
+            }
         }
     }
 
@@ -617,26 +662,63 @@ Manifest load(const fs::path &manifest_path) {
         throw std::runtime_error("manifest has no class entries");
     }
 
-    // Every class binds under ONE module-level name: its "expose" override, or
-    // its unqualified C++ identifier. Two entries resolving to the same name
-    // would collide in the generated module (and the generated trampolines
-    // Py_<name> / Js_<name> would collide in C++) — catch it here, where the
-    // fix ("expose" one of them) is a one-line manifest edit.
+    // Every class and every free function binds under ONE module-level name:
+    // its "expose" override, or its unqualified C++ identifier. Two entries
+    // resolving to the same name would collide in the generated module (and
+    // two classes would additionally collide in C++, their trampolines both
+    // named Py_<name> / Js_<name>) — catch it here, where the fix ("expose"
+    // one of them) is a one-line manifest edit. Classes and functions share
+    // the module namespace, so the check spans both.
     {
-        auto exposed = [](const ClassEntry &e) {
-            if (!e.expose.empty()) {
-                return e.expose;
+        auto exposed = [](const std::string &name, const std::string &expose) {
+            if (!expose.empty()) {
+                return expose;
             }
-            const auto pos = e.name.rfind("::");
-            return pos == std::string::npos ? e.name : e.name.substr(pos + 2);
+            const auto pos = name.rfind("::");
+            return pos == std::string::npos ? name : name.substr(pos + 2);
         };
-        for (std::size_t i = 0; i < m.classes.size(); ++i) {
-            for (std::size_t j = i + 1; j < m.classes.size(); ++j) {
-                if (exposed(m.classes[i]) == exposed(m.classes[j])) {
+        struct Bound {
+            std::string name;   // C++ spelling, for the message
+            std::string as;     // module-level name it binds under
+            const char *what;   // "class" / "function"
+        };
+        std::vector<Bound> bound;
+        bound.reserve(m.classes.size() + m.functions.size());
+        for (const auto &c : m.classes) {
+            bound.push_back({c.name, exposed(c.name, c.expose), "class"});
+        }
+        for (const auto &f : m.functions) {
+            bound.push_back({f.name, exposed(f.name, f.expose), "function"});
+        }
+        for (std::size_t i = 0; i < bound.size(); ++i) {
+            for (std::size_t j = i + 1; j < bound.size(); ++j) {
+                if (bound[i].as == bound[j].as) {
+                    throw std::runtime_error(std::string(bound[i].what) + " \"" + bound[i].name +
+                                             "\" and " + bound[j].what + " \"" + bound[j].name +
+                                             "\" both bind as \"" + bound[i].as +
+                                             "\" — rename one with \"expose\"");
+                }
+            }
+        }
+    }
+
+    // Extension methods bind as members of their class, so the same rule
+    // applies per class rather than module-wide.
+    for (const auto &c : m.classes) {
+        for (std::size_t i = 0; i < c.extensions.size(); ++i) {
+            for (std::size_t j = i + 1; j < c.extensions.size(); ++j) {
+                auto exposed = [](const FunctionEntry &e) {
+                    if (!e.expose.empty()) {
+                        return e.expose;
+                    }
+                    const auto pos = e.name.rfind("::");
+                    return pos == std::string::npos ? e.name : e.name.substr(pos + 2);
+                };
+                if (exposed(c.extensions[i]) == exposed(c.extensions[j])) {
                     throw std::runtime_error(
-                        "classes \"" + m.classes[i].name + "\" and \"" + m.classes[j].name +
-                        "\" both bind as \"" + exposed(m.classes[i]) +
-                        "\" — rename one with \"expose\"");
+                        "extensions \"" + c.extensions[i].name + "\" and \"" +
+                        c.extensions[j].name + "\" of class \"" + c.name + "\" both bind as \"" +
+                        exposed(c.extensions[i]) + "\" — rename one with \"expose\"");
                 }
             }
         }

@@ -109,10 +109,12 @@ python3 -c "import {{LIB}}"
         inline std::string nanobind_bindings(const GenContext &c) {
             std::string binds;
             for (const auto &e : c.enums) {
-                binds += "    rosetta::bind_nanobind_enum<" + e.name + ">(m, \"" + e.name + "\");\n";
+                binds += "    rosetta::bind_nanobind_enum<" + qualified_of(e) + ">(m, \"" +
+                         exposed_of(e) + "\");\n";
             }
             for (const auto &k : c.classes) {
-                binds += "    rosetta::bind_nanobind<" + k.name + ">(m, \"" + k.name + "\");\n";
+                binds += "    rosetta::bind_nanobind<" + qualified_of(k) + ">(m, \"" + exposed_of(k) +
+                         "\");\n";
             }
             for (const auto &f : c.functions) {
                 binds += "    m.def(\"" + f.name + "\", &" + f.qualified +

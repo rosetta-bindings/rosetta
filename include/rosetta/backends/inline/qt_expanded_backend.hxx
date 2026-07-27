@@ -199,9 +199,10 @@ The app opens one inspector tab per default-constructible class.
         }
 
         inline std::string qtx_build_fn(const GenClass &k) {
-            std::string s = "QWidget *rosetta_qt::build_" + k.name + "_inspector(" + k.name +
+            std::string s = "QWidget *rosetta_qt::build_" + exposed_of(k) + "_inspector(" +
+                            qualified_of(k) +
                             " &t, bool with_log) {\n";
-            s += "    auto shell = rosetta::qtw::make_shell(QStringLiteral(\"" + k.name +
+            s += "    auto shell = rosetta::qtw::make_shell(QStringLiteral(\"" + exposed_of(k) +
                  "\"), with_log);\n";
             s += "    QFormLayout *form = shell.form;\n";
             s += "    QTextEdit *log = shell.log;\n";
@@ -213,7 +214,7 @@ The app opens one inspector tab per default-constructible class.
                 if (m.is_extension) {
                     continue; // extensions: no member pointer
                 }
-                s += qtx_method(k.name, m);
+                s += qtx_method(qualified_of(k), m);
             }
             s += "    return shell.root;\n}\n\n";
             return s;
@@ -229,7 +230,7 @@ The app opens one inspector tab per default-constructible class.
             s += using_namespaces_of(c); // `using namespace` for namespaced user types
             s += "\nclass QWidget;\n\nnamespace rosetta_qt {\n";
             for (const auto &k : c.classes) {
-                s += "    QWidget *build_" + k.name + "_inspector(" + k.name +
+                s += "    QWidget *build_" + exposed_of(k) + "_inspector(" + qualified_of(k) +
                      " &target, bool with_log = false);\n";
             }
             s += "} // namespace rosetta_qt\n";
@@ -259,9 +260,9 @@ The app opens one inspector tab per default-constructible class.
                 if (!k.is_default_constructible) {
                     continue;
                 }
-                s += "    static " + k.name + " " + k.name + "_obj;\n";
-                s += "    tabs->addTab(rosetta_qt::build_" + k.name + "_inspector(" + k.name +
-                     "_obj, true), QStringLiteral(\"" + k.name + "\"));\n";
+                s += "    static " + qualified_of(k) + " " + exposed_of(k) + "_obj;\n";
+                s += "    tabs->addTab(rosetta_qt::build_" + exposed_of(k) + "_inspector(" +
+                     exposed_of(k) + "_obj, true), QStringLiteral(\"" + exposed_of(k) + "\"));\n";
             }
             s += "    tabs->resize(460, 540);\n    tabs->show();\n    return app.exec();\n}\n";
             return s;

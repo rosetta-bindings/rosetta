@@ -257,9 +257,10 @@ python3 -c "import {{LIB}}"
 
         // Explicit pybind for one enum: py::enum_<E>(m,"E").value("A", E::A)...;
         inline std::string expanded_enum(const GenEnum &e) {
-            std::string s = "    py::enum_<" + e.name + ">(m, \"" + e.name + "\")";
+            const std::string eq = qualified_of(e);
+            std::string       s  = "    py::enum_<" + eq + ">(m, \"" + exposed_of(e) + "\")";
             for (const auto &v : e.values) {
-                s += "\n        .value(\"" + v.name + "\", " + e.name + "::" + v.name + ")";
+                s += "\n        .value(\"" + v.name + "\", " + eq + "::" + v.name + ")";
             }
             s += ";\n";
             return s;

@@ -36,24 +36,7 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 target_include_directories({{LIB}} PRIVATE
     {{USER_INCLUDE}}
-    {{ROSETTA_INCLUDE}})
-
-# Optional external user library (manifest "user_lib"). WebAssembly cannot link a
-# native .dylib/.so and has no rpath, so the manifest's `link` choice is overridden
-# here: the library is ALWAYS the wasm static archive (lib{{USER_LIB_NAME}}.a)
-# compiled with the SAME emsdk. Referenced by full path so a same-named project
-# target is never linked by mistake. Empty name ⇒ skipped.
-set(ROSETTA_USER_LIB "{{USER_LIB_NAME}}")
-set(ROSETTA_USER_LIB_DIR "{{USER_LIB_DIR}}")
-if(ROSETTA_USER_LIB)
-    target_link_directories({{LIB}} PRIVATE ${ROSETTA_USER_LIB_DIR})
-    set(_rosetta_static "${ROSETTA_USER_LIB_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}${ROSETTA_USER_LIB}${CMAKE_STATIC_LIBRARY_SUFFIX}")
-    if(EXISTS "${_rosetta_static}")
-        target_link_libraries({{LIB}} PRIVATE "${_rosetta_static}")
-    else()
-        target_link_libraries({{LIB}} PRIVATE "-l${ROSETTA_USER_LIB}")
-    endif()
-endif()
+    {{ROSETTA_INCLUDE}}){{USER_LIB_WASM_BLOCK}}
 
 target_compile_options({{LIB}} PRIVATE
     {{REFLECTION_FLAGS}})
@@ -96,10 +79,11 @@ node -e "require('./build/{{LIB}}.js')().then(M => console.log(Object.keys(M)))"
             std::string binds;
             // Enums first so class fields/methods can resolve them.
             for (const auto &e : c.enums) {
-                binds += "    rosetta::bind_wasm_enum<" + e.name + ">(\"" + e.name + "\");\n";
+                binds += "    rosetta::bind_wasm_enum<" + qualified_of(e) + ">(\"" + exposed_of(e) +
+                         "\");\n";
             }
             for (const auto &k : c.classes) {
-                binds += "    rosetta::bind_wasm<" + k.name + ">(\"" + k.name + "\");\n";
+                binds += "    rosetta::bind_wasm<" + qualified_of(k) + ">(\"" + exposed_of(k) + "\");\n";
             }
             for (const auto &f : c.functions) {
                 binds += "    emscripten::function(\"" + f.name + "\", &" + f.qualified +

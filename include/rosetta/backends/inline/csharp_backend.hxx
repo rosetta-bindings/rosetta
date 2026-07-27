@@ -226,7 +226,7 @@ those. Members using any other type are omitted from both sides.
 
         // Render a neutral GenType as the C# type the wrapper marshals it to.
         // Only ever called for jsonable types; the fallback is defensive.
-        inline std::string cs_type(const GenType &t) {
+        inline std::string cs_type(const GenType &t, const GenContext &c) {
             if (t.kind == "boolean") {
                 return "bool";
             }
@@ -237,21 +237,22 @@ those. Members using any other type are omitted from both sides.
                 return t.integer ? "long" : "double";
             }
             if (t.kind == "enum") {
-                return t.object.empty() ? "long" : t.object;
+                return t.object.empty() ? "long" : exposed_object_of(t, c);
             }
             if (t.kind == "vector") {
                 return "System.Collections.Generic.List<" +
-                       (t.element.empty() ? std::string("object") : cs_type(t.element.front())) +
+                       (t.element.empty() ? std::string("object")
+                                          : cs_type(t.element.front(), c)) +
                        ">";
             }
             return "object";
         }
 
         // "double arg0, double arg1"
-        inline std::string cs_param_sig(const std::vector<GenParam> &ps) {
+        inline std::string cs_param_sig(const std::vector<GenParam> &ps, const GenContext &c) {
             std::string s;
             for (std::size_t i = 0; i < ps.size(); ++i) {
-                s += (i ? ", " : "") + cs_type(ps[i].type) + " " + ps[i].name;
+                s += (i ? ", " : "") + cs_type(ps[i].type, c) + " " + ps[i].name;
             }
             return s;
         }
@@ -364,20 +365,20 @@ those. Members using any other type are omitted from both sides.
         }
 
         // One handle-backed wrapper class.
-        inline std::string cs_class(const GenClass &k) {
+        inline std::string cs_class(const GenClass &k, const GenContext &c) {
             std::string s;
             if (!k.doc.empty()) {
-                s += "    // " + k.name + "\n";
+                s += "    // " + exposed_of(k) + "\n";
             }
-            s += "    public sealed class " + k.name + " : System.IDisposable {\n";
+            s += "    public sealed class " + exposed_of(k) + " : System.IDisposable {\n";
             s += "        private int _id;\n";
-            s += "        private const string _t = \"" + k.name + "\";\n\n";
+            s += "        private const string _t = \"" + exposed_of(k) + "\";\n\n";
 
             // Constructors. Dedupe by C# signature so two C++ ctors that erase to
             // the same arity/types don't produce a duplicate member.
             std::vector<std::string> seen_sigs;
             auto                     emit_ctor = [&](const std::vector<GenParam> &ps) {
-                const std::string sig = cs_param_sig(ps);
+                const std::string sig = cs_param_sig(ps, c);
                 for (const auto &s2 : seen_sigs) {
                     if (s2 == sig) {
                         return;
@@ -386,7 +387,7 @@ those. Members using any other type are omitted from both sides.
                 seen_sigs.push_back(sig);
                 const std::string args =
                     ps.empty() ? std::string("\"[]\"") : "Rt.Args(" + cs_arg_names(ps) + ")";
-                s += "        public " + k.name + "(" + sig + ") { _id = Rt.New(_t, " + args +
+                s += "        public " + exposed_of(k) + "(" + sig + ") { _id = Rt.New(_t, " + args +
                      "); }\n";
             };
             if (k.is_default_constructible) {
@@ -400,7 +401,7 @@ those. Members using any other type are omitted from both sides.
             if (seen_sigs.empty()) {
                 // No JSON-marshalable constructor — block the implicit public
                 // parameterless ctor so a broken (id 0) instance can't be made.
-                s += "        private " + k.name +
+                s += "        private " + exposed_of(k) +
                      "() { } // no JSON-marshalable constructor\n";
             }
 
@@ -408,7 +409,7 @@ those. Members using any other type are omitted from both sides.
             s += "            if (_id > 0) { Native.rosetta_csharp_destroy(_t, _id); _id = 0; }\n";
             s += "            System.GC.SuppressFinalize(this);\n";
             s += "        }\n";
-            s += "        ~" + k.name +
+            s += "        ~" + exposed_of(k) +
                  "() { if (_id > 0) Native.rosetta_csharp_destroy(_t, _id); }\n";
 
             // Fields → properties.
@@ -416,7 +417,7 @@ those. Members using any other type are omitted from both sides.
                 if (!jsonable_type(f.type)) {
                     continue;
                 }
-                const std::string ty = cs_type(f.type);
+                const std::string ty = cs_type(f.type, c);
                 if (!f.doc.empty()) {
                     s += "\n        /// <summary>" + f.doc + "</summary>";
                 }
@@ -435,7 +436,7 @@ those. Members using any other type are omitted from both sides.
                 if (m.is_extension || !jsonable_method(m)) { // extensions: no member pointer
                     continue;
                 }
-                const std::string sig    = cs_param_sig(m.params);
+                const std::string sig    = cs_param_sig(m.params, c);
                 const std::string names  = cs_arg_names(m.params);
                 const std::string argexp = "Rt.Args(" + names + ")";
                 if (!m.doc.empty()) {
@@ -450,8 +451,8 @@ those. Members using any other type are omitted from both sides.
                 if (m.ret.kind == "void") {
                     s += "void " + m.name + "(" + sig + ") => Rt.Void(" + callexpr + ");\n";
                 } else {
-                    s += cs_type(m.ret) + " " + m.name + "(" + sig + ") => Rt.Get<" +
-                         cs_type(m.ret) + ">(" + callexpr + ");\n";
+                    s += cs_type(m.ret, c) + " " + m.name + "(" + sig + ") => Rt.Get<" +
+                         cs_type(m.ret, c) + ">(" + callexpr + ");\n";
                 }
             }
 
@@ -467,9 +468,9 @@ those. Members using any other type are omitted from both sides.
 
             for (const auto &e : c.enums) {
                 if (!e.doc.empty()) {
-                    s += "    // " + e.name + "\n";
+                    s += "    // " + exposed_of(e) + "\n";
                 }
-                s += "    public enum " + e.name + " {\n";
+                s += "    public enum " + exposed_of(e) + " {\n";
                 for (const auto &v : e.values) {
                     s += "        " + v.name + " = " + std::to_string(v.value) + ",\n";
                 }
@@ -479,7 +480,7 @@ those. Members using any other type are omitted from both sides.
             s += cs_runtime(c);
 
             for (const auto &k : c.classes) {
-                s += cs_class(k);
+                s += cs_class(k, c);
             }
 
             // Free functions → a static facade class.
@@ -504,11 +505,11 @@ those. Members using any other type are omitted from both sides.
                     }
                     s += "        public static ";
                     if (f.ret.kind == "void") {
-                        s += "void " + f.name + "(" + cs_param_sig(f.params) + ") => Rt.Void(" +
+                        s += "void " + f.name + "(" + cs_param_sig(f.params, c) + ") => Rt.Void(" +
                              call + ");\n";
                     } else {
-                        s += cs_type(f.ret) + " " + f.name + "(" + cs_param_sig(f.params) +
-                             ") => Rt.Get<" + cs_type(f.ret) + ">(" + call + ");\n";
+                        s += cs_type(f.ret, c) + " " + f.name + "(" + cs_param_sig(f.params, c) +
+                             ") => Rt.Get<" + cs_type(f.ret, c) + ">(" + call + ");\n";
                     }
                 }
                 s += "    }\n\n";
@@ -522,10 +523,11 @@ those. Members using any other type are omitted from both sides.
         inline std::string csharp_registrations(const GenContext &c) {
             std::string s;
             for (const auto &e : c.enums) {
-                s += "    rosetta::bind_csharp_enum<" + e.name + ">(\"" + e.name + "\");\n";
+                s += "    rosetta::bind_csharp_enum<" + qualified_of(e) + ">(\"" + exposed_of(e) +
+                     "\");\n";
             }
             for (const auto &k : c.classes) {
-                s += "    rosetta::bind_csharp<" + k.name + ">(\"" + k.name + "\");\n";
+                s += "    rosetta::bind_csharp<" + qualified_of(k) + ">(\"" + exposed_of(k) + "\");\n";
             }
             for (const auto &f : c.functions) {
                 s += "    rosetta::bind_csharp_function<^^" + f.qualified + ">(\"" + f.name +

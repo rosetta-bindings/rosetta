@@ -100,6 +100,45 @@ namespace rosetta {
             return k.expose.empty() ? k.name : k.expose;
         }
 
+        // Same pair for an enumeration (GenEnum carries the same two fields).
+        inline std::string qualified_of(const GenEnum &e) {
+            return e.name_space.empty() ? e.name : e.name_space + "::" + e.name;
+        }
+
+        inline std::string exposed_of(const GenEnum &e) {
+            return e.expose.empty() ? e.name : e.expose;
+        }
+
+        // Does this IR type name that bound class / enumeration? Compares the
+        // QUALIFIED spelling when the IR carries it — `object` alone cannot tell
+        // two bound types apart once they share an unqualified identifier (the
+        // "expose" rename case) — and falls back to the bare identifier so
+        // hand-built IR (tests, render() callers) keeps resolving.
+        template <typename K> inline bool names_type(const GenType &t, const K &k) {
+            return t.object_qualified.empty() ? (k.name == t.object)
+                                              : (qualified_of(k) == t.object_qualified);
+        }
+
+        // The host-language name of the class / enumeration an IR type names:
+        // its "expose" override when it is bound, else the reflected identifier
+        // the IR carries. Every backend that prints a bound type's name in
+        // generated host-language text (a TypeScript class, a C# / Java type, a
+        // doc cross-reference) should go through this, so a renamed type is
+        // named consistently everywhere it appears.
+        inline std::string exposed_object_of(const GenType &t, const GenContext &c) {
+            for (const auto &k : c.classes) {
+                if (names_type(t, k)) {
+                    return exposed_of(k);
+                }
+            }
+            for (const auto &e : c.enums) {
+                if (names_type(t, e)) {
+                    return exposed_of(e);
+                }
+            }
+            return t.object;
+        }
+
         // -------- shared CMake fragment --------
 
         // Defaults used when the manifest does not set a field. The cache vars
@@ -253,15 +292,16 @@ endif()
             return s;
         }
 
-        // CMake block linking the external user library (manifest "user_lib") into a
-        // *native* binding target. Honors c.user_lib_link ("shared" | "static"): it
-        // prefers that form but falls back to whichever is actually present, and
-        // references the library by full path — so a same-named project target is
-        // never linked by mistake, and the static/shared choice is unambiguous (a
-        // bare -l<name> lets the linker, not the manifest, decide). Resolution runs
-        // at CMake configure time; if neither form exists yet (library not built),
-        // it falls back to a name-based link resolved at build time. Returns "" when
-        // no user_lib is set.
+        // CMake block linking the external user libraries (manifest "user_lib") into
+        // a *native* binding target — one per entry, in the manifest's order, so a
+        // library and the dependencies it needs link together. Honors each entry's
+        // `link` ("shared" | "static"): it prefers that form but falls back to
+        // whichever is actually present, and references the library by full path —
+        // so a same-named project target is never linked by mistake, and the
+        // static/shared choice is unambiguous (a bare -l<name> lets the linker, not
+        // the manifest, decide). Resolution runs at CMake configure time; if neither
+        // form exists yet (library not built), it falls back to a name-based link
+        // resolved at build time. Returns "" when no user_lib is set.
         //
         // The block links whatever target ${ROSETTA_BINDING_TARGET} names; it
         // defaults to c.lib, so backends whose target IS c.lib just drop in
@@ -312,7 +352,7 @@ endif()
         }
 
         inline std::string user_lib_block(const GenContext &c) {
-            if (c.user_lib_name.empty() && c.user_sources.empty() &&
+            if (c.user_libs.empty() && c.user_sources.empty() &&
                 c.compile_definitions.empty() && c.link_options.empty()) {
                 return {};
             }
@@ -367,43 +407,57 @@ endif()
                 s += ")\n";
             }
 
-            if (c.user_lib_name.empty()) {
+            if (c.user_libs.empty()) {
                 return s;
             }
-            const std::string link = c.user_lib_link.empty() ? "shared" : c.user_lib_link;
-            s += "\n# External user library (manifest \"user_lib\"): the bound headers only\n";
-            s += "# declare the API; link the separately-compiled library holding the bodies.\n";
-            s += "# `link` (\"shared\" | \"static\") picks the preferred form; we fall back to\n";
-            s += "# whichever is present and reference it by full path. Empty name ⇒ omitted.\n";
-            s += "set(ROSETTA_USER_LIB \"" + c.user_lib_name + "\")\n";
-            s += "set(ROSETTA_USER_LIB_DIR \"" + c.user_lib_dir + "\")\n";
-            s += "set(ROSETTA_USER_LIB_LINK \"" + link + "\")\n";
-            s += "set(_rosetta_shared \"${ROSETTA_USER_LIB_DIR}/${CMAKE_SHARED_LIBRARY_PREFIX}"
-                 "${ROSETTA_USER_LIB}${CMAKE_SHARED_LIBRARY_SUFFIX}\")\n";
-            s += "set(_rosetta_static \"${ROSETTA_USER_LIB_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}"
-                 "${ROSETTA_USER_LIB}${CMAKE_STATIC_LIBRARY_SUFFIX}\")\n";
-            s += "if(ROSETTA_USER_LIB_LINK STREQUAL \"static\")\n";
-            s += "    set(_rosetta_order \"${_rosetta_static}\" \"${_rosetta_shared}\")\n";
-            s += "else()\n";
-            s += "    set(_rosetta_order \"${_rosetta_shared}\" \"${_rosetta_static}\")\n";
-            s += "endif()\n";
-            s += "set(_rosetta_lib \"\")\n";
-            s += "foreach(_cand IN LISTS _rosetta_order)\n";
-            s += "    if(EXISTS \"${_cand}\")\n";
-            s += "        set(_rosetta_lib \"${_cand}\")\n";
-            s += "        break()\n";
-            s += "    endif()\n";
-            s += "endforeach()\n";
-            s += "if(NOT _rosetta_lib)\n";
-            s += "    set(_rosetta_lib \"-l${ROSETTA_USER_LIB}\") # not built yet; resolved at build time\n";
-            s += "endif()\n";
-            s += "message(STATUS \"rosetta: ${ROSETTA_BINDING_TARGET} links user library "
-                 "${_rosetta_lib} (requested ${ROSETTA_USER_LIB_LINK})\")\n";
-            s += "target_link_directories(${ROSETTA_BINDING_TARGET} PRIVATE ${ROSETTA_USER_LIB_DIR})\n";
-            s += "target_link_libraries(${ROSETTA_BINDING_TARGET} PRIVATE \"${_rosetta_lib}\")\n";
+            s += "\n# External user libraries (manifest \"user_lib\"): the bound headers only\n";
+            s += "# declare the API; link the separately-compiled libraries holding the bodies\n";
+            s += "# (yours, plus the ones it depends on — listed in link order). `link`\n";
+            s += "# (\"shared\" | \"static\") picks the preferred form; we fall back to whichever\n";
+            s += "# is present and reference it by full path.\n";
+            s += "set(_rosetta_rpath \"\")\n";
+            for (std::size_t i = 0; i < c.user_libs.size(); ++i) {
+                const UserLib    &u  = c.user_libs[i];
+                const std::string n  = std::to_string(i);
+                const std::string lk = u.link.empty() ? "shared" : u.link;
+                s += "set(ROSETTA_USER_LIB_" + n + " \"" + u.name + "\")\n";
+                s += "set(ROSETTA_USER_LIB_DIR_" + n + " \"" + u.dir + "\")\n";
+                s += "set(ROSETTA_USER_LIB_LINK_" + n + " \"" + lk + "\")\n";
+                s += "set(_rosetta_shared \"${ROSETTA_USER_LIB_DIR_" + n +
+                     "}/${CMAKE_SHARED_LIBRARY_PREFIX}"
+                     "${ROSETTA_USER_LIB_" + n + "}${CMAKE_SHARED_LIBRARY_SUFFIX}\")\n";
+                s += "set(_rosetta_static \"${ROSETTA_USER_LIB_DIR_" + n +
+                     "}/${CMAKE_STATIC_LIBRARY_PREFIX}"
+                     "${ROSETTA_USER_LIB_" + n + "}${CMAKE_STATIC_LIBRARY_SUFFIX}\")\n";
+                s += "if(ROSETTA_USER_LIB_LINK_" + n + " STREQUAL \"static\")\n";
+                s += "    set(_rosetta_order \"${_rosetta_static}\" \"${_rosetta_shared}\")\n";
+                s += "else()\n";
+                s += "    set(_rosetta_order \"${_rosetta_shared}\" \"${_rosetta_static}\")\n";
+                s += "endif()\n";
+                s += "set(_rosetta_lib \"\")\n";
+                s += "foreach(_cand IN LISTS _rosetta_order)\n";
+                s += "    if(EXISTS \"${_cand}\")\n";
+                s += "        set(_rosetta_lib \"${_cand}\")\n";
+                s += "        break()\n";
+                s += "    endif()\n";
+                s += "endforeach()\n";
+                s += "if(NOT _rosetta_lib)\n";
+                s += "    set(_rosetta_lib \"-l${ROSETTA_USER_LIB_" + n +
+                     "}\") # not built yet; resolved at build time\n";
+                s += "endif()\n";
+                s += "message(STATUS \"rosetta: ${ROSETTA_BINDING_TARGET} links user library "
+                     "${_rosetta_lib} (requested ${ROSETTA_USER_LIB_LINK_" + n + "})\")\n";
+                s += "target_link_directories(${ROSETTA_BINDING_TARGET} PRIVATE "
+                     "${ROSETTA_USER_LIB_DIR_" + n + "})\n";
+                s += "target_link_libraries(${ROSETTA_BINDING_TARGET} PRIVATE \"${_rosetta_lib}\")\n";
+                s += "list(APPEND _rosetta_rpath \"${ROSETTA_USER_LIB_DIR_" + n + "}\")\n";
+            }
+            // One rpath list covering every library directory (duplicates — several
+            // libs from one dir — collapse).
+            s += "list(REMOVE_DUPLICATES _rosetta_rpath)\n";
             s += "set_target_properties(${ROSETTA_BINDING_TARGET} PROPERTIES\n";
-            s += "    BUILD_RPATH \"${ROSETTA_USER_LIB_DIR}\"\n";
-            s += "    INSTALL_RPATH \"${ROSETTA_USER_LIB_DIR}\")\n";
+            s += "    BUILD_RPATH \"${_rosetta_rpath}\"\n";
+            s += "    INSTALL_RPATH \"${_rosetta_rpath}\")\n";
             return s;
         }
 
@@ -429,6 +483,42 @@ endif()
             std::string user_sources;
             for (const auto &src : c.user_sources) {
                 user_sources += "\n    " + src;
+            }
+            // {{USER_LIB_WASM_BLOCK}} — the user-library link block for the wasm
+            // templates, whose fixed-name target doesn't go through
+            // {{USER_LIB_BLOCK}}/${ROSETTA_BINDING_TARGET}. WebAssembly cannot link
+            // a native .dylib/.so and has no rpath, so each entry's `link` choice is
+            // overridden here: the library is ALWAYS the wasm static archive
+            // (lib<name>.a) compiled with the SAME emsdk. Referenced by full path so
+            // a same-named project target (the wasm module is itself named after the
+            // manifest target, e.g. `space`) is never linked by mistake. Empty when
+            // the manifest declares no user_lib.
+            std::string user_lib_wasm_block;
+            for (std::size_t i = 0; i < c.user_libs.size(); ++i) {
+                const UserLib    &u = c.user_libs[i];
+                const std::string n = std::to_string(i);
+                user_lib_wasm_block +=
+                    "set(ROSETTA_USER_LIB_" + n + " \"" + u.name + "\")\n"
+                    "set(ROSETTA_USER_LIB_DIR_" + n + " \"" + u.dir + "\")\n"
+                    "target_link_directories(" + c.lib + " PRIVATE ${ROSETTA_USER_LIB_DIR_" + n + "})\n"
+                    "set(_rosetta_static \"${ROSETTA_USER_LIB_DIR_" + n +
+                    "}/${CMAKE_STATIC_LIBRARY_PREFIX}${ROSETTA_USER_LIB_" + n +
+                    "}${CMAKE_STATIC_LIBRARY_SUFFIX}\")\n"
+                    "if(EXISTS \"${_rosetta_static}\")\n"
+                    "    target_link_libraries(" + c.lib + " PRIVATE \"${_rosetta_static}\")\n"
+                    "else()\n"
+                    "    # Archive not built yet at configure time — link by name (resolved\n"
+                    "    # from the link directory above; emcc's linker takes lib<name>.a).\n"
+                    "    target_link_libraries(" + c.lib + " PRIVATE \"-l${ROSETTA_USER_LIB_" + n + "}\")\n"
+                    "endif()";
+                if (i + 1 < c.user_libs.size()) {
+                    user_lib_wasm_block += "\n";
+                }
+            }
+            if (!user_lib_wasm_block.empty()) {
+                user_lib_wasm_block =
+                    "\n\n# External user libraries (manifest \"user_lib\") — always the wasm\n"
+                    "# static archives, in link order.\n" + user_lib_wasm_block;
             }
             // {{USER_ENABLE_C}} — "enable_language(C)" line for the wasm templates
             // (placed right before their add_executable; the native templates get
@@ -504,9 +594,8 @@ endif()
                                 {"QT_DIR", qt},
                                 {"USER_INCLUDE", c.user_include},
                                 {"ROSETTA_INCLUDE", c.rosetta_include},
-                                {"USER_LIB_NAME", c.user_lib_name},
-                                {"USER_LIB_DIR", c.user_lib_dir},
                                 {"USER_LIB_BLOCK", user_lib_block(c)},
+                                {"USER_LIB_WASM_BLOCK", user_lib_wasm_block},
                                 {"USER_SOURCES", user_sources},
                                 {"USER_ENABLE_C", user_enable_c},
                                 {"USER_DEFS_BLOCK", user_defs_block},
@@ -1301,6 +1390,12 @@ endif()
             GenEnum ge;
             ge.name       = class_name<T>();
             ge.name_space = class_namespace<T>();
+            // The binding name: the trait's `expose` override (manifest
+            // "expose") when present, else the reflected identifier.
+            ge.expose     = ge.name;
+            if constexpr (requires { binding_info<T>::expose; }) {
+                ge.expose = binding_info<T>::expose;
+            }
             ge.header     = binding_info<T>::header;
             ge.underlying = std::define_static_string(
                 std::meta::display_string_of(std::meta::underlying_type(^^T)));
@@ -1490,11 +1585,16 @@ namespace rosetta {
     // from the generated driver, which splices `^^name` for each manifest-listed
     // function. `qualified` is the C++ spelling backends emit for `&fn`; `doc`
     // comes from the manifest (free functions carry no in-source annotation, so
-    // user headers stay untouched).
+    // user headers stay untouched). `expose` (manifest "expose") replaces the
+    // reflected identifier as the binding name — the C++ spelling stays
+    // `qualified`, so only what scripts see changes.
     template <std::meta::info F>
-    inline GenFunction make_function(const char *qualified, const char *header, const char *doc) {
+    inline GenFunction make_function(const char *qualified, const char *header, const char *doc,
+                                     const char *expose) {
         GenFunction gf;
-        gf.name      = std::define_static_string(std::meta::identifier_of(F));
+        gf.name      = (expose && *expose) ? std::string(expose)
+                                           : std::string(std::define_static_string(
+                                                 std::meta::identifier_of(F)));
         gf.qualified = qualified;
         gf.header    = header;
         gf.ret       = gen_detail::type_descriptor<
@@ -1606,6 +1706,15 @@ namespace rosetta {
             user_sources.push_back(src.string());
         }
 
+        // External user libraries. `user_libs` is the general form; the older
+        // single-library shorthand (user_lib_name / _dir / _link) folds into one
+        // entry when it is the only thing set, so hand-written drivers predating
+        // the list keep working.
+        std::vector<UserLib> user_libs = opt.user_libs;
+        if (user_libs.empty() && !opt.user_lib_name.empty()) {
+            user_libs.push_back({opt.user_lib_name, opt.user_lib_dir, opt.user_lib_link});
+        }
+
         for (const TargetSpec &t : opt.targets) {
             auto &reg = backend_registry();
             auto  it  = reg.find(t.lang);
@@ -1618,8 +1727,7 @@ namespace rosetta {
             it->second->emit(GenContext{opt.out_dir, t.name, classes, enums, opt.functions,
                                         user_include, opt.rosetta_include.string(),
                                         opt.cpp26_root, opt.cpp26_cxx, opt.cpp26_cc,
-                                        opt.cpp26_lib, opt.qt_dir, opt.user_lib_name,
-                                        opt.user_lib_dir, opt.user_lib_link, user_sources,
+                                        opt.cpp26_lib, opt.qt_dir, user_libs, user_sources,
                                         opt.compile_definitions, t.link_options,
                                         opt.build_type, opt.optimization,
                                         opt.cxx_standard});

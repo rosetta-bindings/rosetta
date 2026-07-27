@@ -87,6 +87,30 @@ namespace rosetta {
     };
 
     /**
+     * @brief One external library the generated bindings link against
+     * (manifest "user_lib"). Use these when the bound headers only *declare*
+     * the API and the bodies live in separately-compiled libraries — your own
+     * library plus, typically, the third-party ones it depends on.
+     *
+     *   name — the library's base name (e.g. "space" ⇒ -lspace,
+     *          libspace.dylib / .so / .a).
+     *   dir  — directory holding the built library (-L / rpath).
+     *   link — preferred link form: "shared" (default) or "static". The
+     *          generated CMake links that form by full path and falls back to
+     *          whichever is actually present on disk. WebAssembly ignores it
+     *          and always links static (a native shared object cannot enter a
+     *          wasm module).
+     *
+     * Order is preserved on the link line, so list dependents before their
+     * dependencies when linking static archives.
+     */
+    struct UserLib {
+        std::string name;
+        std::string dir;
+        std::string link; // "shared" (default) | "static"; empty ⇒ shared
+    };
+
+    /**
      * @brief A reflected type, reduced to a small language-neutral descriptor
      * so pure-data backends (TypeScript, JSON Schema, …) can render it without
      * reflection. `kind` is one of: "number", "boolean", "string", "void",
@@ -374,6 +398,12 @@ namespace rosetta {
     struct GenEnum {
         std::string                name;       // reflected (unqualified) C++ identifier
         std::string                name_space; // enclosing namespace ("" if global, "a::b" if nested)
+
+        // The name the enumeration binds under — binding_info<T>::expose
+        // (manifest "expose") when set, else `name`. Same role as
+        // GenClass::expose; emitters use it for every host-language-visible
+        // name and the qualified `name_space::name` for C++ spellings.
+        std::string                expose;
         std::string                header;     // binding_info<T>::header
         std::string                doc;        // markdown fragment for READMEs
         std::string                underlying; // underlying integer type spelling
@@ -419,21 +449,19 @@ namespace rosetta {
         // -DQT_DIR=...; backends other than qt/qml ignore it.
         std::string qt_dir;
 
-        // Optional external user library to link the generated bindings against.
-        // Use this when the bound headers only *declare* the API and the bodies
-        // live in a separately-compiled (shared or static) library — the binding
-        // TU then needs that library at link time. Both must be set to take
-        // effect; the stock *-expanded backends emit a target_link_directories /
-        // target_link_libraries (+ rpath) referencing them.
-        //
-        //   user_lib_name — the library's base name (e.g. "space" ⇒ -lspace,
-        //                   libspace.dylib / .so / .a).
-        //   user_lib_dir  — directory holding the built library (-L / rpath).
-        //   user_lib_link — preferred link form: "shared" (default) or "static".
-        //                   The generated CMake links that form by full path and
-        //                   falls back to whichever is actually present on disk.
-        //                   WebAssembly ignores it and always links static (a
-        //                   native shared object cannot enter a wasm module).
+        // Optional external user libraries to link the generated bindings
+        // against (manifest "user_lib"). Use these when the bound headers only
+        // *declare* the API and the bodies live in separately-compiled (shared
+        // or static) libraries — the binding TU then needs them at link time.
+        // The stock *-expanded backends emit one target_link_directories /
+        // target_link_libraries (+ rpath) pair per entry, in order, so a
+        // library and every dependency it needs can be listed together.
+        // See UserLib for the per-entry fields.
+        std::vector<UserLib> user_libs;
+
+        // Single-library shorthand, kept for hand-written drivers predating
+        // `user_libs`: when `user_libs` is empty and `user_lib_name` is set,
+        // generate() folds these three into one `user_libs` entry.
         std::string user_lib_name;
         std::string user_lib_dir;
         std::string user_lib_link; // "shared" (default) | "static"; empty ⇒ shared
@@ -499,9 +527,7 @@ namespace rosetta {
         std::string              cpp26_cc;        // C compiler     (default ${CLANG_P2996_ROOT}/bin/clang)
         std::string              cpp26_lib;       // fork stdlib dir (default ${CLANG_P2996_ROOT}/lib)
         std::string              qt_dir;          // Qt 6 prefix (default of QT_DIR; qt/qml backends)
-        std::string              user_lib_name;   // external lib to link bindings against (-l<name>); empty ⇒ none
-        std::string              user_lib_dir;    // directory holding that lib (-L / rpath)
-        std::string              user_lib_link;   // "shared" (default) | "static"; wasm always static
+        std::vector<UserLib>     user_libs;       // external libs to link the bindings against, in link order
         std::vector<std::string> user_sources;    // user .cpp/.c files compiled into the binding target (abs paths)
         std::vector<std::string> compile_definitions; // "NAME"/"NAME=VALUE" defs for the binding target
         std::vector<std::string> link_options;    // extra linker flags for THIS target (TargetSpec::link_options)
@@ -563,9 +589,16 @@ namespace rosetta {
      * is the C++ spelling backends emit for the function pointer and `header`
      * its include basename. Free functions are declared in the manifest, never
      * by editing the user's headers.
+     *
+     * `expose` (manifest "expose") overrides the binding name — what scripts
+     * see — leaving `qualified` (the C++ spelling) alone; it is how two free
+     * functions sharing an unqualified name (`arch::solve` and
+     * `arch::sinv::solve`) coexist in one module. Empty / null ⇒ the function
+     * binds under its own reflected identifier.
      */
     template <std::meta::info F>
-    GenFunction make_function(const char *qualified, const char *header, const char *doc);
+    GenFunction make_function(const char *qualified, const char *header, const char *doc,
+                              const char *expose = nullptr);
 
 } // namespace rosetta
 

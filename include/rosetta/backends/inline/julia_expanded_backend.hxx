@@ -96,7 +96,7 @@ using .{{LIB}}
 
         inline bool jx_is_bound(const std::string &name, const GenContext &c) {
             for (const auto &k : c.classes) {
-                if (k.name == name) {
+                if (k.name == name || qualified_of(k) == name) {
                     return true;
                 }
             }
@@ -202,7 +202,7 @@ using .{{LIB}}
                        ">";
             }
             if (t.kind == "object" || t.kind == "enum") {
-                return t.object;
+                return t.object_qualified.empty() ? t.object : t.object_qualified;
             }
             if (t.kind == "string") {
                 return "std::string";
@@ -298,10 +298,12 @@ using .{{LIB}}
         // `Kind::Point` vs `class Point` — "Duplicate registration") the
         // moment both are bound.
         inline std::string jx_enum(const GenEnum &e) {
-            std::string s =
-                "    mod.add_bits<" + e.name + ">(\"" + e.name + "\", jlcxx::julia_type(\"CppEnum\"));\n";
+            const std::string eq = qualified_of(e);
+            const std::string ex = exposed_of(e);
+            std::string       s  = "    mod.add_bits<" + eq + ">(\"" + ex +
+                             "\", jlcxx::julia_type(\"CppEnum\"));\n";
             for (const auto &v : e.values) {
-                s += "    mod.set_const(\"" + e.name + "_" + v.name + "\", " + e.name +
+                s += "    mod.set_const(\"" + ex + "_" + v.name + "\", " + eq +
                      "::" + v.name + ");\n";
             }
             return s;
@@ -313,7 +315,7 @@ using .{{LIB}}
         // validates on assignment; a numeric-vector field gains an ArrayRef
         // setter overload so `tags!(m, [1.0, 2.0])` takes a plain Vector.
         inline std::string jx_field(const GenClass &k, const GenField &f) {
-            const std::string self = k.name;
+            const std::string self = qualified_of(k);
             const std::string ty   = jx_cpp_type(f.type);
             std::string       s;
             s += "    c.method(\"" + f.name + "\", [](const " + self + " &s) { return s." +
@@ -363,9 +365,9 @@ using .{{LIB}}
                 std::string           decls, call;
                 if (m.is_static) {
                     decls = xp.decls;
-                    call  = k.name + "::" + m.name + "(" + xp.args + ")";
+                    call  = qualified_of(k) + "::" + m.name + "(" + xp.args + ")";
                 } else {
-                    decls = (m.is_const ? "const " : "") + k.name + " &self" +
+                    decls = (m.is_const ? "const " : "") + qualified_of(k) + " &self" +
                             (xp.decls.empty() ? "" : ", " + xp.decls);
                     call = "self." + m.name + "(" + xp.args + ")";
                 }
@@ -380,8 +382,8 @@ using .{{LIB}}
                 const std::string ret   = qualify_std(m.ret_cpp);
                 const std::string fp =
                     m.is_static ? (ret + " (*)(" + args + ")")
-                                : (ret + " (" + k.name + "::*)(" + args + ")" + quals);
-                primary = "static_cast<" + fp + ">(&" + k.name + "::" + m.name + ")";
+                                : (ret + " (" + qualified_of(k) + "::*)(" + args + ")" + quals);
+                primary = "static_cast<" + fp + ">(&" + qualified_of(k) + "::" + m.name + ")";
             }
             std::string s =
                 "    " + owner + ".method(\"" + m.name + "\", " + primary + ");\n";
@@ -391,9 +393,9 @@ using .{{LIB}}
                 std::string           decls, call;
                 if (m.is_static) {
                     decls = ap.decls;
-                    call  = k.name + "::" + m.name + "(" + ap.args + ")";
+                    call  = qualified_of(k) + "::" + m.name + "(" + ap.args + ")";
                 } else {
-                    decls = (m.is_const ? "const " : "") + k.name + " &self" +
+                    decls = (m.is_const ? "const " : "") + qualified_of(k) + " &self" +
                             (ap.decls.empty() ? "" : ", " + ap.decls);
                     call = "self." + m.name + "(" + ap.args + ")";
                 }
@@ -434,7 +436,7 @@ using .{{LIB}}
                 s += "    c.constructor<" + args + ">();\n";
                 if (jx_wants_arrayref_overload(k.ctors[i])) {
                     const JxAdapterParams ap = jx_arrayref_params(k.ctors[i], params);
-                    s += "    c.constructor([](" + ap.decls + ") { return new " + k.name + "(" +
+                    s += "    c.constructor([](" + ap.decls + ") { return new " + qualified_of(k) + "(" +
                          ap.args + "); });\n";
                 }
             }
@@ -447,12 +449,9 @@ using .{{LIB}}
         // First bound base of a class, or "" — jlcxx (like embind) registers
         // single inheritance only.
         inline std::string jx_bound_base(const GenClass &k, const GenContext &c) {
-            auto qualified = [](const GenClass &g) {
-                return g.name_space.empty() ? g.name : g.name_space + "::" + g.name;
-            };
             for (const auto &b : k.bases) {
                 for (const auto &g : c.classes) {
-                    if (qualified(g) == b) {
+                    if (qualified_of(g) == b) {
                         return b;
                     }
                 }
@@ -469,7 +468,8 @@ using .{{LIB}}
         inline std::string jx_class_decl(const GenClass &k, const GenContext &c) {
             const std::string base = jx_bound_base(k, c);
             std::string       s;
-            s += "    auto c_" + k.name + " = mod.add_type<" + k.name + ">(\"" + k.name + "\"";
+            s += "    auto c_" + exposed_of(k) + " = mod.add_type<" + qualified_of(k) + ">(\"" +
+                 exposed_of(k) + "\"";
             if (!base.empty()) {
                 // Bound single base (jlcxx, like embind, registers one). The
                 // base's add_type must precede this — i.e. list the base first
@@ -482,7 +482,7 @@ using .{{LIB}}
 
         inline std::string jx_class_members(const GenClass &k, const GenContext &c) {
             std::string s = "    {\n";
-            s += "    auto &c = c_" + k.name + ";\n";
+            s += "    auto &c = c_" + exposed_of(k) + ";\n";
             s += jx_ctors(k, c);
             for (const auto &f : k.fields) {
                 if (!jx_field_ok(f, c)) {
@@ -578,7 +578,7 @@ using .{{LIB}}
             for (const auto &k : c.classes) {
                 const std::string base = jx_bound_base(k, c);
                 if (!base.empty()) {
-                    supers += "    template <> struct SuperType<" + k.name + "> { typedef " +
+                    supers += "    template <> struct SuperType<" + qualified_of(k) + "> { typedef " +
                               base + " type; };\n";
                 }
             }

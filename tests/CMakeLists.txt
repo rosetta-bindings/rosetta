@@ -109,3 +109,20 @@ target_include_directories(sequence PRIVATE ${CMAKE_SOURCE_DIR}/../include)
 target_compile_options(sequence PRIVATE -fannotation-attributes)
 target_link_libraries(sequence PRIVATE GTest::gtest_main)
 gtest_discover_tests(sequence)
+
+# External-library link block (manifest "user_lib", one library or a list of
+# them). Verifies the CMake text emitted into every compiled backend.
+add_executable(user_lib user_lib.cpp)
+target_include_directories(user_lib PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(user_lib PRIVATE -fannotation-attributes)
+target_link_libraries(user_lib PRIVATE GTest::gtest_main)
+gtest_discover_tests(user_lib)
+
+# The manifest "expose" rename on free functions and extension methods
+# (make_function's override + every backend's exposed-name / qualified-call
+# split). Verifies generated sources.
+add_executable(expose expose.cpp)
+target_include_directories(expose PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(expose PRIVATE -fannotation-attributes)
+target_link_libraries(expose PRIVATE GTest::gtest_main)
+gtest_discover_tests(expose)

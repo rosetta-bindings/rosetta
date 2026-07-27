@@ -260,7 +260,7 @@ of those. Members using any other type are omitted from both sides.
 
         // The boxed (reference) Java type — used inside generics and Jackson
         // TypeReferences. Only ever called for jsonable types.
-        inline std::string java_box(const GenType &t) {
+        inline std::string java_box(const GenType &t, const GenContext &c) {
             if (t.kind == "boolean") {
                 return "Boolean";
             }
@@ -271,37 +271,38 @@ of those. Members using any other type are omitted from both sides.
                 return t.integer ? "Long" : "Double";
             }
             if (t.kind == "enum") {
-                return t.object.empty() ? "Long" : t.object;
+                return t.object.empty() ? "Long" : exposed_object_of(t, c);
             }
             if (t.kind == "vector") {
                 return "java.util.List<" +
-                       (t.element.empty() ? std::string("Object") : java_box(t.element.front())) +
+                       (t.element.empty() ? std::string("Object")
+                                          : java_box(t.element.front(), c)) +
                        ">";
             }
             return "Object";
         }
 
         // The Java type used in a method / field signature (unboxed scalars).
-        inline std::string java_sig(const GenType &t) {
+        inline std::string java_sig(const GenType &t, const GenContext &c) {
             if (t.kind == "boolean") {
                 return "boolean";
             }
             if (t.kind == "number") {
                 return t.integer ? "long" : "double";
             }
-            return java_box(t); // String / enum / List<…> are already reference types
+            return java_box(t, c); // String / enum / List<…> are already reference types
         }
 
         // A Jackson TypeReference literal capturing the (boxed) target type.
-        inline std::string java_typeref(const GenType &t) {
-            return "new TypeReference<" + java_box(t) + ">(){}";
+        inline std::string java_typeref(const GenType &t, const GenContext &c) {
+            return "new TypeReference<" + java_box(t, c) + ">(){}";
         }
 
         // "double arg0, double arg1"
-        inline std::string java_param_sig(const std::vector<GenParam> &ps) {
+        inline std::string java_param_sig(const std::vector<GenParam> &ps, const GenContext &c) {
             std::string s;
             for (std::size_t i = 0; i < ps.size(); ++i) {
-                s += (i ? ", " : "") + java_sig(ps[i].type) + " " + ps[i].name;
+                s += (i ? ", " : "") + java_sig(ps[i].type, c) + " " + ps[i].name;
             }
             return s;
         }
@@ -576,16 +577,16 @@ final class Rt {
             s += "package " + java_pkg(c) + ";\n\n";
             s += "import com.fasterxml.jackson.core.type.TypeReference;\n\n";
             if (!k.doc.empty()) {
-                s += "/** " + k.name + " */\n";
+                s += "/** " + exposed_of(k) + " */\n";
             }
-            s += "public final class " + k.name + " implements AutoCloseable {\n";
-            s += "    private static final String _t = \"" + k.name + "\";\n";
+            s += "public final class " + exposed_of(k) + " implements AutoCloseable {\n";
+            s += "    private static final String _t = \"" + exposed_of(k) + "\";\n";
             s += "    private int _id;\n\n";
 
             // Constructors, deduped by erased Java signature.
             std::vector<std::string> seen_sigs;
             auto emit_ctor = [&](const std::vector<GenParam> &ps) {
-                const std::string sig = java_param_sig(ps);
+                const std::string sig = java_param_sig(ps, c);
                 for (const auto &s2 : seen_sigs) {
                     if (s2 == sig) {
                         return;
@@ -593,7 +594,7 @@ final class Rt {
                 }
                 seen_sigs.push_back(sig);
                 const std::string names = java_arg_names(ps);
-                s += "    public " + k.name + "(" + sig + ") {\n";
+                s += "    public " + exposed_of(k) + "(" + sig + ") {\n";
                 s += "        _id = Rt.newInstance(_t" + (names.empty() ? "" : ", " + names) +
                      ");\n";
                 s += "    }\n\n";
@@ -609,7 +610,7 @@ final class Rt {
             if (seen_sigs.empty()) {
                 // No JSON-marshalable constructor — block construction so a broken
                 // (id 0) instance can't be made.
-                s += "    private " + k.name + "() { } // no JSON-marshalable constructor\n\n";
+                s += "    private " + exposed_of(k) + "() { } // no JSON-marshalable constructor\n\n";
             }
 
             s += "    @Override\n";
@@ -622,14 +623,14 @@ final class Rt {
                 if (!jsonable_type(f.type)) {
                     continue;
                 }
-                const std::string ty  = java_sig(f.type);
+                const std::string ty  = java_sig(f.type, c);
                 const std::string cap = java_cap(f.name);
                 if (!f.doc.empty()) {
                     s += "\n    /** " + f.doc + " */";
                 }
                 s += "\n    public " + ty + " get" + cap + "() {\n";
                 s += "        return Rt.getField(_t, _id, \"" + f.name + "\", " +
-                     java_typeref(f.type) + ");\n";
+                     java_typeref(f.type, c) + ");\n";
                 s += "    }\n";
                 if (!f.is_readonly) {
                     s += "    public void set" + cap + "(" + ty + " value) {\n";
@@ -643,7 +644,7 @@ final class Rt {
                 if (m.is_extension || !jsonable_method(m)) { // extensions: no member pointer
                     continue;
                 }
-                const std::string sig   = java_param_sig(m.params);
+                const std::string sig   = java_param_sig(m.params, c);
                 const std::string names = java_arg_names(m.params);
                 const std::string tail  = names.empty() ? "" : ", " + names;
                 if (!m.doc.empty()) {
@@ -657,13 +658,13 @@ final class Rt {
                              : "        Rt.callMethodVoid(_t, _id, \"" + m.name + "\"" + tail +
                                    ");\n";
                 } else {
-                    const std::string ret = java_sig(m.ret);
+                    const std::string ret = java_sig(m.ret, c);
                     s += ret + " " + m.name + "(" + sig + ") {\n";
                     s += m.is_static
                              ? "        return Rt.callStatic(_t, \"" + m.name + "\", " +
-                                   java_typeref(m.ret) + tail + ");\n"
+                                   java_typeref(m.ret, c) + tail + ");\n"
                              : "        return Rt.callMethod(_t, _id, \"" + m.name + "\", " +
-                                   java_typeref(m.ret) + tail + ");\n";
+                                   java_typeref(m.ret, c) + tail + ");\n";
                 }
                 s += "    }\n";
             }
@@ -680,9 +681,9 @@ final class Rt {
             s += "import com.fasterxml.jackson.annotation.JsonCreator;\n";
             s += "import com.fasterxml.jackson.annotation.JsonValue;\n\n";
             if (!e.doc.empty()) {
-                s += "/** " + e.name + " */\n";
+                s += "/** " + exposed_of(e) + " */\n";
             }
-            s += "public enum " + e.name + " {\n";
+            s += "public enum " + exposed_of(e) + " {\n";
             for (std::size_t i = 0; i < e.values.size(); ++i) {
                 s += "    " + e.values[i].name + "(" + std::to_string(e.values[i].value) + ")" +
                      (i + 1 < e.values.size() ? "," : ";") + "\n";
@@ -691,15 +692,16 @@ final class Rt {
                 s += "    ;\n";
             }
             s += "\n    private final long value;\n";
-            s += "    " + e.name + "(long v) { this.value = v; }\n\n";
+            s += "    " + exposed_of(e) + "(long v) { this.value = v; }\n\n";
             s += "    @JsonValue\n";
             s += "    public long value() { return value; }\n\n";
             s += "    @JsonCreator\n";
-            s += "    public static " + e.name + " of(long v) {\n";
-            s += "        for (" + e.name + " c : values()) {\n";
+            s += "    public static " + exposed_of(e) + " of(long v) {\n";
+            s += "        for (" + exposed_of(e) + " c : values()) {\n";
             s += "            if (c.value == v) { return c; }\n";
             s += "        }\n";
-            s += "        throw new IllegalArgumentException(\"invalid " + e.name + ": \" + v);\n";
+            s += "        throw new IllegalArgumentException(\"invalid " + exposed_of(e) +
+                 ": \" + v);\n";
             s += "    }\n";
             s += "}\n";
             return s;
@@ -727,7 +729,7 @@ final class Rt {
                 if (!jsonable_function(f)) {
                     continue;
                 }
-                const std::string sig   = java_param_sig(f.params);
+                const std::string sig   = java_param_sig(f.params, c);
                 const std::string names = java_arg_names(f.params);
                 const std::string tail  = names.empty() ? "" : ", " + names;
                 if (!f.doc.empty()) {
@@ -738,8 +740,8 @@ final class Rt {
                     s += "void " + f.name + "(" + sig + ") {\n";
                     s += "        Rt.callFunctionVoid(\"" + f.name + "\"" + tail + ");\n";
                 } else {
-                    s += java_sig(f.ret) + " " + f.name + "(" + sig + ") {\n";
-                    s += "        return Rt.callFunction(\"" + f.name + "\", " + java_typeref(f.ret) +
+                    s += java_sig(f.ret, c) + " " + f.name + "(" + sig + ") {\n";
+                    s += "        return Rt.callFunction(\"" + f.name + "\", " + java_typeref(f.ret, c) +
                          tail + ");\n";
                 }
                 s += "    }\n";
@@ -753,10 +755,11 @@ final class Rt {
         inline std::string java_registrations(const GenContext &c) {
             std::string s;
             for (const auto &e : c.enums) {
-                s += "    rosetta::bind_java_enum<" + e.name + ">(\"" + e.name + "\");\n";
+                s += "    rosetta::bind_java_enum<" + qualified_of(e) + ">(\"" + exposed_of(e) +
+                     "\");\n";
             }
             for (const auto &k : c.classes) {
-                s += "    rosetta::bind_java<" + k.name + ">(\"" + k.name + "\");\n";
+                s += "    rosetta::bind_java<" + qualified_of(k) + ">(\"" + exposed_of(k) + "\");\n";
             }
             for (const auto &f : c.functions) {
                 s += "    rosetta::bind_java_function<^^" + f.qualified + ">(\"" + f.name + "\");\n";
@@ -787,10 +790,10 @@ final class Rt {
             write_file(srcdir / "Native.java", java_native(c));
             write_file(srcdir / "Rt.java", java_runtime_src(c));
             for (const auto &e : c.enums) {
-                write_file(srcdir / (e.name + ".java"), java_enum(c, e));
+                write_file(srcdir / (exposed_of(e) + ".java"), java_enum(c, e));
             }
             for (const auto &k : c.classes) {
-                write_file(srcdir / (k.name + ".java"), java_class(c, k));
+                write_file(srcdir / (exposed_of(k) + ".java"), java_class(c, k));
             }
             const std::string fns = java_functions(c);
             if (!fns.empty()) {

@@ -71,7 +71,7 @@ namespace rosetta {
             out += "declare module \"" + c.lib + "\" {\n";
 
             for (const auto &e : c.enums) {
-                out += "    export enum " + e.name + " {\n";
+                out += "    export enum " + exposed_of(e) + " {\n";
                 for (const auto &v : e.values) {
                     out += "        " + v.name + " = " + std::to_string(v.value) + ",\n";
                 }

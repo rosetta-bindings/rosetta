@@ -147,7 +147,17 @@ struct LuaBackend : rosetta::Backend {
         std::string includes, binds;
         for (const auto &k : c.classes) {
             includes += "#include \"" + k.header + "\"\n";
-            binds    += "    rosetta::bind_lua<" + k.name + ">(lua, \"" + k.name + "\");\n";
+            // Two different names, never interchangeable:
+            //   qualified_of(k) — the C++ spelling ("arch::sinv::Data"), for
+            //                     anything the generated TU compiles;
+            //   exposed_of(k)   — the host-language name (the manifest's
+            //                     "expose" override, else the identifier).
+            // Same pair exists for GenEnum, and exposed_object_of(t, c) gives
+            // the exposed name of the type an IR entry references.
+            using rosetta::gen_detail::exposed_of;
+            using rosetta::gen_detail::qualified_of;
+            binds += "    rosetta::bind_lua<" + qualified_of(k) + ">(lua, \"" + exposed_of(k) +
+                     "\");\n";
         }
 
         const auto dir = c.out_dir / "lua";

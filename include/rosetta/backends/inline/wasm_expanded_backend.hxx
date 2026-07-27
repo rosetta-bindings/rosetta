@@ -31,27 +31,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON){{BUILD_CONFIG}}
 
 # Only the user's headers — rosetta's include dir is deliberately absent.
 target_include_directories({{LIB}} PRIVATE
-    {{USER_INCLUDE}})
-
-# Optional external user library (manifest "user_lib"). WebAssembly cannot link a
-# native .dylib/.so and has no rpath, so the manifest's `link` choice is overridden
-# here: the library is ALWAYS the wasm static archive (lib{{USER_LIB_NAME}}.a)
-# compiled with the SAME emsdk. Referenced by full path so a same-named project
-# target (the wasm module is itself named after the manifest target, e.g. `space`)
-# is never linked by mistake. Empty name ⇒ skipped.
-set(ROSETTA_USER_LIB "{{USER_LIB_NAME}}")
-set(ROSETTA_USER_LIB_DIR "{{USER_LIB_DIR}}")
-if(ROSETTA_USER_LIB)
-    target_link_directories({{LIB}} PRIVATE ${ROSETTA_USER_LIB_DIR})
-    set(_rosetta_static "${ROSETTA_USER_LIB_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}${ROSETTA_USER_LIB}${CMAKE_STATIC_LIBRARY_SUFFIX}")
-    if(EXISTS "${_rosetta_static}")
-        target_link_libraries({{LIB}} PRIVATE "${_rosetta_static}")
-    else()
-        # Archive not built yet at configure time — link by name (resolved from the
-        # link directory above; emcc's linker takes lib{{USER_LIB_NAME}}.a).
-        target_link_libraries({{LIB}} PRIVATE "-l${ROSETTA_USER_LIB}")
-    endif()
-endif()
+    {{USER_INCLUDE}}){{USER_LIB_WASM_BLOCK}}
 
 target_link_options({{LIB}} PRIVATE
     --bind -sMODULARIZE=1 -sEXPORT_NAME=createModule
@@ -563,9 +543,10 @@ namespace rosetta_wx {
 
         // One enum: emscripten::enum_<E>("E").value("A", E::A)...;
         inline std::string wx_enum(const GenEnum &e) {
-            std::string s = "    emscripten::enum_<" + e.name + ">(\"" + e.name + "\")";
+            const std::string eq = qualified_of(e);
+            std::string       s = "    emscripten::enum_<" + eq + ">(\"" + exposed_of(e) + "\")";
             for (const auto &v : e.values) {
-                s += "\n        .value(\"" + v.name + "\", " + e.name + "::" + v.name + ")";
+                s += "\n        .value(\"" + v.name + "\", " + eq + "::" + v.name + ")";
             }
             s += ";\n";
             return s;

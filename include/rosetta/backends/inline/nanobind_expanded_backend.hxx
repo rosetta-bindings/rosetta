@@ -98,9 +98,10 @@ python3 -c "import {{LIB}}"
 
         // One enum: nb::enum_<E>(m,"E").value("A", E::A)...;
         inline std::string nbx_enum(const GenEnum &e) {
-            std::string s = "    nb::enum_<" + e.name + ">(m, \"" + e.name + "\")";
+            const std::string eq = qualified_of(e);
+            std::string       s = "    nb::enum_<" + eq + ">(m, \"" + exposed_of(e) + "\")";
             for (const auto &v : e.values) {
-                s += "\n        .value(\"" + v.name + "\", " + e.name + "::" + v.name + ")";
+                s += "\n        .value(\"" + v.name + "\", " + eq + "::" + v.name + ")";
             }
             s += ";\n";
             return s;
@@ -111,7 +112,7 @@ python3 -c "import {{LIB}}"
         // validating def_prop_rw; otherwise def_rw. Member pointers keep the
         // field type implicit, so only the range setter spells a (numeric) type.
         inline std::string nbx_field_segment(const GenClass &k, const GenField &f) {
-            const std::string self = k.name;
+            const std::string self = qualified_of(k);
             const std::string mp   = "&" + self + "::" + f.name;
             const std::string dq   = nbx_doc_arg(f.doc);
             if (f.is_readonly) {
@@ -141,15 +142,16 @@ python3 -c "import {{LIB}}"
         inline std::string nbx_seq_method_segment(const GenClass &k, const GenMethod &m) {
             const PxSeqSig sig = px_seq_sig(m.params, m.param_cpp);
             std::string    decls, call;
+            const std::string kq = qualified_of(k);
             if (m.is_extension) {
-                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                decls = kq + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
                 call  = m.ext_qualified + "(self" + (sig.args.empty() ? "" : ", " + sig.args) +
                        ")";
             } else if (m.is_static) {
                 decls = sig.decls;
-                call  = k.name + "::" + m.name + "(" + sig.args + ")";
+                call  = kq + "::" + m.name + "(" + sig.args + ")";
             } else {
-                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                decls = kq + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
                 call  = "self." + m.name + "(" + sig.args + ")";
             }
             std::string body = sig.pre;
@@ -172,7 +174,7 @@ python3 -c "import {{LIB}}"
         inline std::string nbx_seq_field_segment(const GenClass &k, const GenField &f) {
             const std::string vt  = seq_boundary_cpp(f.type);
             const std::string dq  = nbx_doc_arg(f.doc);
-            const std::string get = "[](const " + k.name + " &s) { return " +
+            const std::string get = "[](const " + qualified_of(k) + " &s) { return " +
                                     seq_from_expr(f.type, "s." + f.name) + "; }";
             if (f.is_readonly) {
                 return ".def_prop_ro(\"" + f.name + "\", " + get + dq + ")";
@@ -180,7 +182,7 @@ python3 -c "import {{LIB}}"
             std::string s;
             s += ".def_prop_rw(\"" + f.name + "\",\n";
             s += "            " + get + ",\n";
-            s += "            [](" + k.name + " &s, const " + vt + " &v) {\n";
+            s += "            [](" + qualified_of(k) + " &s, const " + vt + " &v) {\n";
             s += "                s." + f.name + ".resize(v.size());\n";
             s += "                std::copy(v.begin(), v.end(), s." + f.name + ".begin());\n";
             s += "            }" + dq + ")";
@@ -196,7 +198,7 @@ python3 -c "import {{LIB}}"
             if (m.is_extension) {
                 return ".def(\"" + m.name + "\", &" + m.ext_qualified + dq + ")";
             }
-            const std::string mp = "&" + k.name + "::" + m.name;
+            const std::string mp = "&" + qualified_of(k) + "::" + m.name;
             if (m.is_static) {
                 return ".def_static(\"" + m.name + "\", " + mp + dq + ")";
             }
@@ -248,7 +250,7 @@ python3 -c "import {{LIB}}"
                 segs.push_back(nbx_method_segment(k, m));
             }
 
-            std::string s = "    nb::class_<" + k.name + ">(m, \"" + k.name + "\")";
+            std::string s = "    nb::class_<" + qualified_of(k) + ">(m, \"" + exposed_of(k) + "\")";
             for (const auto &seg : segs) {
                 s += "\n        " + seg;
             }

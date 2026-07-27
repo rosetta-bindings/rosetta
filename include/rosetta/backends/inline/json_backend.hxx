@@ -70,8 +70,8 @@ cmake -S . -B build && cmake --build build
             d += "int main() {\n";
             d += "    std::cout << \"-- serialize default instances --\\n\";\n";
             for (const auto &k : c.classes) {
-                d += "    std::cout << \"" + k.name + ": \" << rosetta::to_json(" + k.name +
-                     "{}).dump() << \"\\n\";\n";
+                d += "    std::cout << \"" + exposed_of(k) + ": \" << rosetta::to_json(" +
+                     qualified_of(k) + "{}).dump() << \"\\n\";\n";
             }
 
             const GenClass *rt = nullptr;

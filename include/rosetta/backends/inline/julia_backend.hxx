@@ -103,12 +103,12 @@ end
             std::string binds;
             // Enums first so class fields/methods can resolve them.
             for (const auto &e : c.enums) {
-                binds += "    rosetta::bind_julia_enum<" + e.name + ">(mod, \"" + e.name +
-                         "\");\n";
+                binds += "    rosetta::bind_julia_enum<" + qualified_of(e) + ">(mod, \"" +
+                         exposed_of(e) + "\");\n";
             }
             for (const auto &k : c.classes) {
-                binds +=
-                    "    rosetta::bind_julia<" + k.name + ">(mod, \"" + k.name + "\");\n";
+                binds += "    rosetta::bind_julia<" + qualified_of(k) + ">(mod, \"" + exposed_of(k) +
+                         "\");\n";
             }
             for (const auto &f : c.functions) {
                 binds += "    rosetta::bind_julia_function<^^" + f.qualified + ">(mod, \"" +

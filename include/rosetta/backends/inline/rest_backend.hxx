@@ -252,7 +252,7 @@ if(SPEC.functions.length){
             std::string s = "{\"lib\":\"" + c.lib + "\",\"classes\":[";
             for (std::size_t ci = 0; ci < c.classes.size(); ++ci) {
                 const auto &k = c.classes[ci];
-                s += (ci ? "," : "") + std::string("{\"name\":\"") + k.name + "\",\"fields\":[";
+                s += (ci ? "," : "") + std::string("{\"name\":\"") + exposed_of(k) + "\",\"fields\":[";
                 bool first = true;
                 for (const auto &f : k.fields) {
                     if (!jsonable_type(f.type)) {
@@ -332,13 +332,13 @@ if(SPEC.functions.length){
             binds += "    });\n";
 
             for (const auto &k : c.classes) {
-                binds += "    rosetta::Store<" + k.name + "> store_" + k.name +
-                         ";\n    rosetta::bind_rest<" + k.name + ">(server, \"/" + k.name +
-                         "\", store_" + k.name + ");\n";
+                binds += "    rosetta::Store<" + qualified_of(k) + "> store_" + exposed_of(k) +
+                         ";\n    rosetta::bind_rest<" + qualified_of(k) + ">(server, \"/" +
+                         exposed_of(k) + "\", store_" + exposed_of(k) + ");\n";
             }
             for (const auto &e : c.enums) {
-                binds += "    rosetta::bind_rest_enum<" + e.name + ">(server, \"/" + e.name +
-                         "\");\n";
+                binds += "    rosetta::bind_rest_enum<" + qualified_of(e) + ">(server, \"/" +
+                         exposed_of(e) + "\");\n";
             }
             for (const auto &f : c.functions) {
                 binds += "    rosetta::bind_rest_function<^^" + f.qualified + ">(server, \"/" +

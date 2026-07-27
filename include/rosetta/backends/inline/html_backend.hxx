@@ -116,11 +116,13 @@ namespace rosetta {
             // -------- contents --------
             out += "<nav>\n<h2>Contents</h2>\n<ul>\n";
             for (const auto &k : c.classes) {
-                out += "  <li><a href=\"#" + html_escape(k.name) + "\">" + html_escape(k.name) +
+                out += "  <li><a href=\"#" + html_escape(exposed_of(k)) + "\">" +
+                       html_escape(exposed_of(k)) +
                        "</a></li>\n";
             }
             for (const auto &e : c.enums) {
-                out += "  <li><a href=\"#" + html_escape(e.name) + "\">" + html_escape(e.name) +
+                out += "  <li><a href=\"#" + html_escape(exposed_of(e)) + "\">" +
+                       html_escape(exposed_of(e)) +
                        "</a> <em>(enum)</em></li>\n";
             }
             if (!c.functions.empty()) {
@@ -130,13 +132,13 @@ namespace rosetta {
 
             // -------- classes --------
             for (const auto &k : c.classes) {
-                out += "\n<section id=\"" + html_escape(k.name) + "\">\n";
-                out += "<h2>" + html_escape(k.name) + "</h2>\n";
+                out += "\n<section id=\"" + html_escape(exposed_of(k)) + "\">\n";
+                out += "<h2>" + html_escape(exposed_of(k)) + "</h2>\n";
 
                 if (!k.ctors.empty()) {
                     out += "<h3>Constructors</h3>\n";
                     for (const auto &ct : k.ctors) {
-                        out += "<code class=\"sig\">" + html_escape(k.name) + "(" +
+                        out += "<code class=\"sig\">" + html_escape(exposed_of(k)) + "(" +
                                html_params(ct) + ")</code>\n";
                     }
                 }
@@ -169,8 +171,8 @@ namespace rosetta {
 
             // -------- enums --------
             for (const auto &e : c.enums) {
-                out += "\n<section id=\"" + html_escape(e.name) + "\">\n";
-                out += "<h2>" + html_escape(e.name) + " <em>(enum";
+                out += "\n<section id=\"" + html_escape(exposed_of(e)) + "\">\n";
+                out += "<h2>" + html_escape(exposed_of(e)) + " <em>(enum";
                 if (!e.underlying.empty()) {
                     out += " : " + html_escape(e.underlying);
                 }

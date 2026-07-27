@@ -154,13 +154,14 @@ namespace rosetta {
             out += "<ServerManagerConfiguration>\n";
             for (const auto &k : c.classes) {
                 const auto       *proxy = find_annotation<paraview_proxy>(k.annotations);
-                const std::string cls   = proxy ? std::string(proxy->vtk_class) : ("vtk" + k.name);
+                const std::string cls =
+                    proxy ? std::string(proxy->vtk_class) : ("vtk" + exposed_of(k));
                 const std::string group = proxy ? std::string(proxy->group) : std::string("filters");
                 const std::string label =
-                    (proxy && proxy->label[0]) ? std::string(proxy->label) : k.name;
+                    (proxy && proxy->label[0]) ? std::string(proxy->label) : exposed_of(k);
 
                 out += "  <ProxyGroup name=\"" + xml_escape(group) + "\">\n";
-                out += "    <SourceProxy name=\"" + xml_escape(k.name) + "\" class=\"" +
+                out += "    <SourceProxy name=\"" + xml_escape(exposed_of(k)) + "\" class=\"" +
                        xml_escape(cls) + "\" label=\"" + xml_escape(label) + "\">\n";
                 if (const auto *in = find_annotation<paraview_input>(k.annotations)) {
                     out += pv_input_property(*in);

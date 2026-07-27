@@ -307,7 +307,8 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
         }
 
         inline std::string imgx_draw_fn(const GenClass &k) {
-            std::string s = "void rosetta_imgui::draw_" + k.name + "(" + k.name + " &t) {\n";
+            std::string s =
+                "void rosetta_imgui::draw_" + exposed_of(k) + "(" + qualified_of(k) + " &t) {\n";
             for (const auto &f : k.fields) {
                 s += imgx_field(f);
             }
@@ -323,7 +324,7 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
                     if (m.is_extension) {
                         continue; // extensions: no member access pattern here
                     }
-                    s += imgx_method(k.name, m);
+                    s += imgx_method(qualified_of(k), m);
                 }
             }
             s += "}\n\n";
@@ -341,7 +342,7 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
             s += "\nnamespace rosetta_imgui {\n";
             s += "    // Immediate-mode: call each frame between ImGui::NewFrame()/Render().\n";
             for (const auto &k : c.classes) {
-                s += "    void draw_" + k.name + "(" + k.name + " &target);\n";
+                s += "    void draw_" + exposed_of(k) + "(" + qualified_of(k) + " &target);\n";
             }
             s += "} // namespace rosetta_imgui\n";
             return s;
@@ -405,9 +406,10 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
                 if (!k.is_default_constructible) {
                     continue;
                 }
-                s += "            if (ImGui::BeginTabItem(\"" + k.name + "\")) {\n";
-                s += "                static " + k.name + " " + k.name + "_obj;\n";
-                s += "                rosetta_imgui::draw_" + k.name + "(" + k.name + "_obj);\n";
+                s += "            if (ImGui::BeginTabItem(\"" + exposed_of(k) + "\")) {\n";
+                s += "                static " + qualified_of(k) + " " + exposed_of(k) + "_obj;\n";
+                s += "                rosetta_imgui::draw_" + exposed_of(k) + "(" + exposed_of(k) +
+                     "_obj);\n";
                 s += "                ImGui::EndTabItem();\n";
                 s += "            }\n";
             }

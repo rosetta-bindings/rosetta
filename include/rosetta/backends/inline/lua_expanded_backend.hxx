@@ -139,7 +139,7 @@ local {{LIB}} = require("{{LIB}}")
         // registered as a sol2 usertype.
         inline bool lx_is_bound(const std::string &name, const GenContext &c) {
             for (const auto &k : c.classes) {
-                if (k.name == name) {
+                if (k.name == name || qualified_of(k) == name) {
                     return true;
                 }
             }
@@ -484,14 +484,14 @@ local {{LIB}} = require("{{LIB}}")
             const LxSeqSig sig = lx_seq_sig(m.params, tables);
             std::string    decls, call;
             if (m.is_extension) {
-                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                decls = qualified_of(k) + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
                 call  = m.ext_qualified + "(self" + (sig.args.empty() ? "" : ", " + sig.args) +
                        ")";
             } else if (m.is_static) {
                 decls = sig.decls;
-                call  = k.name + "::" + m.name + "(" + sig.args + ")";
+                call  = qualified_of(k) + "::" + m.name + "(" + sig.args + ")";
             } else {
-                decls = k.name + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
+                decls = qualified_of(k) + " &self" + (sig.decls.empty() ? "" : ", " + sig.decls);
                 call  = "self." + m.name + "(" + sig.args + ")";
             }
             return "[](" + decls + ") {\n" + lx_seq_body(m, sig, call) + "    }";
@@ -510,10 +510,12 @@ local {{LIB}} = require("{{LIB}}")
 
         // One enum: m.new_enum<E>("E", {{"A", E::A}, ...}); (read-only table).
         inline std::string lua_enum(const GenEnum &e) {
-            std::string s = "    m.new_enum<" + e.name + ">(\"" + e.name + "\", {";
+            const std::string eq = qualified_of(e);
+            std::string       s =
+                "    m.new_enum<" + eq + ">(\"" + exposed_of(e) + "\", {";
             for (std::size_t i = 0; i < e.values.size(); ++i) {
                 s += (i ? "," : "");
-                s += "\n        {\"" + e.values[i].name + "\", " + e.name +
+                s += "\n        {\"" + e.values[i].name + "\", " + eq +
                      "::" + e.values[i].name + "}";
             }
             s += "});\n";
@@ -524,7 +526,7 @@ local {{LIB}} = require("{{LIB}}")
         // arithmetic + range -> validating sol::property; otherwise the bare
         // member pointer (sol2 generates both accessors from it).
         inline std::string lua_field(const GenClass &k, const GenField &f) {
-            const std::string self = k.name;
+            const std::string self = qualified_of(k);
             const std::string mp   = "&" + self + "::" + f.name;
             if (lx_field_readonly(f)) {
                 return "    c[\"" + f.name + "\"] = sol::readonly(" + mp + ");\n";
@@ -595,8 +597,9 @@ local {{LIB}} = require("{{LIB}}")
                 const std::string ret = qualify_std(m.ret_cpp);
                 const std::string fp =
                     m.is_static ? (ret + " (*)(" + args + ")" + quals)
-                                : (ret + " (" + k.name + "::*)(" + args + ")" + quals);
-                primary = "static_cast<" + fp + ">(&" + k.name + "::" + m.name + ")";
+                                : (ret + " (" + qualified_of(k) + "::*)(" + args + ")" + quals);
+                primary =
+                    "static_cast<" + fp + ">(&" + qualified_of(k) + "::" + m.name + ")";
             }
             if (!lx_has_vector_param(m.params)) {
                 return "    c[\"" + m.name + "\"] = " + primary + ";\n";
@@ -604,13 +607,13 @@ local {{LIB}} = require("{{LIB}}")
             const LuaTableParams tp = lua_table_params(m.params);
             std::string          decls, call;
             if (m.is_extension) {
-                decls = k.name + " &self" + (tp.decls.empty() ? "" : ", " + tp.decls);
+                decls = qualified_of(k) + " &self" + (tp.decls.empty() ? "" : ", " + tp.decls);
                 call  = m.ext_qualified + "(self" + (tp.args.empty() ? "" : ", " + tp.args) + ")";
             } else if (m.is_static) {
                 decls = tp.decls;
-                call  = k.name + "::" + m.name + "(" + tp.args + ")";
+                call  = qualified_of(k) + "::" + m.name + "(" + tp.args + ")";
             } else {
-                decls = k.name + " &self" + (tp.decls.empty() ? "" : ", " + tp.decls);
+                decls = qualified_of(k) + " &self" + (tp.decls.empty() ? "" : ", " + tp.decls);
                 call  = "self." + m.name + "(" + tp.args + ")";
             }
             return "    c[\"" + m.name + "\"] = sol::overload(\n        " + primary +
@@ -657,7 +660,7 @@ local {{LIB}} = require("{{LIB}}")
             if (any_vector && k.copy_or_move_assignable) {
                 std::vector<std::string> lambdas;
                 if (synth_default) {
-                    lambdas.push_back("[]() { return " + k.name + "(); }");
+                    lambdas.push_back("[]() { return " + qualified_of(k) + "(); }");
                 }
                 for (std::size_t i : usable) {
                     const auto &params = k.ctor_param_cpp[i];
@@ -667,11 +670,11 @@ local {{LIB}} = require("{{LIB}}")
                         decls += (j ? ", " : "") + qualify_std(params[j]) + " " + an;
                         args += (j ? ", " : "") + an;
                     }
-                    lambdas.push_back("[](" + decls + ") { return " + k.name + "(" + args +
+                    lambdas.push_back("[](" + decls + ") { return " + qualified_of(k) + "(" + args +
                                       "); }");
                     if (lx_has_vector_param(k.ctors[i])) {
                         const LuaTableParams tp = lua_table_params(k.ctors[i]);
-                        lambdas.push_back("[](" + tp.decls + ") { return " + k.name + "(" +
+                        lambdas.push_back("[](" + tp.decls + ") { return " + qualified_of(k) + "(" +
                                           tp.args + "); }");
                     }
                 }
@@ -684,7 +687,7 @@ local {{LIB}} = require("{{LIB}}")
 
             std::vector<std::string> sigs;
             if (synth_default) {
-                sigs.push_back(k.name + "()");
+                sigs.push_back(qualified_of(k) + "()");
             }
             for (std::size_t i : usable) {
                 const auto &params = k.ctor_param_cpp[i];
@@ -692,7 +695,7 @@ local {{LIB}} = require("{{LIB}}")
                 for (std::size_t j = 0; j < params.size(); ++j) {
                     args += (j ? ", " : "") + qualify_std(params[j]);
                 }
-                sigs.push_back(k.name + "(" + args + ")");
+                sigs.push_back(qualified_of(k) + "(" + args + ")");
             }
             std::string s = "sol::constructors<";
             for (std::size_t i = 0; i < sigs.size(); ++i) {
@@ -706,13 +709,10 @@ local {{LIB}} = require("{{LIB}}")
         // listed, and a derived userdata is accepted wherever a base is
         // expected (methods included, via sol2's base lookup).
         inline std::string lua_bases_clause(const GenClass &k, const GenContext &c) {
-            auto qualified = [](const GenClass &g) {
-                return g.name_space.empty() ? g.name : g.name_space + "::" + g.name;
-            };
             std::string bases;
             for (const auto &b : k.bases) {
                 for (const auto &g : c.classes) {
-                    if (qualified(g) == b) {
+                    if (qualified_of(g) == b) {
                         bases += (bases.empty() ? "" : ", ") + b;
                         break;
                     }
@@ -728,9 +728,9 @@ local {{LIB}} = require("{{LIB}}")
         // open scope so the local `c` never leaks.
         inline std::string lua_class(const GenClass &k, const GenContext &c) {
             std::string s = "    {\n";
-            s += "    sol::usertype<" + k.name + "> c = m.new_usertype<" + k.name + ">(\"" +
-                 k.name + "\",\n        " + lua_ctor_clause(k, c) + lua_bases_clause(k, c) +
-                 ");\n";
+            s += "    sol::usertype<" + qualified_of(k) + "> c = m.new_usertype<" +
+                 qualified_of(k) + ">(\"" + exposed_of(k) + "\",\n        " +
+                 lua_ctor_clause(k, c) + lua_bases_clause(k, c) + ");\n";
             for (const auto &f : k.fields) {
                 if (f.type.is_sequence) {
                     // Foreign sequence field: property copying through the
@@ -739,10 +739,10 @@ local {{LIB}} = require("{{LIB}}")
                     if (seq_ok(f.type)) {
                         const std::string vt = seq_boundary_cpp(f.type);
                         s += "    c[\"" + f.name + "\"] = sol::property(\n";
-                        s += "        [](const " + k.name + " &s) { return " +
+                        s += "        [](const " + qualified_of(k) + " &s) { return " +
                              seq_from_expr(f.type, "s." + f.name) + "; }";
                         if (!f.is_readonly) {
-                            s += ",\n        [](" + k.name + " &s, const sol::object &o) {\n";
+                            s += ",\n        [](" + qualified_of(k) + " &s, const sol::object &o) {\n";
                             s += "            " + vt + " v = o.is<" + vt + ">() ? o.as<" + vt +
                                  ">() : o.as<sol::nested<" + vt + ">>();\n";
                             s += "            s." + f.name + ".resize(v.size());\n";

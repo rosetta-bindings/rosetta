@@ -22,10 +22,10 @@ namespace rosetta {
             // linking to its section. GitHub anchors lowercase the heading.
             out += "## Contents\n\n";
             for (const auto &k : c.classes) {
-                out += "- [" + k.name + "](#" + k.name + ")\n";
+                out += "- [" + exposed_of(k) + "](#" + exposed_of(k) + ")\n";
             }
             for (const auto &e : c.enums) {
-                out += "- [" + e.name + "](#" + e.name + ") _(enum)_\n";
+                out += "- [" + exposed_of(e) + "](#" + exposed_of(e) + ") _(enum)_\n";
             }
             if (!c.functions.empty()) {
                 out += "- [Functions](#Functions)\n";

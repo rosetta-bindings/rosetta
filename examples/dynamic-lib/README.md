@@ -50,7 +50,7 @@ linked by mistake:
 
 ```cmake
 # preferred form first, then fall back to whichever is actually on disk
-if(ROSETTA_USER_LIB_LINK STREQUAL "static")
+if(ROSETTA_USER_LIB_LINK_0 STREQUAL "static")
     set(_order "${_static}" "${_shared}")   # lib<name>.a, then lib<name>.dylib/.so
 else()
     set(_order "${_shared}" "${_static}")
@@ -79,7 +79,24 @@ This wiring is emitted for each C++ binding backend (the reflection `python` /
 `node` / … projects and their `*-expanded` variants) **and** for the generator
 driver itself (the reflection walk instantiates each bound type, so it needs the
 definitions at link time too). Without `user_lib` the block is skipped and the
-project stays header-only, exactly as before. See the field documented in
+project stays header-only, exactly as before.
+
+### Several libraries
+
+`space` depends on nothing, but a real library usually does. `user_lib` also
+takes an **array** of the same objects — the bound library first, then the
+pre-built ones it needs, in link order:
+
+```json
+"user_lib": [
+    { "name": "space", "dir": "../space/bin", "link": "shared" },
+    { "name": "foo",   "dir": "/opt/foo/lib", "link": "static" }
+]
+```
+
+Each entry is resolved by the same rules and keeps its own `link`; every distinct
+directory joins the binding's rpath. See
+[docs/MANIFEST.md](../../docs/MANIFEST.md#linking-external-libraries-user_lib). See the field documented in
 [`tools/rosetta_gen/rosetta_gen.cpp`](../../tools/rosetta_gen/rosetta_gen.cpp) and
 plumbed through [`include/rosetta/generate.h`](../../include/rosetta/generate.h).
 

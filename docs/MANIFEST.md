@@ -88,7 +88,7 @@ cmake -B build && cmake --build build
 | `namespace` | — | — | Default C++ namespace for `classes` / `functions` / `extensions` names carrying no `::` of their own. See [Shared defaults](#shared-defaults-namespace-header_dir). |
 | `header_dir` | — | — | Directory fragment prepended to every `classes` / `functions` / `extensions` header. See [Shared defaults](#shared-defaults-namespace-header_dir). |
 | `sequences` | — | `[]` | Foreign sequence containers (qualified template names, one type parameter — `"GEO::vector"`) that marshal like `std::vector<T>`. See [Foreign sequence containers](#foreign-sequence-containers-sequences). |
-| `user_lib` | — | — | Link the generated bindings against a pre-built external library. See [Linking an external library](#linking-an-external-library-user_lib). |
+| `user_lib` | — | — | Link the generated bindings against pre-built external libraries — one object, or an array of them when your library has dependencies of its own. See [Linking external libraries](#linking-external-libraries-user_lib). |
 | `user_sources` | — | `[]` | List of user `.cpp` (or `.c`) files compiled directly into every generated binding target. See [Compiling user sources](#compiling-user-sources-user_sources). |
 | `compile_definitions` | — | `[]` | Preprocessor definitions (`"NAME"` or `"NAME=VALUE"`) applied to the generator driver and every compiled binding target. See [Preprocessor definitions](#preprocessor-definitions-compile_definitions). |
 | `build_type` | — | — | Default `CMAKE_BUILD_TYPE` baked into every compiled backend's generated `CMakeLists.txt` (`Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel`). See [Build type & optimization](#build-type--optimization-build_type-optimization). |
@@ -120,7 +120,7 @@ Keys beginning with `//` (e.g. `"//1"`, `"//note"`) are treated as comments and 
 |---|:---:|---|---|
 | `header` | ✅ | — | Filename emitted into `#include "..."`. Resolved against `user_include`. |
 | `name` | — | header basename | C++ type name, must be reachable after including `header`. May be namespace-qualified (`space::Vector3`). |
-| `expose` | — | unqualified `name` | The **binding name** — what scripts see (Python attribute, JS export, TypeScript class) and what the generated trampoline is suffixed with (`Py_<expose>` / `Js_<expose>`). Must be a plain identifier. See [Renaming a class (`expose`)](#renaming-a-class-expose). |
+| `expose` | — | unqualified `name` | The **binding name** — what scripts see (Python attribute, JS export, TypeScript class) and what the generated trampoline is suffixed with (`Py_<expose>` / `Js_<expose>`). Works on an enum entry too. Must be a plain identifier. See [Renaming a class (`expose`)](#renaming-a-class-expose). |
 | `annotations` | — | — | Path (relative to the manifest) to an out-of-line annotation JSON side-car, baked into `bindings.h` so the header stays clean. See [OUT_OF_LINE_ANNOTATIONS](OUT_OF_LINE_ANNOTATIONS.md). |
 | `doc` | — | — | A description string for the class (used by doc backends). |
 | `extensions` | — | `[]` | Free functions exposed as **instance methods** of this class. See [Extension methods](#extension-methods-extensions). |
@@ -151,7 +151,9 @@ That happens as soon as two bound namespaces declare the same identifier — e.g
 
 Python then sees `arch.Data` (the `sinv` one) and `arch.SlipData`; C++ is untouched. Cross-references follow the rename automatically — a TypeScript signature touching `arch::Data` says `SlipData`, and the emitted C++ spells every bound class by its **qualified** name, so the shared identifier never becomes ambiguous in the generated TU.
 
-`expose` is honored by the runtime code backends (`python`, `python-expanded`, `node`, `node-expanded`, `wasm-expanded`) and `typescript`, and by the doc heading; other text/UI backends currently keep the C++ identifier.
+`expose` is honored by **every** backend — the runtime ones (`python`, `nanobind`, `node`, `wasm`, `lua`, `julia`, thin and `-expanded` alike), the C-ABI ones (`csharp`, `java` — where it also names the generated `.cs` / `.java` file and the runtime type key), the UI inspectors (`qt`, `qml`, `imgui`), `rest` / `openapi` (route paths and schema names), and the text outputs (`typescript`, `markdown`, `html`, `json`, `paraview`). The same field works on an **enum** entry, and on a **free function** or **extension method** — see [Functions](#functions).
+
+The rule each backend follows is the same: the exposed name is what appears in the host language (module attribute, class / enum declaration, route path, doc heading, generated file name), while every C++ spelling it emits uses the **qualified** name — which is what makes two same-named bound types unambiguous in the generated TU.
 
 ---
 
@@ -311,6 +313,20 @@ The single-string form is just the one-directory shorthand:
 | `name` | ✅ | — | Function name. May be namespace-qualified (`api::add`). |
 | `header` | ✅ | — | Header declaring it (emitted into `#include`). |
 | `doc` | — | — | Optional description (free functions carry no in-source annotations). |
+| `expose` | — | unqualified `name` | The **binding name** — what scripts call it. Same rule as a class's [`expose`](#renaming-a-class-expose): a plain identifier, leaving the emitted C++ (which spells the function qualified) untouched. |
+
+Free functions share the module namespace with classes, so `arch::solve` and `arch::sinv::solve` — or a function and a class of the same name — collide exactly like two classes do, and `rosetta_gen` rejects the manifest with the same "rename one with `expose`" error:
+
+```json
+"functions": [
+  { "name": "arch::solve",       "header": "slip.h" },
+  { "name": "arch::sinv::solve", "header": "stress.h", "expose": "solve_stress" }
+]
+```
+
+Every backend that binds free functions honors it (python, nanobind, node, wasm, lua, julia, C#, Java, REST, typescript, markdown, html, openapi) — each emits the exposed name as a label and the qualified name as the C++ spelling.
+
+`expose` works the same way on an [extension method](#extension-methods-extensions), where it renames the method on the class it attaches to (and two extensions of one class may not resolve to the same name).
 
 See [FREE_FUNCTIONS](FREE_FUNCTIONS.md) for details.
 
@@ -380,7 +396,7 @@ The text-only outputs (`markdown`, `html`, `json`, `typescript`, `openapi`, `par
 
 ---
 
-## Linking an external library (`user_lib`)
+## Linking external libraries (`user_lib`)
 
 Use `user_lib` when your bound headers only **declare** the API and the definitions live in a separately-compiled library (`.so` / `.dylib` / `.a`). rosetta links the generated bindings against it and sets up rpath.
 
@@ -400,11 +416,39 @@ Use `user_lib` when your bound headers only **declare** the API and the definiti
 
 `wasm` targets are **always** static — a native `.dylib` / `.so` cannot enter a wasm module. The native `python` / `node` targets honor `link`. See [`examples/dynamic-lib`](../examples/dynamic-lib).
 
+### Several libraries: your library and its dependencies
+
+A bound library rarely stands alone — it links against pre-built third parties of its own. Give `user_lib` an **array** of the same objects, one per library, and every one of them is linked (and rpath'ed) into the bindings:
+
+```json
+"user_include": ["../mylib/include", "/opt/foo/include"],
+"user_lib": [
+  { "name": "mylib", "dir": "../mylib/bin", "link": "shared" },
+  { "name": "foo",   "dir": "/opt/foo/lib" },
+  { "name": "bar",   "dir": "/opt/foo/lib", "link": "static" }
+]
+```
+
+- **Order is the link order** — list a library before the ones it depends on, which is what static archives require.
+- Each entry keeps its own `link`, so a shared library and a static dependency mix freely.
+- Every distinct `dir` lands in the binding's `BUILD_RPATH` / `INSTALL_RPATH`, so the module loads without `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`.
+- The **generator driver** links the same list — it instantiates the bound types during the reflection walk, so it needs the dependencies' definitions too, not just your library's.
+- Headers of the dependencies go in [`user_include`](#multiple-include-directories) (an array), their configuration macros in [`compile_definitions`](#preprocessor-definitions-compile_definitions).
+- On `wasm` every entry is taken as the static archive `lib<name>.a` built with the **same** emsdk — a native `.dylib` / `.so` cannot enter a wasm module, so a dependency you cannot rebuild for emscripten rules that target out.
+
+The single-object form is just the one-library shorthand:
+
+```json
+"user_lib": { "name": "space", "dir": "../space/bin" }
+```
+
+Flags that aren't a `-L`/`-l` pair (a framework, `--start-group`, a package's own link line) still go through a target's [`link_options`](#targets); the two compose.
+
 ---
 
 ## Compiling user sources (`user_sources`)
 
-Use `user_sources` when your bound headers only **declare** the API and the definitions live in `.cpp` files you want **compiled straight into the binding** — rather than linked from a pre-built [`user_lib` (#linking-an-external-library-user_lib).
+Use `user_sources` when your bound headers only **declare** the API and the definitions live in `.cpp` files you want **compiled straight into the binding** — rather than linked from a pre-built [`user_lib`](#linking-external-libraries-user_lib).
 
 ```json
 "user_sources": [

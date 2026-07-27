@@ -134,7 +134,9 @@ ROSETTA_CS_EXPORT void rosetta_csharp_free(char *p) { std::free(p); }
 
         // One class, expanded into an explicit TypeOps registration block.
         inline std::string csx_class(const GenClass &k) {
-            const std::string t = k.name;
+            // C++ spellings use the qualified name; the registry key is the
+            // exposed one, matching the C# wrapper's `_t` (manifest "expose").
+            const std::string t = qualified_of(k);
             std::string       s = "    {\n        rosetta::cs::TypeOps ops;\n";
             s += "        ops.destroy = &rosetta::cs::destroy_inst<" + t + ">;\n";
             if (k.is_default_constructible) {
@@ -199,7 +201,7 @@ ROSETTA_CS_EXPORT void rosetta_csharp_free(char *p) { std::free(p); }
                      "] = &rosetta::cs::construct<" + t + types + ">;\n";
             }
 
-            s += "        rosetta::cs::registry()[\"" + t + "\"] = std::move(ops);\n    }\n";
+            s += "        rosetta::cs::registry()[\"" + exposed_of(k) + "\"] = std::move(ops);\n    }\n";
             return s;
         }
 
@@ -207,7 +209,7 @@ ROSETTA_CS_EXPORT void rosetta_csharp_free(char *p) { std::free(p); }
             std::string s;
             // Enums: literal name -> value map (reflection-free).
             for (const auto &e : c.enums) {
-                s += "    rosetta::cs::enums()[\"" + e.name + "\"] = rosetta::cs::json{";
+                s += "    rosetta::cs::enums()[\"" + exposed_of(e) + "\"] = rosetta::cs::json{";
                 for (std::size_t i = 0; i < e.values.size(); ++i) {
                     s += (i ? ", " : "") + std::string("{\"") + e.values[i].name + "\", " +
                          std::to_string(e.values[i].value) + "}";

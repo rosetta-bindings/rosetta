@@ -84,7 +84,7 @@ the generated driver:
 
 ```cpp
 opt.functions = {
-    rosetta::make_function<^^transform>("transform", "common.h", "Scale a point"),
+    rosetta::make_function<^^transform>("transform", "common.h", "Scale a point", ""),
 };
 ```
 
@@ -98,6 +98,25 @@ opt.functions = {
 | REST       | `POST /transform` (JSON-array args → JSON result) |
 | TypeScript | `export function transform(arg0: Point): Point;`  |
 | Markdown   | a `## Functions` section                          |
+
+### Renaming a function (`expose`)
+
+A function binds under one module-level name — its reflected identifier, unless
+the manifest entry overrides it:
+
+```json
+"functions": [
+  { "name": "arch::solve",       "header": "slip.h" },
+  { "name": "arch::sinv::solve", "header": "stress.h", "expose": "solve_stress" }
+]
+```
+
+That fourth `make_function` argument carries it (`…, "Scale a point", "solve_stress"`),
+so only `GenFunction::name` changes — every backend keeps emitting the *qualified*
+spelling for the function pointer, and the rename therefore works in all of them.
+Classes and free functions share the module namespace, so `rosetta_gen` rejects a
+manifest where two of them resolve to the same name. The same field renames an
+[extension method](MANIFEST.md#extension-methods-extensions) on its class.
 
 Caveats inherited from the reflection model:
 - **Overloads**: an overloaded `name` makes `^^name` ill-formed; bind a specific signature, or skip. N-API/REST dispatch is arity-only anyway.

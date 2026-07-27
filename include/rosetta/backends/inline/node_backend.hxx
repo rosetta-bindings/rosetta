@@ -227,8 +227,8 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
         inline std::string node_bindings(const GenContext &c) {
             std::string binds;
             for (const auto &e : c.enums) {
-                binds += "    exports.Set(\"" + e.name + "\", rosetta::bind_napi_enum<" + e.name +
-                         ">(env));\n";
+                binds += "    exports.Set(\"" + exposed_of(e) + "\", rosetta::bind_napi_enum<" +
+                         qualified_of(e) + ">(env));\n";
             }
             for (const auto &k : c.classes) {
                 const std::string kq = qualified_of(k);

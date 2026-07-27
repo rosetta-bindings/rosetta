@@ -496,7 +496,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             std::string body;
             std::string adapters; // namespace-scope sequence adapters (rosetta_nx_seq)
             for (const auto &e : c.enums) {
-                body += "    exports.Set(\"" + e.name + "\", rosetta::make_enum(env, {";
+                body += "    exports.Set(\"" + exposed_of(e) + "\", rosetta::make_enum(env, {";
                 for (std::size_t i = 0; i < e.values.size(); ++i) {
                     body += (i ? ", " : "") + std::string("{\"") + e.values[i].name + "\", " +
                             std::to_string(e.values[i].value) + "}";

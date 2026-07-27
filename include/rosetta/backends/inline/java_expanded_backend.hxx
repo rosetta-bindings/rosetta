@@ -124,7 +124,9 @@ ROSETTA_JAVA_EXPORT void rosetta_java_free(char *p) { std::free(p); }
 
         // One class, expanded into an explicit TypeOps registration block.
         inline std::string jvx_class(const GenClass &k) {
-            const std::string t = k.name;
+            // C++ spellings use the qualified name; the registry key is the
+            // exposed one, matching the Java wrapper's `_t` (manifest "expose").
+            const std::string t = qualified_of(k);
             std::string       s = "    {\n        rosetta::jvm::TypeOps ops;\n";
             s += "        ops.destroy = &rosetta::jvm::destroy_inst<" + t + ">;\n";
             if (k.is_default_constructible) {
@@ -189,7 +191,8 @@ ROSETTA_JAVA_EXPORT void rosetta_java_free(char *p) { std::free(p); }
                      "] = &rosetta::jvm::construct<" + t + types + ">;\n";
             }
 
-            s += "        rosetta::jvm::registry()[\"" + t + "\"] = std::move(ops);\n    }\n";
+            s += "        rosetta::jvm::registry()[\"" + exposed_of(k) +
+                 "\"] = std::move(ops);\n    }\n";
             return s;
         }
 
@@ -197,7 +200,7 @@ ROSETTA_JAVA_EXPORT void rosetta_java_free(char *p) { std::free(p); }
             std::string s;
             // Enums: literal name -> value map (reflection-free).
             for (const auto &e : c.enums) {
-                s += "    rosetta::jvm::enums()[\"" + e.name + "\"] = rosetta::jvm::json{";
+                s += "    rosetta::jvm::enums()[\"" + exposed_of(e) + "\"] = rosetta::jvm::json{";
                 for (std::size_t i = 0; i < e.values.size(); ++i) {
                     s += (i ? ", " : "") + std::string("{\"") + e.values[i].name + "\", " +
                          std::to_string(e.values[i].value) + "}";
@@ -260,10 +263,10 @@ ROSETTA_JAVA_EXPORT void rosetta_java_free(char *p) { std::free(p); }
             write_file(srcdir / "Native.java", java_native(c));
             write_file(srcdir / "Rt.java", java_runtime_src(c));
             for (const auto &e : c.enums) {
-                write_file(srcdir / (e.name + ".java"), java_enum(c, e));
+                write_file(srcdir / (exposed_of(e) + ".java"), java_enum(c, e));
             }
             for (const auto &k : c.classes) {
-                write_file(srcdir / (k.name + ".java"), java_class(c, k));
+                write_file(srcdir / (exposed_of(k) + ".java"), java_class(c, k));
             }
             const std::string fns = java_functions(c);
             if (!fns.empty()) {
