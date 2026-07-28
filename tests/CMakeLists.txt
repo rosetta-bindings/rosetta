@@ -118,6 +118,15 @@ target_compile_options(user_lib PRIVATE -fannotation-attributes)
 target_link_libraries(user_lib PRIVATE GTest::gtest_main)
 gtest_discover_tests(user_lib)
 
+# std::shared_ptr marshalling (GenType::is_shared_ptr + the python-expanded
+# holder registration), the pybind11 override-macro comma fix, and nanobind's
+# per-header STL casters / abstract-class constructor guard. Generated sources.
+add_executable(shared_ptr shared_ptr.cpp)
+target_include_directories(shared_ptr PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(shared_ptr PRIVATE -fannotation-attributes)
+target_link_libraries(shared_ptr PRIVATE GTest::gtest_main)
+gtest_discover_tests(shared_ptr)
+
 # The manifest "expose" rename on free functions and extension methods
 # (make_function's override + every backend's exposed-name / qualified-call
 # split). Verifies generated sources.
