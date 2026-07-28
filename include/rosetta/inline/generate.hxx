@@ -691,6 +691,9 @@ endif()
         template <typename T> struct is_vec : std::false_type {};
         template <typename U, typename A> struct is_vec<std::vector<U, A>> : std::true_type {};
 
+        template <typename T> struct is_shared : std::false_type {};
+        template <typename U> struct is_shared<std::shared_ptr<U>> : std::true_type {};
+
         template <typename T> struct is_func : std::false_type {};
         template <typename R, typename... A>
         struct is_func<std::function<R(A...)>> : std::true_type {};
@@ -826,6 +829,19 @@ endif()
                 g.is_pointer       = true;
                 g.object           = class_name<std::remove_cv_t<std::remove_pointer_t<U>>>();
                 g.object_qualified = ns_qualified_name<std::remove_cv_t<std::remove_pointer_t<U>>>();
+            } else if constexpr (is_shared<U>::value) {
+                // std::shared_ptr<T>: described exactly as the class branch
+                // below would describe it (kind "object", `object` still
+                // "shared_ptr"), so no backend's marshalling gate changes —
+                // only the flag and the pointee are added. pybind11 needs both
+                // to declare the holder on T; see GenType::is_shared_ptr.
+                g.kind             = "object";
+                g.object           = class_name<U>();
+                g.object_qualified = ns_qualified_name<U>();
+                g.copy_constructible = std::is_copy_constructible_v<U>;
+                g.copy_assignable    = std::is_copy_assignable_v<U>;
+                g.is_shared_ptr      = true;
+                g.element.push_back(type_descriptor<typename U::element_type>());
             } else if constexpr (std::is_class_v<U>) {
                 g.kind             = "object";
                 g.object           = class_name<U>();

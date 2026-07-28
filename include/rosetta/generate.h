@@ -147,6 +147,20 @@ namespace rosetta {
         // (e.g. embind via allow_raw_pointers) checks this flag explicitly.
         bool is_pointer = false;
 
+        // True when the (cvref-stripped) type is a std::shared_ptr<T>. Unlike
+        // is_pointer / is_sequence / is_callback this does NOT change `kind`:
+        // a shared_ptr is still described as the class it is ("object"), so
+        // every backend keeps binding it exactly as before — nanobind, embind
+        // and sol2 all marshal one through their own caster once the matching
+        // header is included. The flag exists for the backends that must
+        // additionally declare a HOLDER for the pointee: pybind11 refuses at
+        // RUNTIME ("Unable to convert std::shared_ptr<T> to Python when the
+        // bound type does not use std::shared_ptr ... as its holder type")
+        // unless the pointee was registered as py::class_<T, std::shared_ptr<T>>.
+        // `element` holds one entry, the pointee's descriptor (like "vector"),
+        // so an emitter can resolve it against the bound-class list.
+        bool is_shared_ptr = false;
+
         // True when the (cvref-stripped) type is a trait-registered foreign
         // sequence container (rosetta::is_sequence<T>, e.g. GEO::vector<double>
         // — see rosetta/sequence.h). Like is_pointer, `kind` stays "unknown" so

@@ -151,6 +151,7 @@ python3 -c "import {{LIB}}"
                             "#include <pybind11/stl.h>\n"
                             "#include <pybind11/functional.h>\n"
                             "#include <algorithm>\n"
+                            "#include <memory>\n" // std::shared_ptr holders
                             "#include <type_traits>\n"
                             "#include <vector>\n";
             auto add = [&](const std::string &h) { append_include(s, h); };
@@ -611,10 +612,101 @@ python3 -c "import {{LIB}}"
         // ride as extra template args so pybind accepts a derived instance
         // where a base is expected (a base must be registered before its
         // derived — that follows from manifest order).
+        // Walk one type (and its element / callback children) for shared_ptr
+        // pointees that name a class, collecting their qualified spellings.
+        inline void px_collect_shared(const GenType &t, std::vector<std::string> &out) {
+            if (t.is_shared_ptr && !t.element.empty() &&
+                !t.element[0].object_qualified.empty()) {
+                const std::string &q = t.element[0].object_qualified;
+                if (std::find(out.begin(), out.end(), q) == out.end()) {
+                    out.push_back(q);
+                }
+            }
+            for (const auto &e : t.element) {
+                px_collect_shared(e, out);
+            }
+            for (const auto &e : t.callback_sig) {
+                px_collect_shared(e, out);
+            }
+        }
+
+        // Every bound class the module ever hands across the boundary inside a
+        // std::shared_ptr must be registered as py::class_<T, std::shared_ptr<T>>.
+        // Without it pybind11 compiles happily and then throws at CALL time:
+        // "Unable to convert std::shared_ptr<T> to Python when the bound type
+        // does not use std::shared_ptr ... as its holder type" — so a factory
+        // like `std::shared_ptr<Executor> local()` binds and is unusable.
+        //
+        // std::shared_ptr (rather than py::smart_holder) because it is the one
+        // spelling that works on pybind11 2.x and 3.x alike.
+        inline std::vector<std::string> px_shared_holders(const GenContext &c) {
+            std::vector<std::string> need;
+            for (const auto &k : c.classes) {
+                for (const auto &f : k.fields) {
+                    px_collect_shared(f.type, need);
+                }
+                for (const auto &m : k.methods) {
+                    px_collect_shared(m.ret, need);
+                    for (const auto &p : m.params) {
+                        px_collect_shared(p.type, need);
+                    }
+                }
+                for (const auto &ct : k.ctors) {
+                    for (const auto &p : ct) {
+                        px_collect_shared(p.type, need);
+                    }
+                }
+            }
+            for (const auto &f : c.functions) {
+                px_collect_shared(f.ret, need);
+                for (const auto &p : f.params) {
+                    px_collect_shared(p.type, need);
+                }
+            }
+            // pybind requires one holder per inheritance chain: registering a
+            // base with std::shared_ptr and a derived with the default holder
+            // (or the reverse) is a runtime error the moment either crosses the
+            // boundary. Propagate both ways until the set stops growing —
+            // `local()` returning shared_ptr<Executor> is what drags
+            // LocalExecutor and RemoteExecutor in.
+            auto has = [&](const std::string &q) {
+                return std::find(need.begin(), need.end(), q) != need.end();
+            };
+            for (bool changed = true; changed;) {
+                changed = false;
+                for (const auto &k : c.classes) {
+                    const std::string kq = qualified_of(k);
+                    for (const auto &b : k.bases) {
+                        bool bound = false;
+                        for (const auto &g : c.classes) {
+                            bound = bound || qualified_of(g) == b;
+                        }
+                        if (!bound) {
+                            continue;
+                        }
+                        if (has(b) && !has(kq)) {
+                            need.push_back(kq);
+                            changed = true;
+                        } else if (has(kq) && !has(b)) {
+                            need.push_back(b);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            return need;
+        }
+
         inline std::string expanded_class(const GenClass &k, const GenContext &c) {
             const bool        has_tramp = !virtual_methods(k).empty();
             const std::string kq        = qualified_of(k);
             std::string       extra;
+            // Holder first — py::class_ detects its options by type, so the
+            // order among trampoline / holder / bases is free.
+            const auto shared = px_shared_holders(c);
+            if (std::find(shared.begin(), shared.end(), kq) != shared.end()) {
+                extra += ", std::shared_ptr<" + kq + ">";
+            }
             if (has_tramp) {
                 extra += ", rosetta_py::Py_" + exposed_of(k);
             }

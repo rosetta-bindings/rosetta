@@ -23,10 +23,29 @@
 
 #pragma once
 
+// nanobind splits its casters one per header, where pybind11 ships them all in
+// <pybind11/stl.h>. Pull the same coverage the python visitor gets for free,
+// plus the smart pointers (pybind11 handles those in its core): without the
+// matching header a bound signature still COMPILES and then throws "Unable to
+// convert function return value to a Python type" at call time — e.g. a factory
+// returning std::shared_ptr<Iface>, a std::variant field, or a
+// std::map<std::string, std::string> options argument. Each header only defines
+// type casters, so the ones a module never exercises cost nothing.
 #include <experimental/meta>
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/function.h>
+#include <nanobind/stl/map.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/set.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/unique_ptr.h>
+#include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/unordered_set.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 #include <rosetta/walk.h>
 #include <string>

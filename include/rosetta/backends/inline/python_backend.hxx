@@ -166,8 +166,23 @@ python3 -c "import {{LIB}}"
                     sig += " noexcept";
                 }
                 sig += " override {\n";
+                // PYBIND11_OVERRIDE[_PURE] is a macro, so a return type carrying
+                // a comma — which every std container spelling does, e.g. the
+                // `vector<T, allocator<T>>` display_string_of produces — gets
+                // split by the PREPROCESSOR across two macro arguments, shifting
+                // the class and method arguments along with it. The errors that
+                // follow name types nobody wrote (`vector<T, _object *>`). Hide
+                // the comma behind a local alias, and only when there is one, so
+                // the output for every other override stays byte-identical. The
+                // return type is the one place this can bite: the forwarded
+                // argument names are plain identifiers.
+                std::string ret_tok = rq;
+                if (rq.find(',') != std::string::npos) {
+                    ret_tok = "rosetta_ret_t";
+                    sig += "        using " + ret_tok + " = " + rq + ";\n";
+                }
                 sig += std::string("        ") +
-                       (m->is_pure ? "PYBIND11_OVERRIDE_PURE(" : "PYBIND11_OVERRIDE(") + rq +
+                       (m->is_pure ? "PYBIND11_OVERRIDE_PURE(" : "PYBIND11_OVERRIDE(") + ret_tok +
                        ", " + kq + ", " + m->name + ", " + fwd + ");\n    }\n";
                 s += sig;
             }
