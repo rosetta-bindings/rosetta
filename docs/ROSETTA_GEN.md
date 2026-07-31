@@ -118,6 +118,11 @@ A backend whose toolchain is **missing** (no `npm`, no `emcc`, no `julia`…) is
 --cmake-arg ARG          extra argument for every CMake configure (repeatable)
 --jobs N                 parallel build jobs
 --fresh                  wipe the gen and bindings dirs first
+--wheel                  also build a Python wheel for the python-expanded /
+                         nanobind-expanded targets (runs their make_wheel.py;
+                         wheels land in <bindings>/<lang>/dist)
+--wheel-dir DIR          collect every wheel in DIR instead of a per-backend
+                         dist/ (implies --wheel)
 ```
 
 ### Case 3: everything, default layout
@@ -169,6 +174,48 @@ bin/rosetta_gen --build manifest.json \
     --cmake-arg -DCMAKE_BUILD_TYPE=Debug \
     --cmake-arg -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
+
+### Case 8: Python wheels
+
+By default `--build` compiles the extension module and stops — it produces an importable `.so` / `.pyd`, not a distributable artifact. `--wheel` adds the packaging step for the two backends that emit a [`make_wheel.py`](MANIFEST.md#python-wheels-version), `python-expanded` and `nanobind-expanded`:
+
+```bash
+bin/rosetta_gen --build manifest.json --only python-expanded,nanobind-expanded --wheel
+```
+
+```
+== building python-expanded
+== packaging python-expanded
+== building nanobind-expanded
+== packaging nanobind-expanded
+
+== summary
+   python-expanded      OK (wheel)
+   nanobind-expanded    OK (wheel)
+```
+
+Wheels land in `<bindings>/<lang>/dist`, with the repaired (redistributable) copies in `dist/repaired`. It is opt-in because packaging is a release action, not a development one: it pip-installs `build`, `scikit-build-core` and a repair tool into the environment, and takes noticeably longer than the compile `--build` is otherwise optimized for.
+
+`--wheel-dir` collects every backend's wheels in one place instead — the shape you want when the next step is uploading them:
+
+```bash
+bin/rosetta_gen --build manifest.json --wheel-dir ./dist
+```
+
+```
+dist/
+  pygeom-0.2.0-cp312-cp312-macosx_15_0_arm64.whl
+  nbgeom-0.2.0-cp312-abi3-macosx_15_0_arm64.whl
+  repaired/          <- the redistributable copies, same names
+```
+
+It implies `--wheel` (asking where the wheels go is asking for wheels) and resolves relative paths against the directory you ran the command from, not the binding dir. Sharing one output directory is safe: each `make_wheel.py` repairs only the wheels *it* just produced, so building the second backend does not re-process the first one's.
+
+Both flags have manifest counterparts — `"wheel": true` and `"wheel_dir": "./dist/wheels"` — for a project that always packages, so plain `--build` does the whole thing (see [MANIFEST.md](MANIFEST.md#python-wheels-version)). They are defaults, not overrides: the flags still win, and only ever toward packaging more, so a manifest cannot disarm a `--wheel` you typed.
+
+The wheel build is *independent* of the one above it — scikit-build-core re-runs the same `CMakeLists.txt` in its own tree (with `SKBUILD` set), so it neither reuses nor disturbs `<lang>/build/`. The interpreter is probed on `PATH` (`python3`, then `python`; on Windows `python`, `python3`, `py`); if none is found the backend is recorded `OK (no wheel — no python interpreter found)` rather than failing. A `--wheel` that cannot fire — no such target in the manifest, or none surviving `--only` / `--skip` — says so instead of quietly doing nothing.
+
+For finer control (a different output directory, skipping the repair step) run the script directly: `python make_wheel.py --outdir … --no-repair`.
 
 ---
 

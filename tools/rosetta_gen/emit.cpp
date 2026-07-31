@@ -58,14 +58,46 @@ static std::string render_bindings_h(const Manifest &m) {
         include_once(f.header);
     }
     out << "\n";
-    // Foreign sequence containers (manifest "sequences"): marshal like
-    // std::vector<value_type> in the opted-in expanded backends. The class
-    // headers above already declare the templates.
-    for (const auto &tpl : m.sequences) {
-        out << "template <typename T> struct rosetta::is_sequence<" << tpl
-            << "<T>> : std::true_type {};\n";
+    // Foreign containers (manifest "sequences" / "matrices"): marshal like
+    // std::vector<value_type> — or a vector of those rows — in the opted-in
+    // expanded backends. The class headers above already declare the templates.
+    // "matrices" is the same list one dimension up (rosetta::is_matrix), so the
+    // two traits are emitted by one lambda parameterized on the trait names.
+    const auto emit_containers = [&out](const std::vector<ContainerEntry> &entries,
+                                        const char *trait, const char *spelling_trait) {
+        for (const auto &s : entries) {
+            if (s.exact) {
+                // A concrete type: full specialization, plus the spelling the
+                // adapters name it by. Composing that spelling from the template
+                // and the element — what the walk does otherwise — is exactly
+                // what this form exists to bypass (Eigen::VectorXd is
+                // Eigen::Matrix<double, -1, 1>, not Eigen::Matrix<double>).
+                out << "template <> struct rosetta::" << trait << "<" << s.name
+                    << "> : std::true_type {};\n"
+                    << "template <> struct rosetta::" << spelling_trait << "<" << s.name << "> {\n"
+                    << "    static constexpr const char *value = \"" << s.name << "\";\n"
+                    << "};\n";
+            } else {
+                out << "template <typename T> struct rosetta::" << trait << "<" << s.name
+                    << "<T>> : std::true_type {};\n";
+            }
+        }
+        if (!entries.empty()) {
+            out << "\n";
+        }
+    };
+    emit_containers(m.sequences, "is_sequence", "sequence_cpp_name");
+    emit_containers(m.matrices, "is_matrix", "matrix_cpp_name");
+    // Foreign-library interop (manifest "interop"): the walk marks every type
+    // the library owns, by enclosing namespace, so no type list is needed here
+    // — one specialization covers VectorXd, MatrixXd, Map, Ref and the rest.
+    for (const auto &name : m.interop) {
+        if (name == "eigen") {
+            out << "template <> struct rosetta::interop_enabled<rosetta::eigen_interop>\n"
+                << "    : std::true_type {};\n";
+        }
     }
-    if (!m.sequences.empty()) {
+    if (!m.interop.empty()) {
         out << "\n";
     }
     for (const auto &c : m.classes) {
@@ -149,6 +181,11 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     if (!m.cxx_standard.empty()) {
         out << "    opt.cxx_standard    = \"" << m.cxx_standard << "\";\n";
     }
+    // Distribution version for the packaging artifacts (manifest "version");
+    // absent ⇒ the backends stamp their own default into pyproject.toml.
+    if (!m.version.empty()) {
+        out << "    opt.version         = \"" << m.version << "\";\n";
+    }
     // External libraries to link the bindings against (manifest "user_lib"),
     // in link order. Only the stock *-expanded backends consume these (see
     // GenerateOptions).
@@ -180,13 +217,19 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     out << "    opt.targets         = {\n";
     for (const auto &t : m.targets) {
         out << "        {\"" << t.lang << "\", \"" << t.name << "\"";
-        // Per-target linker flags (manifest target "link_options").
-        if (!t.link_options.empty()) {
+        // Per-target linker flags (manifest target "link_options") and the
+        // artifact destination ("out_dir"). Aggregate initialization is
+        // positional, so an out_dir with no link flags still needs the empty
+        // braces in between.
+        if (!t.link_options.empty() || !t.out_dir.empty()) {
             out << ", {";
             for (std::size_t i = 0; i < t.link_options.size(); ++i) {
                 out << (i ? ", " : "") << "\"" << t.link_options[i] << "\"";
             }
             out << "}";
+        }
+        if (!t.out_dir.empty()) {
+            out << ", \"" << t.out_dir << "\"";
         }
         out << "},\n";
     }

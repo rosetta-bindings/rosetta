@@ -47,10 +47,11 @@ namespace rosetta {
                                           : ts_type(t.element.front(), c)) +
                        "[]";
             }
-            if (t.is_sequence && !t.element.empty()) {
-                // A trait-registered foreign sequence marshals as an array of
-                // its element in the opted-in runtime backends.
-                return ts_type(t.element.front(), c) + "[]";
+            if (is_adapted(t) && !t.element.empty()) {
+                // A trait-registered foreign container marshals as an array of
+                // its element in the opted-in runtime backends — and a matrix
+                // as an array of those rows.
+                return ts_type(t.element.front(), c) + (t.is_matrix ? "[][]" : "[]");
             }
             return "any"; // unknown (e.g. std::function, unsupported types)
         }
@@ -86,7 +87,7 @@ namespace rosetta {
                 }
 
                 for (const auto &f : k.fields) {
-                    if (f.type.is_sequence && !seq_ok(f.type)) {
+                    if (is_adapted(f.type) && !adapt_ok(f.type)) {
                         continue; // not adaptable — the runtime backends skip it
                     }
                     if (f.type.kind == "object" &&

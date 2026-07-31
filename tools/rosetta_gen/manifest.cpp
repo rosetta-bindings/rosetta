@@ -221,8 +221,45 @@ Manifest load(const fs::path &manifest_path) {
                     e.link_options.push_back(std::move(flag));
                 }
             }
+            // Optional per-target artifact destination (see TargetEntry::out_dir).
+            if (t.contains("out_dir")) {
+                const std::string d = t.at("out_dir").get<std::string>();
+                if (d.empty()) {
+                    throw std::runtime_error("a target's \"out_dir\" must not be empty");
+                }
+                e.out_dir = fs::weakly_canonical(base / fs::path(d)).string();
+            }
         }
         m.targets.push_back(std::move(e));
+    }
+
+    // `out_dir` at the top level is the default for every target that names
+    // none — one line when all the artifacts belong in the same place.
+    if (j.contains("out_dir")) {
+        const std::string d = j.at("out_dir").get<std::string>();
+        if (d.empty()) {
+            throw std::runtime_error("\"out_dir\" must not be empty");
+        }
+        m.out_dir = fs::weakly_canonical(base / fs::path(d)).string();
+    }
+    for (auto &t : m.targets) {
+        if (t.out_dir.empty()) {
+            t.out_dir = m.out_dir;
+        }
+    }
+
+    // `wheel` / `wheel_dir` are the manifest-side defaults for --build's
+    // --wheel / --wheel-dir. The command-line flags still win, so a manifest
+    // cannot turn packaging OFF for a run that asked for it.
+    if (j.contains("wheel")) {
+        m.wheel = j.at("wheel").get<bool>();
+    }
+    if (j.contains("wheel_dir")) {
+        const std::string d = j.at("wheel_dir").get<std::string>();
+        if (d.empty()) {
+            throw std::runtime_error("\"wheel_dir\" must not be empty");
+        }
+        m.wheel_dir = fs::weakly_canonical(base / fs::path(d));
     }
 
     // Optional shared defaults, factoring the per-entry repetition out of
@@ -402,15 +439,61 @@ Manifest load(const fs::path &manifest_path) {
         add_functions(j.at("functions"), top);
     }
 
-    // `sequences` is optional: foreign sequence containers, each a qualified
-    // template name with one type parameter (see Manifest::sequences).
-    if (j.contains("sequences")) {
-        for (const auto &s : j.at("sequences")) {
-            std::string tpl = s.get<std::string>();
-            if (tpl.empty()) {
-                throw std::runtime_error("\"sequences\" entries must not be empty");
+    // `sequences` is optional: foreign sequence containers. A string entry is a
+    // qualified TEMPLATE name with one type parameter ("GEO::vector"); an object
+    // entry { "type": "Eigen::VectorXd" } registers a CONCRETE type, spelled
+    // exactly as written (see SequenceEntry). The two cannot be told apart by
+    // looking at the text — "Eigen::VectorXd" is a perfectly good template name
+    // — and picking wrong emits a specialization that does not compile, so the
+    // manifest says which it is.
+    // `matrices` is the same list one dimension up (rosetta::is_matrix), with
+    // the same two entry forms — hence one reader for both.
+    const auto read_containers = [](const json &arr, const char *field) {
+        std::vector<ContainerEntry> out;
+        for (const auto &s : arr) {
+            ContainerEntry e;
+            if (s.is_object()) {
+                if (s.contains("type") == s.contains("template")) {
+                    throw std::runtime_error(std::string("a \"") + field +
+                                             "\" object entry needs exactly one of \"type\" "
+                                             "(a concrete type) or \"template\" (a "
+                                             "one-parameter template)");
+                }
+                e.exact = s.contains("type");
+                e.name  = s.at(e.exact ? "type" : "template").get<std::string>();
+            } else {
+                e.name = s.get<std::string>();
             }
-            m.sequences.push_back(std::move(tpl));
+            if (e.name.empty()) {
+                throw std::runtime_error(std::string("\"") + field +
+                                         "\" entries must not be empty");
+            }
+            out.push_back(std::move(e));
+        }
+        return out;
+    };
+    if (j.contains("sequences")) {
+        m.sequences = read_containers(j.at("sequences"), "sequences");
+    }
+    if (j.contains("matrices")) {
+        m.matrices = read_containers(j.at("matrices"), "matrices");
+    }
+
+    // `interop` is optional: foreign libraries whose types the target's binding
+    // framework marshals natively (see Manifest::interop). Validated against
+    // the names rosetta knows, because a typo here is silent otherwise — the
+    // trait would simply never be enabled and every Eigen-typed member would
+    // keep being skipped, with nothing to point at.
+    if (j.contains("interop")) {
+        for (const auto &s : j.at("interop")) {
+            std::string name = s.get<std::string>();
+            if (name != "eigen") {
+                throw std::runtime_error("unknown \"interop\" entry \"" + name +
+                                         "\" — known: eigen");
+            }
+            if (std::find(m.interop.begin(), m.interop.end(), name) == m.interop.end()) {
+                m.interop.push_back(std::move(name));
+            }
         }
     }
 
@@ -591,6 +674,34 @@ Manifest load(const fs::path &manifest_path) {
                 std_str + "\")");
         }
         m.cxx_standard = std_str;
+    }
+
+    // `version` is optional: the distribution version stamped into the
+    // packaging artifacts — the pyproject.toml the python-expanded /
+    // nanobind-expanded backends emit for wheel builds. Nothing else consumes
+    // it, so a manifest that never packages can leave it out (the backends
+    // then default to 0.1.0). A number is accepted and stringified so
+    // "version": 2 doesn't have to be quoted. Validated loosely against
+    // PEP 440's shape rather than its full grammar: pip is the authority, we
+    // only catch the spellings that are obviously not versions (empty, leading
+    // "v", embedded spaces).
+    if (j.contains("version")) {
+        const auto &v = j.at("version");
+        std::string ver =
+            v.is_number() ? (v.is_number_integer() ? std::to_string(v.get<long long>())
+                                                   : std::to_string(v.get<double>()))
+                          : v.get<std::string>();
+        const bool ok =
+            !ver.empty() && std::isdigit(static_cast<unsigned char>(ver.front())) &&
+            std::all_of(ver.begin(), ver.end(), [](unsigned char ch) {
+                return std::isalnum(ch) || ch == '.' || ch == '-' || ch == '+' || ch == '!';
+            });
+        if (!ok) {
+            throw std::runtime_error(
+                "version must be a PEP 440 release string starting with a digit, e.g. "
+                "\"1.2.0\" or \"0.3.0rc1\" (got \"" + ver + "\")");
+        }
+        m.version = std::move(ver);
     }
 
     // `user_lib` is optional: the external libraries the generated bindings link

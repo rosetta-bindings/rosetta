@@ -46,6 +46,7 @@ target_link_options({{LIB}} PRIVATE
     -sENVIRONMENT=node,web -sALLOW_MEMORY_GROWTH=1 -sDISABLE_EXCEPTION_CATCHING=0){{USER_DEFS_BLOCK}}
 
 set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
+{{OUT_DIR_BLOCK_WASM}}
 )CMK";
 
         // Build section appended to the generated README. WASM_CMAKE hard-fails

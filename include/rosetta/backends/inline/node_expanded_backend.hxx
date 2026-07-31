@@ -54,6 +54,7 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:{{LIB}}>
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
+{{OUT_DIR_BLOCK}}
 )CMK";
 
         // Build section appended to the generated README. package.json is the
@@ -162,7 +163,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             return s;
         }
 
-        // --- Foreign sequences (rosetta::is_sequence) --------------------------
+        // --- Foreign containers (rosetta::is_sequence / is_matrix) -------------
         // A method touching a trait-registered sequence binds through a FREE
         // adapter function emitted at namespace scope: the runtime's fn_traits
         // introspect the ADAPTER's signature, so the boundary speaks
@@ -175,11 +176,11 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
 
         // Do the NON-sequence parts of the signature satisfy the node gates?
         inline bool nx_seq_rest_ok(const GenMethod &m) {
-            if (!m.ret.is_sequence && !nx_ret_ok(m.ret)) {
+            if (!is_adapted(m.ret) && !nx_ret_ok(m.ret)) {
                 return false;
             }
             for (const auto &p : m.params) {
-                if (p.type.is_sequence) {
+                if (is_adapted(p.type)) {
                     continue;
                 }
                 if (!nx_pass_ok(p)) {
@@ -235,10 +236,10 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     args += ", ";
                 }
                 const GenType &t = m.params[j].type;
-                if (t.is_sequence) {
-                    const std::string sn = "seq" + std::to_string(j);
-                    decls += seq_boundary_cpp(t) + " " + an;
-                    pre += seq_decl_stmts(t, an, sn, "        ");
+                if (is_adapted(t)) {
+                    const std::string sn = adapt_local(t, j);
+                    decls += adapt_boundary_cpp(t) + " " + an;
+                    pre += adapt_decl_stmts(t, an, sn, "        ");
                     args += sn;
                 } else if (exact) {
                     decls += qualify_objects(qualify_std(m.param_cpp[j]), t) + " " + an;
@@ -255,10 +256,10 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 ext_self ? (callee + "(self" + (args.empty() ? "" : ", " + args) + ")")
                          : (callee + "(" + args + ")");
             std::string       ret, body = pre;
-            if (m.ret.is_sequence) {
-                ret = seq_boundary_cpp(m.ret);
+            if (is_adapted(m.ret)) {
+                ret = adapt_boundary_cpp(m.ret);
                 body += "        auto &&r = " + invoke + ";\n";
-                body += "        return " + seq_from_expr(m.ret, "r") + ";\n";
+                body += "        return " + adapt_from_expr(m.ret, "r") + ";\n";
             } else if (m.ret.kind == "void") {
                 ret = "void";
                 body += "        " + invoke + ";\n";
@@ -553,9 +554,10 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             }
             out += using_namespaces_of(c); // `using namespace` for namespaced user types
             if (!adapters.empty()) {
-                out += "\n// Foreign-sequence adapters (rosetta::is_sequence): the boundary\n"
-                       "// speaks std::vector<element>; the adapter builds the foreign\n"
-                       "// container around the real call (mutable Seq& binds input-only).\n"
+                out += "\n// Foreign-container adapters (rosetta::is_sequence / is_matrix): the\n"
+                       "// boundary speaks std::vector<element> — a vector of those rows for a\n"
+                       "// matrix; the adapter builds the foreign container around the real\n"
+                       "// call (a mutable Seq& / Mat& binds input-only).\n"
                        "#include <algorithm>\n"
                        "#include <vector>\n"
                        "namespace rosetta_nx_seq {\n" + adapters + "}\n";

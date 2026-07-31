@@ -44,6 +44,7 @@ target_link_options({{LIB}} PRIVATE
     -lnodefs.js){{USER_DEFS_BLOCK}}
 
 set_target_properties({{LIB}} PROPERTIES SUFFIX ".js")
+{{OUT_DIR_BLOCK_WASM}}
 )CMK";
 
         // Build section appended to the generated README. Unlike the thin wasm
@@ -282,7 +283,7 @@ namespace rosetta_wx {
             return false;
         }
 
-        // --- Foreign sequences (rosetta::is_sequence) --------------------------
+        // --- Foreign containers (rosetta::is_sequence / is_matrix) -------------
         // A method touching a trait-registered sequence binds through a lambda
         // adapter whose boundary is std::vector<element> (registered above):
         // the adapter builds the foreign container before the call and flattens
@@ -291,7 +292,7 @@ namespace rosetta_wx {
         // an overload set whose surviving IR entry is the sequence one binds
         // too — the adapter calls by NAME with concrete arguments.
         inline bool wx_seq_rest_ok(const GenMethod &m, const GenContext &c) {
-            if (!m.ret.is_sequence) {
+            if (!is_adapted(m.ret)) {
                 if (m.ret.kind != "void" && !wx_marshalable(m.ret, c)) {
                     return false;
                 }
@@ -300,7 +301,7 @@ namespace rosetta_wx {
                 }
             }
             for (const auto &p : m.params) {
-                if (p.type.is_sequence) {
+                if (is_adapted(p.type)) {
                     continue;
                 }
                 if (p.type.is_callback) {
@@ -340,10 +341,10 @@ namespace rosetta_wx {
                     o.args += ", ";
                 }
                 const GenType &t = params[j].type;
-                if (t.is_sequence) {
-                    const std::string sn = "seq" + std::to_string(j);
-                    o.decls += seq_boundary_cpp(t) + " " + an;
-                    o.pre += seq_decl_stmts(t, an, sn, "            ");
+                if (is_adapted(t)) {
+                    const std::string sn = adapt_local(t, j);
+                    o.decls += adapt_boundary_cpp(t) + " " + an;
+                    o.pre += adapt_decl_stmts(t, an, sn, "            ");
                     o.args += sn;
                 } else if (exact) {
                     o.decls += qualify_objects(qualify_std(param_cpp[j]), t) + " " + an;
@@ -363,9 +364,9 @@ namespace rosetta_wx {
         inline std::string wx_seq_body(const GenMethod &m, const WxSeqSig &sig,
                                        const std::string &call) {
             std::string body = sig.pre;
-            if (m.ret.is_sequence) {
+            if (is_adapted(m.ret)) {
                 body += "            auto &&r = " + call + ";\n";
-                body += "            return " + seq_from_expr(m.ret, "r") + ";\n";
+                body += "            return " + adapt_from_expr(m.ret, "r") + ";\n";
             } else if (m.ret.kind == "void") {
                 body += "            " + call + ";\n";
             } else {
@@ -465,12 +466,21 @@ namespace rosetta_wx {
                 }
                 return;
             }
-            if (t.is_sequence && seq_ok(t)) {
+            if (is_adapted(t) && adapt_ok(t)) {
                 // A foreign sequence marshals through std::vector<element> —
-                // that boundary vector needs registering like any other.
+                // that boundary vector needs registering like any other. A
+                // matrix marshals through a vector OF those, so it registers
+                // both levels (the recursion below walks into the inner one).
                 GenType v;
                 v.kind    = "vector";
                 v.element = t.element;
+                if (t.is_matrix) {
+                    GenType rows;
+                    rows.kind = "vector";
+                    rows.element.push_back(v);
+                    wx_collect_vectors(rows, out);
+                    return;
+                }
                 wx_collect_vectors(v, out);
                 return;
             }
@@ -665,14 +675,14 @@ namespace rosetta_wx {
             }
 
             for (const auto &f : k.fields) {
-                if (f.type.is_sequence) {
+                if (is_adapted(f.type)) {
                     // Foreign sequence field: property copying through the
                     // boundary vector both ways (a member-pointer property
                     // would name the unregistered foreign type).
-                    if (seq_ok(f.type)) {
-                        const std::string vt  = seq_boundary_cpp(f.type);
+                    if (adapt_ok(f.type)) {
+                        const std::string vt  = adapt_boundary_cpp(f.type);
                         const std::string get = "+[](const " + kn + " &s) { return " +
-                                                seq_from_expr(f.type, "s." + f.name) + "; }";
+                                                adapt_from_expr(f.type, "s." + f.name) + "; }";
                         std::string set;
                         if (f.is_readonly) {
                             set = "+[](" + kn + " &, " + vt +

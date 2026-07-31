@@ -35,4 +35,27 @@ namespace rosetta {
 
     template <typename T> struct is_sequence : std::false_type {};
 
+    // The EXACT C++ spelling of a registered container, for the containers the
+    // composed one gets wrong. An adapter has to name the type in emitted code,
+    // and display_string_of prints template names unqualified, so the default
+    // spelling is composed as `Namespace::Template<value_type>` — right for
+    // GEO::vector<double>, wrong for anything whose specialization carries more
+    // than the element:
+    //
+    //   template <> struct rosetta::sequence_cpp_name<Eigen::VectorXd> {
+    //       static constexpr const char *value = "Eigen::VectorXd";
+    //   };
+    //
+    // (manifest-driven: an OBJECT entry under "sequences" —
+    // { "type": "Eigen::VectorXd" } — emits both this and the is_sequence
+    // specialization; a plain string entry stays the template form.)
+    //
+    // Eigen::VectorXd is really Eigen::Matrix<double, -1, 1>, so the composed
+    // spelling would come out as the uncompilable `Eigen::Matrix<double>`.
+    // Specializing this states the spelling instead of deriving it, which is
+    // also the only way to register a container that is not a template at all.
+    // Unspecialized on purpose: `value` missing is what selects the composed
+    // spelling.
+    template <typename T> struct sequence_cpp_name {};
+
 } // namespace rosetta

@@ -34,7 +34,35 @@ struct BuildOptions {
     std::vector<std::string> only, skip;   // backend (target lang) filters
     std::vector<std::string> cmake_args;   // extra args for every configure
     bool                     fresh = false;
+    bool                     wheel = false; // also run make_wheel.py (the expanded python backends)
+    fs::path                 wheel_dir;     // shared --outdir for every make_wheel.py (implies wheel)
 };
+
+// Do this backend's generated projects carry a make_wheel.py? Only the two
+// expanded Python backends emit one — the *thin* `python` / `nanobind` targets
+// re-run the reflection walk at build time and so need a C++26 toolchain on
+// whatever machine builds them, which is the opposite of a portable wheel.
+static bool is_wheel_backend(const std::string &lang) {
+    return lang == "python-expanded" || lang == "nanobind-expanded";
+}
+
+// The interpreter to run make_wheel.py with. Probed rather than assumed, in a
+// platform-appropriate order: `python3` is the POSIX spelling, while on Windows
+// it is usually the Store stub and `python` (or the `py` launcher) is the real
+// one. Empty when none is on PATH.
+static std::string find_python() {
+#ifdef _WIN32
+    const char *candidates[] = {"python", "python3", "py"};
+#else
+    const char *candidates[] = {"python3", "python"};
+#endif
+    for (const char *p : candidates) {
+        if (have_tool(p)) {
+            return p;
+        }
+    }
+    return {};
+}
 
 static std::vector<std::string> split_list(const std::string &s) {
     std::vector<std::string> out;
@@ -117,6 +145,39 @@ static int run_build(const BuildOptions &opt) {
         }
     };
 
+    // The manifest's "wheel" / "wheel_dir" are DEFAULTS for --wheel /
+    // --wheel-dir: a project that always ships wheels says so once instead of
+    // on every command line. The flags still win, and only ever toward doing
+    // MORE — a manifest cannot silently turn packaging off for a run that asked
+    // for it. A manifest "wheel_dir" implies wheeling, exactly as the flag does.
+    const bool     wheel     = opt.wheel || m.wheel || !m.wheel_dir.empty();
+    const fs::path wheel_dir = opt.wheel_dir.empty() ? m.wheel_dir : opt.wheel_dir;
+
+    // --wheel: resolved once, and only when asked for — the probe spawns a
+    // process. A --wheel that can never fire says so rather than doing nothing
+    // quietly; the check honours --only / --skip, since those are the likelier
+    // reason no wheel backend survives to be built.
+    const std::string python = wheel ? find_python() : std::string{};
+    // --wheel-dir: one directory for every backend's wheels instead of a dist/
+    // per binding dir. Resolved against the *invocation* cwd here, before any
+    // per-backend run_cmd changes directory — make_wheel.py chdirs to its own
+    // location, so a relative --outdir would land inside the binding dir and
+    // defeat the point of collecting them.
+    std::string wheel_out;
+    if (!wheel_dir.empty()) {
+        wheel_out = " --outdir " + q(fs::absolute(wheel_dir));
+    }
+    if (wheel &&
+        std::none_of(m.targets.begin(), m.targets.end(), [&](const TargetEntry &t) {
+            return is_wheel_backend(t.lang) &&
+                   (opt.only.empty() || contains(opt.only, t.lang)) &&
+                   !contains(opt.skip, t.lang);
+        })) {
+        std::fprintf(stderr,
+                     "rosetta_gen: --wheel has no effect — no python-expanded / "
+                     "nanobind-expanded target is being built\n");
+    }
+
     std::vector<std::string> done; // a lang may appear once per manifest only, but be safe
     for (const auto &t : m.targets) {
         const std::string &lang = t.lang;
@@ -195,7 +256,20 @@ static int run_build(const BuildOptions &opt) {
             attempt(lang, cmake_build(dir, extra));
         } else {
             // python, nanobind, rest, json, lua-expanded, imgui-expanded, …
-            attempt(lang, cmake_build(dir));
+            if (!cmake_build(dir)) {
+                attempt(lang, false);
+            } else if (!wheel || !is_wheel_backend(lang)) {
+                attempt(lang, true);
+            } else if (python.empty()) {
+                record(lang, "OK (no wheel — no python interpreter found)");
+            } else {
+                // The wheel is a second, independent build: scikit-build-core
+                // re-runs this same CMakeLists in its own tree (SKBUILD set),
+                // so it neither reuses nor disturbs the build/ dir above.
+                std::fprintf(stderr, "== packaging %s\n", lang.c_str());
+                attempt(lang, run_cmd(q(python) + " make_wheel.py" + wheel_out, dir) == 0,
+                        " (wheel)");
+            }
         }
     }
 
@@ -214,7 +288,12 @@ const char *kBuildOptions =
     "  --only a,b / --skip a,b  restrict the backend builds to / exclude these\n"
     "  --cmake-arg ARG          extra argument for every CMake configure (repeatable)\n"
     "  --jobs N                 parallel build jobs\n"
-    "  --fresh                  wipe the gen and bindings dirs first\n";
+    "  --fresh                  wipe the gen and bindings dirs first\n"
+    "  --wheel                  also build a Python wheel for the python-expanded /\n"
+    "                           nanobind-expanded targets (runs their make_wheel.py;\n"
+    "                           wheels land in <bindings>/<lang>/dist)\n"
+    "  --wheel-dir DIR          collect every wheel in DIR instead of a per-backend\n"
+    "                           dist/ (implies --wheel)\n";
 
 static void print_build_usage(std::FILE *to) {
     std::fprintf(to, "usage: rosetta_gen --build <manifest.json> [options]\n%s", kBuildOptions);
@@ -250,6 +329,11 @@ int build_main(int argc, char **argv) {
             opt.jobs = next();
         } else if (a == "--fresh") {
             opt.fresh = true;
+        } else if (a == "--wheel") {
+            opt.wheel = true;
+        } else if (a == "--wheel-dir") {
+            opt.wheel_dir = next();
+            opt.wheel     = true; // asking where the wheels go is asking for wheels
         } else if (a == "-h" || a == "--help") {
             print_build_usage(stdout);
             return 0;

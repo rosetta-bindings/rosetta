@@ -135,3 +135,55 @@ target_include_directories(expose PRIVATE ${CMAKE_SOURCE_DIR}/../include)
 target_compile_options(expose PRIVATE -fannotation-attributes)
 target_link_libraries(expose PRIVATE GTest::gtest_main)
 gtest_discover_tests(expose)
+
+# Enumerations nested inside a class: GenEnum::qualified must carry the
+# enclosing class, while name_space stays namespace-only (it becomes a
+# `using namespace`). Verifies generated sources.
+# Foreign-library interop ("interop": ["eigen"]): the walk marks types by
+# enclosing namespace, so the suite runs against a stub Eigen namespace and
+# needs no Eigen dependency.
+add_executable(interop_eigen interop_eigen.cpp)
+target_include_directories(interop_eigen PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(interop_eigen PRIVATE -fannotation-attributes)
+target_link_libraries(interop_eigen PRIVATE GTest::gtest_main)
+gtest_discover_tests(interop_eigen)
+
+# Per-target artifact directory (manifest target "out_dir"): the built module
+# is copied where the project wants it, wasm's .js+.wasm pair included.
+add_executable(out_dir out_dir.cpp)
+target_include_directories(out_dir PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(out_dir PRIVATE -fannotation-attributes)
+target_link_libraries(out_dir PRIVATE GTest::gtest_main)
+gtest_discover_tests(out_dir)
+
+# Reference returns in the Python family: a non-const lvalue-ref return of a
+# bound class binds with reference_internal instead of being copied.
+add_executable(ref_return ref_return.cpp)
+target_include_directories(ref_return PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(ref_return PRIVATE -fannotation-attributes)
+target_link_libraries(ref_return PRIVATE GTest::gtest_main)
+gtest_discover_tests(ref_return)
+
+# Foreign 2-D matrices (rosetta::is_matrix — Eigen::MatrixXd-shaped grids
+# through a vector-of-rows boundary). Verifies generated sources.
+add_executable(matrix matrix.cpp)
+target_include_directories(matrix PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(matrix PRIVATE -fannotation-attributes)
+target_link_libraries(matrix PRIVATE GTest::gtest_main)
+gtest_discover_tests(matrix)
+
+# The flat-array escape hatch: a concrete interop-owned type ALSO registered as
+# a sequence, so the caster-less backends bind it as an array while the Python
+# family keeps numpy. Same stub-Eigen trick as above.
+add_executable(interop_sequence interop_sequence.cpp)
+target_include_directories(interop_sequence PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(interop_sequence PRIVATE -fannotation-attributes)
+target_link_libraries(interop_sequence PRIVATE GTest::gtest_main)
+gtest_discover_tests(interop_sequence)
+
+add_executable(nested_enum nested_enum.cpp)
+target_include_directories(nested_enum PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(nested_enum PRIVATE -fannotation-attributes)
+target_link_libraries(nested_enum PRIVATE GTest::gtest_main)
+gtest_discover_tests(nested_enum)
+

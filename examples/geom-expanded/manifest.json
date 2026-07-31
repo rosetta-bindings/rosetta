@@ -8,6 +8,7 @@
     "rosetta_include": "../../include",
     "generator_name": "geom_expanded",
     "module_name": "pygeom",
+    "version": "0.2.0",
 
     "targets": [
         { "lang": "python-expanded",   "name": "pygeom" },

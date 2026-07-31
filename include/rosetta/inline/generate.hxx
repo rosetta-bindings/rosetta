@@ -7,6 +7,19 @@ namespace rosetta {
             std::ofstream(path) << content;
         }
 
+        // write_file + the executable bit, for the shell scripts a backend emits
+        // (the wheel builders). Permissions are added, not replaced, so the
+        // user's umask still decides the read/write bits.
+        inline void write_script(const std::filesystem::path &path, std::string_view content) {
+            write_file(path, content);
+            std::error_code ec; // best effort: a filesystem without exec bits is not fatal
+            std::filesystem::permissions(path,
+                                         std::filesystem::perms::owner_exec |
+                                             std::filesystem::perms::group_exec |
+                                             std::filesystem::perms::others_exec,
+                                         std::filesystem::perm_options::add, ec);
+        }
+
         // Substitute {{KEY}} placeholders. Plain string scan — no escapes.
         // (Named `subst`, not `render`, so it isn't shadowed by Backend::render
         // when called unqualified inside a backend's emit().)
@@ -100,8 +113,15 @@ namespace rosetta {
             return k.expose.empty() ? k.name : k.expose;
         }
 
-        // Same pair for an enumeration (GenEnum carries the same two fields).
+        // Same pair for an enumeration. Prefers GenEnum::qualified, which also
+        // carries the enclosing *classes* — a nested enum has an empty
+        // `name_space`, so the namespace-only spelling would emit the bare
+        // identifier and fail to compile. Falls back to `name_space::name` for
+        // hand-built IR that leaves `qualified` empty.
         inline std::string qualified_of(const GenEnum &e) {
+            if (!e.qualified.empty()) {
+                return e.qualified;
+            }
             return e.name_space.empty() ? e.name : e.name_space + "::" + e.name;
         }
 
@@ -151,6 +171,9 @@ namespace rosetta {
         constexpr std::string_view DEFAULT_CPP26_LIB  = "${CLANG_P2996_ROOT}/lib";
         // Default Qt 6 prefix for the qt-expanded / qml-expanded CMakeLists.
         constexpr std::string_view DEFAULT_QT_DIR = "$ENV{HOME}/Qt/6.8.3/macos";
+        // Default distribution version for the packaging artifacts (the wheel
+        // pyproject.toml) when the manifest sets no "version".
+        constexpr std::string_view DEFAULT_DIST_VERSION = "0.1.0";
 
         // {{CPP26_*}} placeholders are substituted by render_meta(), which lists
         // HEADER_BLOCK before them so the placeholders introduced here resolve.
@@ -476,6 +499,8 @@ endif()
                 c.cpp26_lib.empty() ? std::string(DEFAULT_CPP26_LIB) : c.cpp26_lib;
             const std::string qt =
                 c.qt_dir.empty() ? std::string(DEFAULT_QT_DIR) : c.qt_dir;
+            const std::string version =
+                c.version.empty() ? std::string(DEFAULT_DIST_VERSION) : c.version;
             // {{USER_SOURCES}} — user .cpp files appended to a backend's source list
             // (used by the wasm templates, whose target name is fixed and so don't go
             // through {{USER_LIB_BLOCK}}/${ROSETTA_BINDING_TARGET}). Each on its own
@@ -584,7 +609,39 @@ endif()
                     "add_compile_options(" + c.optimization + ")\n"
                     "add_link_options(" + c.optimization + ")";
             }
+            // {{OUT_DIR_BLOCK}} — copy the built artifact to the manifest's
+            // per-target "out_dir" after every build, so the loadable module
+            // lands where the project actually wants it (a Python package dir,
+            // a web app's assets) instead of only next to its generated
+            // sources. copy_if_different, so an unchanged build touches
+            // nothing downstream; the directory is created if missing.
+            // {{OUT_DIR_BLOCK_WASM}} is the same for the wasm templates, whose
+            // artifact is a PAIR (.js loader + .wasm) and whose target name is
+            // fixed — the sibling .wasm is not $<TARGET_FILE> and has to be
+            // named on its own.
+            std::string out_dir_block, out_dir_block_wasm;
+            if (!c.artifact_dir.empty()) {
+                const std::string d   = "\"" + c.artifact_dir + "\"";
+                const std::string mk  = "    COMMAND ${CMAKE_COMMAND} -E make_directory " + d;
+                const std::string hdr = "\n\n# Artifact output directory (manifest \"out_dir\").\n"
+                                        "add_custom_command(TARGET " +
+                                        c.lib + " POST_BUILD\n" + mk + "\n";
+                out_dir_block = hdr +
+                                "    COMMAND ${CMAKE_COMMAND} -E copy_if_different\n"
+                                "        $<TARGET_FILE:" +
+                                c.lib + "> " + d + ")";
+                out_dir_block_wasm = hdr +
+                                     "    COMMAND ${CMAKE_COMMAND} -E copy_if_different\n"
+                                     "        $<TARGET_FILE:" +
+                                     c.lib + "> " + d +
+                                     "\n"
+                                     "    COMMAND ${CMAKE_COMMAND} -E copy_if_different\n"
+                                     "        $<TARGET_FILE_DIR:" +
+                                     c.lib + ">/" + c.lib + ".wasm " + d + ")";
+            }
             return subst(tmpl, {{"LIB", c.lib},
+                                {"OUT_DIR_BLOCK", out_dir_block},
+                                {"OUT_DIR_BLOCK_WASM", out_dir_block_wasm},
                                 {"HEADER_BLOCK", CMAKE_HEADER},
                                 {"BUILD_CONFIG", build_config},
                                 {"CPP26_ROOT", root},
@@ -592,6 +649,7 @@ endif()
                                 {"CPP26_CC", cc},
                                 {"CPP26_LIB", lib},
                                 {"QT_DIR", qt},
+                                {"VERSION", version},
                                 {"USER_INCLUDE", c.user_include},
                                 {"ROSETTA_INCLUDE", c.rosetta_include},
                                 {"USER_LIB_BLOCK", user_lib_block(c)},
@@ -735,13 +793,37 @@ endif()
         template <typename E> inline std::string marshal_spelling();
 
         template <typename U> inline std::string sequence_spelling() {
-            // class_namespace walks the specialization's parents — the same
-            // chain encloses the template itself.
-            const std::string     ns = class_namespace<U>();
-            constexpr const char *id = std::define_static_string(std::meta::identifier_of(
-                std::meta::template_of(std::meta::dealias(^^U))));
-            const std::string     head = ns.empty() ? std::string(id) : ns + "::" + id;
-            return head + "<" + marshal_spelling<typename U::value_type>() + ">";
+            // An exact spelling stated by the registration wins: a
+            // specialization carrying more than its element (Eigen::VectorXd is
+            // Matrix<double, -1, 1>) would compose to the uncompilable
+            // `Eigen::Matrix<double>`. See rosetta::sequence_cpp_name.
+            if constexpr (requires { std::string(rosetta::sequence_cpp_name<U>::value); }) {
+                return std::string(rosetta::sequence_cpp_name<U>::value);
+            } else {
+                // class_namespace walks the specialization's parents — the same
+                // chain encloses the template itself.
+                const std::string     ns = class_namespace<U>();
+                constexpr const char *id = std::define_static_string(std::meta::identifier_of(
+                    std::meta::template_of(std::meta::dealias(^^U))));
+                const std::string     head = ns.empty() ? std::string(id) : ns + "::" + id;
+                return head + "<" + marshal_spelling<typename U::value_type>() + ">";
+            }
+        }
+
+        // The same composition for a registered 2-D matrix (rosetta/matrix.h),
+        // with the same stated-spelling escape hatch: Eigen::MatrixXd is
+        // Matrix<double, -1, -1>, which composes to an uncompilable
+        // `Eigen::Matrix<double>`.
+        template <typename U> inline std::string matrix_spelling() {
+            if constexpr (requires { std::string(rosetta::matrix_cpp_name<U>::value); }) {
+                return std::string(rosetta::matrix_cpp_name<U>::value);
+            } else {
+                const std::string     ns = class_namespace<U>();
+                constexpr const char *id = std::define_static_string(std::meta::identifier_of(
+                    std::meta::template_of(std::meta::dealias(^^U))));
+                const std::string     head = ns.empty() ? std::string(id) : ns + "::" + id;
+                return head + "<" + marshal_spelling<typename U::value_type>() + ">";
+            }
         }
 
         template <typename E> inline std::string marshal_spelling() {
@@ -811,6 +893,54 @@ endif()
                 g.is_sequence = true;
                 g.element.push_back(type_descriptor<typename U::value_type>());
                 g.seq_cpp = sequence_spelling<U>();
+                // A registered container may ALSO belong to an opted-in foreign
+                // library — Eigen::VectorXd registered under "sequences" while
+                // "interop": ["eigen"] is on, which is how the caster-less
+                // backends (node / wasm / lua) get a flat array out of a type
+                // pybind and nanobind would rather hand over as numpy. Record
+                // BOTH marks and let each backend pick: a backend with the
+                // caster drops is_sequence (interop_wins) and binds the type as
+                // spelled, the others take the adapter. object /
+                // object_qualified are what the former needs to spell it.
+                if constexpr (std::is_class_v<U>) {
+                    g.interop = interop_detail::owner_of<U>(class_namespace<U>());
+                    if (!g.interop.empty()) {
+                        g.object             = class_name<U>();
+                        g.object_qualified   = ns_qualified_name<U>();
+                        g.copy_constructible = std::is_copy_constructible_v<U>;
+                        g.copy_assignable    = std::is_copy_assignable_v<U>;
+                    }
+                }
+            } else if constexpr (rosetta::is_matrix<U>::value) {
+                // Trait-registered foreign matrix: is_sequence one dimension
+                // up. `kind` stays "unknown" for the same reason (a backend
+                // that didn't opt in keeps skipping it); an opted-in backend
+                // marshals it through std::vector<std::vector<element>> using
+                // mat_cpp to construct the matrix (see rosetta/matrix.h).
+                static_assert(requires(U m, std::size_t r, std::size_t c) {
+                                  typename U::value_type;
+                                  m.resize(r, c);
+                                  { m.rows() } -> std::convertible_to<std::size_t>;
+                                  { m.cols() } -> std::convertible_to<std::size_t>;
+                                  m(r, c);
+                              } && std::is_default_constructible_v<U>,
+                              "rosetta::is_matrix<T>: T must be default-constructible with "
+                              "value_type, rows(), cols(), resize(r, c) and operator()(i, j)");
+                g.is_matrix = true;
+                g.element.push_back(type_descriptor<typename U::value_type>());
+                g.mat_cpp = matrix_spelling<U>();
+                // Dual marking, exactly as for a registered sequence: a matrix
+                // the interop opt-in also owns keeps its numpy binding on the
+                // backends that have the caster (see interop_wins).
+                if constexpr (std::is_class_v<U>) {
+                    g.interop = interop_detail::owner_of<U>(class_namespace<U>());
+                    if (!g.interop.empty()) {
+                        g.object             = class_name<U>();
+                        g.object_qualified   = ns_qualified_name<U>();
+                        g.copy_constructible = std::is_copy_constructible_v<U>;
+                        g.copy_assignable    = std::is_copy_assignable_v<U>;
+                    }
+                }
             } else if constexpr (std::is_enum_v<U>) {
                 g.kind             = "enum";
                 g.object           = class_name<U>();
@@ -843,9 +973,16 @@ endif()
                 g.is_shared_ptr      = true;
                 g.element.push_back(type_descriptor<typename U::element_type>());
             } else if constexpr (std::is_class_v<U>) {
-                g.kind             = "object";
                 g.object           = class_name<U>();
                 g.object_qualified = ns_qualified_name<U>();
+                // A type owned by an opted-in foreign library (rosetta/interop.h)
+                // keeps kind "unknown" — the is_pointer / is_sequence pattern —
+                // so a backend with no caster for it skips the member instead of
+                // emitting a binding that throws at call time. Recognition is by
+                // enclosing namespace, so every spelling the library owns
+                // (VectorXd, MatrixXd, Map, Ref, …) is covered by one opt-in.
+                g.interop = interop_detail::owner_of<U>(class_namespace<U>());
+                g.kind    = g.interop.empty() ? "object" : "unknown";
                 // Copyability, so emitters can skip/downgrade what would not
                 // compile (see GenType). Guarded on completeness: traits on an
                 // incomplete type are ill-formed, and an incomplete type can't
@@ -1082,8 +1219,8 @@ endif()
                 return false;
             } else if constexpr (std::is_pointer_v<U>) {
                 return false;
-            } else if constexpr (rosetta::is_sequence<U>::value) {
-                // A trait-registered foreign sequence in a VIRTUAL signature:
+            } else if constexpr (rosetta::is_sequence<U>::value || rosetta::is_matrix<U>::value) {
+                // A trait-registered foreign container in a VIRTUAL signature:
                 // the trampoline override must spell the exact type, but the
                 // exact spelling is unqualified (display_string_of) and
                 // qualify_std would mis-qualify it to std::vector — the
@@ -1406,6 +1543,9 @@ endif()
             GenEnum ge;
             ge.name       = class_name<T>();
             ge.name_space = class_namespace<T>();
+            // Namespaces *and* enclosing classes, so a nested enum keeps its
+            // owner in every emitted C++ spelling (Modeler3D::SolverMode).
+            ge.qualified  = qualified_class_name<T>();
             // The binding name: the trait's `expose` override (manifest
             // "expose") when present, else the reflected identifier.
             ge.expose     = ge.name;
@@ -1476,15 +1616,86 @@ endif()
             return seq_boundary_cpp(t) + "(" + expr + ".begin(), " + expr + ".end())";
         }
 
-        // Does this signature touch a foreign sequence at all / only adaptable
-        // ones? (touches && !adaptable ⇒ leave the method to the backend's
-        // ordinary gates — for most that means skipping it.)
+        // --- Foreign matrices (rosetta::is_matrix) ------------------------------
+        // The same adapter, one dimension up: the boundary is a
+        // std::vector<std::vector<element>> — an array of rows — and the
+        // conversions are loops over operator()(i, j), the only access the
+        // registration promises. Every backend reaches these through the
+        // adapt_* pair below, so a method mixing a sequence and a matrix
+        // parameter needs no special case anywhere.
+
+        // Adapter-marshalable? Numbers only: a grid of strings or enums has no
+        // natural script shape, and no library asks for one.
+        inline bool mat_ok(const GenType &t) {
+            return t.is_matrix && !t.element.empty() && !t.mat_cpp.empty() &&
+                   t.element.front().kind == "number";
+        }
+
+        inline std::string mat_elem_cpp(const GenType &t) {
+            const GenType &e = t.element.front();
+            return e.spelling.empty() ? "double" : e.spelling;
+        }
+        inline std::string mat_boundary_cpp(const GenType &t) {
+            return "std::vector<std::vector<" + mat_elem_cpp(t) + ">>";
+        }
+
+        // Statements building the foreign matrix `mn` from boundary array `an`.
+        // The row count is the outer size and the column count the FIRST row's,
+        // so a ragged array is squared off rather than read out of bounds.
+        inline std::string mat_decl_stmts(const GenType &t, const std::string &an,
+                                          const std::string &mn, const std::string &ind) {
+            return ind + "const std::size_t " + mn + "_r = " + an + ".size();\n" + ind +
+                   "const std::size_t " + mn + "_c = " + mn + "_r ? " + an +
+                   ".front().size() : 0;\n" + ind + t.mat_cpp + " " + mn + ";\n" + ind + mn +
+                   ".resize(" + mn + "_r, " + mn + "_c);\n" + ind + "for (std::size_t i = 0; i < " +
+                   mn + "_r; ++i) {\n" + ind + "    for (std::size_t j = 0; j < " + mn +
+                   "_c && j < " + an + "[i].size(); ++j) {\n" + ind + "        " + mn +
+                   "(i, j) = " + an + "[i][j];\n" + ind + "    }\n" + ind + "}\n";
+        }
+
+        // Expression flattening a foreign matrix value/reference `expr`. An
+        // immediately-invoked lambda, so every backend keeps its plain
+        // `return <expr>;` shape for a two-loop conversion.
+        inline std::string mat_from_expr(const GenType &t, const std::string &expr) {
+            const std::string v = mat_boundary_cpp(t);
+            return "[&] { " + v + " o(static_cast<std::size_t>(" + expr +
+                   ".rows())); for (std::size_t i = 0; i < o.size(); ++i) { "
+                   "o[i].resize(static_cast<std::size_t>(" +
+                   expr + ".cols())); for (std::size_t j = 0; j < o[i].size(); ++j) { o[i][j] = " +
+                   expr + "(i, j); } } return o; }()";
+        }
+
+        // --- The two shapes, as one --------------------------------------------
+        // Everything below this point in the backends asks "does this type go
+        // through the copy adapter, and what does its boundary look like?"
+        // rather than which of the two traits registered it.
+        inline bool is_adapted(const GenType &t) { return t.is_sequence || t.is_matrix; }
+        inline bool adapt_ok(const GenType &t) { return t.is_sequence ? seq_ok(t) : mat_ok(t); }
+        inline std::string adapt_boundary_cpp(const GenType &t) {
+            return t.is_sequence ? seq_boundary_cpp(t) : mat_boundary_cpp(t);
+        }
+        inline std::string adapt_decl_stmts(const GenType &t, const std::string &an,
+                                            const std::string &sn, const std::string &ind) {
+            return t.is_sequence ? seq_decl_stmts(t, an, sn, ind) : mat_decl_stmts(t, an, sn, ind);
+        }
+        inline std::string adapt_from_expr(const GenType &t, const std::string &expr) {
+            return t.is_sequence ? seq_from_expr(t, expr) : mat_from_expr(t, expr);
+        }
+        // The adapter's local for parameter `j` — `seq0` / `mat0`, so the
+        // generated code says which shape it is converting.
+        inline std::string adapt_local(const GenType &t, std::size_t j) {
+            return (t.is_sequence ? "seq" : "mat") + std::to_string(j);
+        }
+
+        // Does this signature touch an adapted container at all / only
+        // marshalable ones? (touches && !adaptable ⇒ leave the method to the
+        // backend's ordinary gates — for most that means skipping it.)
         inline bool seq_touches(const GenMethod &m) {
-            if (m.ret.is_sequence) {
+            if (is_adapted(m.ret)) {
                 return true;
             }
             for (const auto &p : m.params) {
-                if (p.type.is_sequence) {
+                if (is_adapted(p.type)) {
                     return true;
                 }
             }
@@ -1494,15 +1705,115 @@ endif()
             if (!seq_touches(m)) {
                 return false;
             }
-            if (m.ret.is_sequence && !seq_ok(m.ret)) {
+            if (is_adapted(m.ret) && !adapt_ok(m.ret)) {
                 return false;
             }
             for (const auto &p : m.params) {
-                if (p.type.is_sequence && !seq_ok(p.type)) {
+                if (is_adapted(p.type) && !adapt_ok(p.type)) {
                     return false;
                 }
             }
             return true;
+        }
+
+        // --- Foreign-library interop (rosetta/interop.h) ------------------------
+        // The interops actually REACHED by the bound API, gathered from the
+        // finished IR rather than from the traits directly. Two reasons: the
+        // traits can only be queried from a template (see interop_detail),
+        // and a caster header nothing in the signature needs is compile time
+        // spent for nothing — an opt-in whose types never surface emits no
+        // include at all.
+        inline void collect_interop_type(const GenType &t, std::vector<std::string> &out) {
+            if (!t.interop.empty() &&
+                std::find(out.begin(), out.end(), t.interop) == out.end()) {
+                out.push_back(t.interop);
+            }
+            for (const auto &e : t.element) {
+                collect_interop_type(e, out);
+            }
+            for (const auto &cb : t.callback_sig) {
+                collect_interop_type(cb, out);
+            }
+        }
+
+        inline std::vector<std::string> collect_interop(const std::vector<GenClass>    &classes,
+                                                        const std::vector<GenFunction> &functions) {
+            std::vector<std::string> out;
+            const auto               params = [&](const std::vector<GenParam> &ps) {
+                for (const auto &p : ps) {
+                    collect_interop_type(p.type, out);
+                }
+            };
+            for (const auto &k : classes) {
+                for (const auto &f : k.fields) {
+                    collect_interop_type(f.type, out);
+                }
+                for (const auto &m : k.methods) {
+                    collect_interop_type(m.ret, out);
+                    params(m.params);
+                }
+                for (const auto &ct : k.ctors) {
+                    params(ct);
+                }
+            }
+            for (const auto &f : functions) {
+                collect_interop_type(f.ret, out);
+                params(f.params);
+            }
+            return out;
+        }
+
+        // --- Dual-marked types: the caster wins --------------------------------
+        // A type can be BOTH a registered sequence and owned by an interop
+        // library: Eigen::VectorXd listed under "sequences" while
+        // "interop": ["eigen"] is on — the escape hatch that gets node / wasm /
+        // lua a flat array out of a signature the Python family would rather
+        // marshal as numpy. Where the framework HAS the caster, the caster wins:
+        // a numpy view beats a copied list, in both directions.
+        //
+        // Rather than have every gate in those backends ask the question, the
+        // backend drops the sequence marks from its OWN copy of the context,
+        // once, at the top of its source funnel — after which the type reads
+        // exactly like a plain interop-marked one and no other line changes.
+        inline void interop_wins_type(GenType &t, bool (*has_caster)(const std::string &)) {
+            if (is_adapted(t) && !t.interop.empty() && has_caster(t.interop)) {
+                t.is_sequence = false;
+                t.is_matrix   = false;
+                t.seq_cpp.clear();
+                t.mat_cpp.clear();
+                t.element.clear(); // the container's element; a caster type carries none
+            }
+            for (auto &e : t.element) {
+                interop_wins_type(e, has_caster);
+            }
+            for (auto &cb : t.callback_sig) {
+                interop_wins_type(cb, has_caster);
+            }
+        }
+
+        inline GenContext interop_wins(GenContext c, bool (*has_caster)(const std::string &)) {
+            const auto params = [&](std::vector<GenParam> &ps) {
+                for (auto &p : ps) {
+                    interop_wins_type(p.type, has_caster);
+                }
+            };
+            for (auto &k : c.classes) {
+                for (auto &f : k.fields) {
+                    interop_wins_type(f.type, has_caster);
+                }
+                for (auto &m : k.methods) {
+                    interop_wins_type(m.ret, has_caster);
+                    params(m.params);
+                }
+                for (auto &ct : k.ctors) {
+                    params(ct);
+                }
+            }
+            for (auto &f : c.functions) {
+                interop_wins_type(f.ret, has_caster);
+                params(f.params);
+            }
+            return c;
         }
 
         // Build a GenContext from a type pack (no files, no targets) — the same
@@ -1519,6 +1830,7 @@ endif()
                     }
                 }(),
                 ...);
+            c.interop = collect_interop(c.classes, c.functions);
             return c;
         }
 
@@ -1746,7 +2058,9 @@ namespace rosetta {
                                         opt.cpp26_lib, opt.qt_dir, user_libs, user_sources,
                                         opt.compile_definitions, t.link_options,
                                         opt.build_type, opt.optimization,
-                                        opt.cxx_standard});
+                                        opt.cxx_standard, opt.version,
+                                        gen_detail::collect_interop(classes, opt.functions),
+                                        t.artifact_dir});
         }
     }
 

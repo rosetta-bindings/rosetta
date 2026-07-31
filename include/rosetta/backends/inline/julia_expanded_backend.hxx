@@ -53,6 +53,7 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:{{LIB}}>
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
+{{OUT_DIR_BLOCK}}
 )CMK";
 
         // Build/Use section of the generated README — every claim traces to

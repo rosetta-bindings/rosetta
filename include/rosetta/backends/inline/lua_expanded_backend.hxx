@@ -92,6 +92,7 @@ add_custom_command(TARGET {{LIB}} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:{{LIB}}>
         ${CMAKE_CURRENT_SOURCE_DIR}/$<TARGET_FILE_NAME:{{LIB}}>)
+{{OUT_DIR_BLOCK}}
 )CMK";
 
         // Build/Use section of the generated README — every claim traces to
@@ -356,7 +357,7 @@ local {{LIB}} = require("{{LIB}}")
             return a;
         }
 
-        // --- Foreign sequences (rosetta::is_sequence) --------------------------
+        // --- Foreign containers (rosetta::is_sequence / is_matrix) -------------
         // A method touching a trait-registered sequence binds through a lambda
         // whose sequence parameters are sol::nested<std::vector<element>> —
         // plain Lua tables — copied into the foreign container before the call;
@@ -366,7 +367,7 @@ local {{LIB}} = require("{{LIB}}")
         // the sequence one binds too (the adapter calls by NAME).
 
         inline bool lx_seq_rest_ok(const GenMethod &m, const GenContext &c) {
-            if (!m.ret.is_sequence) {
+            if (!is_adapted(m.ret)) {
                 if (m.ret.kind != "void" && !lx_marshalable(m.ret, c)) {
                     return false;
                 }
@@ -378,7 +379,7 @@ local {{LIB}} = require("{{LIB}}")
                 }
             }
             for (const auto &p : m.params) {
-                if (p.type.is_sequence) {
+                if (is_adapted(p.type)) {
                     continue;
                 }
                 if (!lx_param_ok(p.type, c)) {
@@ -421,14 +422,14 @@ local {{LIB}} = require("{{LIB}}")
                     o.args += ", ";
                 }
                 const GenType &t = params[j].type;
-                if (t.is_sequence) {
-                    const std::string sn = "seq" + std::to_string(j);
+                if (is_adapted(t)) {
+                    const std::string sn = adapt_local(t, j);
                     if (tables) {
-                        o.decls += "sol::nested<" + seq_boundary_cpp(t) + "> " + an;
-                        o.pre += seq_decl_stmts(t, an + ".value()", sn, "        ");
+                        o.decls += "sol::nested<" + adapt_boundary_cpp(t) + "> " + an;
+                        o.pre += adapt_decl_stmts(t, an + ".value()", sn, "        ");
                     } else {
-                        o.decls += "const " + seq_boundary_cpp(t) + " &" + an;
-                        o.pre += seq_decl_stmts(t, an, sn, "        ");
+                        o.decls += "const " + adapt_boundary_cpp(t) + " &" + an;
+                        o.pre += adapt_decl_stmts(t, an, sn, "        ");
                     }
                     o.args += sn;
                 } else if (t.kind == "vector") {
@@ -458,7 +459,7 @@ local {{LIB}} = require("{{LIB}}")
         // for parameters.)
         inline bool lx_seq_has_vectorish_param(const std::vector<GenParam> &params) {
             for (const auto &p : params) {
-                if (p.type.is_sequence || p.type.kind == "vector") {
+                if (is_adapted(p.type) || p.type.kind == "vector") {
                     return true;
                 }
             }
@@ -468,9 +469,9 @@ local {{LIB}} = require("{{LIB}}")
         inline std::string lx_seq_body(const GenMethod &m, const LxSeqSig &sig,
                                        const std::string &call) {
             std::string body = sig.pre;
-            if (m.ret.is_sequence) {
+            if (is_adapted(m.ret)) {
                 body += "        auto &&r = " + call + ";\n";
-                body += "        return " + seq_from_expr(m.ret, "r") + ";\n";
+                body += "        return " + adapt_from_expr(m.ret, "r") + ";\n";
             } else if (m.ret.kind == "void") {
                 body += "        " + call + ";\n";
             } else {
@@ -732,15 +733,15 @@ local {{LIB}} = require("{{LIB}}")
                  qualified_of(k) + ">(\"" + exposed_of(k) + "\",\n        " +
                  lua_ctor_clause(k, c) + lua_bases_clause(k, c) + ");\n";
             for (const auto &f : k.fields) {
-                if (f.type.is_sequence) {
+                if (is_adapted(f.type)) {
                     // Foreign sequence field: property copying through the
                     // boundary vector (get: container userdata; set: another
                     // container or a plain table via sol::nested).
-                    if (seq_ok(f.type)) {
-                        const std::string vt = seq_boundary_cpp(f.type);
+                    if (adapt_ok(f.type)) {
+                        const std::string vt = adapt_boundary_cpp(f.type);
                         s += "    c[\"" + f.name + "\"] = sol::property(\n";
                         s += "        [](const " + qualified_of(k) + " &s) { return " +
-                             seq_from_expr(f.type, "s." + f.name) + "; }";
+                             adapt_from_expr(f.type, "s." + f.name) + "; }";
                         if (!f.is_readonly) {
                             s += ",\n        [](" + qualified_of(k) + " &s, const sol::object &o) {\n";
                             s += "            " + vt + " v = o.is<" + vt + ">() ? o.as<" + vt +

@@ -87,12 +87,18 @@ cmake -B build && cmake --build build
 | `functions` | — | `[]` | Free (non-member) functions to bind. See [Functions](#functions). |
 | `namespace` | — | — | Default C++ namespace for `classes` / `functions` / `extensions` names carrying no `::` of their own. See [Shared defaults](#shared-defaults-namespace-header_dir). |
 | `header_dir` | — | — | Directory fragment prepended to every `classes` / `functions` / `extensions` header. See [Shared defaults](#shared-defaults-namespace-header_dir). |
-| `sequences` | — | `[]` | Foreign sequence containers (qualified template names, one type parameter — `"GEO::vector"`) that marshal like `std::vector<T>`. See [Foreign sequence containers](#foreign-sequence-containers-sequences). |
+| `sequences` | — | `[]` | Foreign sequence containers that marshal like `std::vector<T>` — a qualified template name with one type parameter (`"GEO::vector"`), or a concrete type spelled exactly (`{ "type": "Eigen::VectorXd" }`). See [Foreign sequence containers](#foreign-sequence-containers-sequences). |
+| `out_dir` | — | — | Where every target's **built artifact** is copied after each build (the `.so` / `.pyd` / `.node` / `.js`+`.wasm`). Per-target `out_dir` overrides it. See [Artifact output directory](#artifact-output-directory-out_dir). |
+| `wheel` | — | `false` | Build a Python wheel for the `python-expanded` / `nanobind-expanded` targets on every `--build`, without passing `--wheel`. See [Python wheels](#python-wheels). |
+| `wheel_dir` | — | — | Default for `--wheel-dir`: one directory collecting every backend's wheels. Implies `wheel`. |
+| `matrices` | — | `[]` | Foreign 2-D matrices (same two entry forms as `sequences`) that marshal as an array of row arrays. See [Foreign matrices](#foreign-matrices-matrices). |
+| `interop` | — | `[]` | Foreign libraries whose types the target's binding framework marshals itself (`["eigen"]`). `python-expanded` / `nanobind-expanded` bind them natively (numpy); backends with no caster skip those members. See [Foreign-library interop](#foreign-library-interop-interop). |
 | `user_lib` | — | — | Link the generated bindings against pre-built external libraries — one object, or an array of them when your library has dependencies of its own. See [Linking external libraries](#linking-external-libraries-user_lib). |
 | `user_sources` | — | `[]` | List of user `.cpp` (or `.c`) files compiled directly into every generated binding target. See [Compiling user sources](#compiling-user-sources-user_sources). |
 | `compile_definitions` | — | `[]` | Preprocessor definitions (`"NAME"` or `"NAME=VALUE"`) applied to the generator driver and every compiled binding target. See [Preprocessor definitions](#preprocessor-definitions-compile_definitions). |
 | `build_type` | — | — | Default `CMAKE_BUILD_TYPE` baked into every compiled backend's generated `CMakeLists.txt` (`Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel`). See [Build type & optimization](#build-type--optimization-build_type-optimization). |
 | `optimization` | — | — | Explicit optimization flag (`-O0`…`-O3`, `-Os`, `-Oz`, `-Og`, `-Ofast`) applied to every compiled backend, overriding the build type's own `-O` level. See [Build type & optimization](#build-type--optimization-build_type-optimization). |
+| `version` | — | `0.1.0` | Distribution version stamped into the packaging artifacts — the `pyproject.toml` the `python-expanded` / `nanobind-expanded` backends emit for wheel builds. See [Python wheels](#python-wheels-version). |
 | `plugins` | — | `[]` | Extra `.cpp` sources to compile into the generator driver (e.g. a custom backend). Paths relative to the manifest. |
 | `qt_dir` | — | a built-in path | Qt 6 install prefix used by the `qt` / `qml` (and `-expanded`) backends. e.g. `"$ENV{HOME}/Qt/6.8.3/macos"`. |
 | `cpp26_root` | — | `$ENV{HOME}/devs/c++/clang-p2996/build` | Root of the C++26 / P2996 reflection toolchain used by the *thin* backends. Moves `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` together. |
@@ -259,6 +265,26 @@ The receiver is dropped from the exposed signature; the remaining parameters and
 
 ---
 
+## Artifact output directory (`out_dir`)
+
+A generated project drops its built module next to its own sources — handy for a smoke test, useless when the `.so` belongs inside your Python package or the `.js` next to a web app's assets. Name a directory and the artifact is copied there after **every** build:
+
+```json
+"targets": [
+  { "lang": "nanobind-expanded", "name": "implicit3d", "out_dir": "./dist" },
+  { "lang": "wasm-expanded",     "name": "implicit3d", "out_dir": "../www/assets" }
+],
+"out_dir": "./dist"
+```
+
+The top-level `out_dir` is the default for every target that names none; a target's own entry wins. Paths resolve against the manifest's directory and are created if missing.
+
+This is **not** where the generated project goes (that is `rosetta_gen`'s own output tree, `--bindings-dir`) — it is where the loadable artifact lands: `libfoo.so` / `foo.pyd`, `foo.node`, `foo.so` for Lua, and for wasm **both** halves, the `.js` loader and its `.wasm`. The copy is `copy_if_different`, so an unchanged build touches nothing downstream, and the existing next-to-the-sources copy still happens.
+
+Supported by every backend that builds a loadable module: `python`, `python-expanded`, `nanobind`, `nanobind-expanded`, `node`, `node-expanded`, `wasm`, `wasm-expanded`, `lua-expanded`, `julia`, `julia-expanded`. The document backends (`markdown`, `typescript`, `json`, …) have no artifact to place, and the application-shaped ones (`qt`, `qml`, `imgui`, `rest`, `csharp`, `java`) are not covered.
+
+---
+
 ## Foreign sequence containers (`sequences`)
 
 Many libraries carry their bulk data in their **own vector type** — geogram's `GEO::vector<T>`, an aligned or pooled vector — and the marshalling layers only know `std::vector`. List the container template (qualified, **one type parameter**) under `sequences` and it crosses the boundary like a `std::vector` of its element:
@@ -276,6 +302,102 @@ The opted-in backends (`python-expanded`, `nanobind-expanded`, `node-expanded`, 
 - **Virtual methods naming the container can't be overridden script-side** (their trampoline `sig_bindable` is off — the exact spelling can't round-trip), but they still bind as callable methods.
 
 Sequence-typed public **fields** bind as copying properties (python / nanobind / wasm / lua; node skips them).
+
+### Registering a concrete type
+
+The string form registers a **template**, and the adapter spells the container it builds as `Namespace::Template<element>`. That composition is wrong the moment the specialization carries more than its element — `Eigen::VectorXd` is `Eigen::Matrix<double, -1, 1>`, and the composed `Eigen::Matrix<double>` does not compile. Register the concrete type instead, spelled exactly as the adapter should write it:
+
+```json
+"sequences": [{ "type": "Eigen::VectorXd" }]
+```
+
+which emits a full specialization plus the spelling (`rosetta::is_sequence<Eigen::VectorXd>` and `rosetta::sequence_cpp_name<Eigen::VectorXd>`) rather than the partial one. `{ "template": "GEO::vector" }` is the long form of a plain string entry; an object with both keys, or neither, is an error — the two cannot be told apart by looking at the text, and guessing wrong emits code that does not compile.
+
+The container requirements are unchanged, and a real `Eigen::VectorXd` meets them (`value_type`, `size()`, `resize(n)`, `begin()`/`end()` since Eigen 3.4). This is also the only way to register a container that is not a template at all.
+
+---
+
+## Foreign matrices (`matrices`)
+
+`sequences` one dimension up. A 2-D type — `Eigen::MatrixXd`, a library's own dense grid — is a sequence in no useful sense, so it needs its own registration:
+
+```json
+"matrices": [{ "type": "Eigen::MatrixXd" }]
+```
+
+Entries take the **same two forms** as `sequences`: a plain string for a one-type-parameter template (`"mylib::Grid"`, spelled `mylib::Grid<double>` by the adapter), or `{ "type": "..." }` for a concrete type spelled exactly. `rosetta_gen` emits `rosetta::is_matrix` (plus `rosetta::matrix_cpp_name` for the concrete form) into `bindings.h`; write them yourself for programmatic use — see `rosetta/matrix.h`.
+
+The type must be default-constructible with `value_type`, `rows()`, `cols()`, `resize(r, c)` and `operator()(i, j)`; the element must be **arithmetic** (a grid of strings has no natural script shape).
+
+The opted-in backends (`python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded`, `lua-expanded`, plus `typescript` declarations, which say `number[][]`) marshal it **by copy through a `std::vector<std::vector<element>>` boundary** — an array of row arrays. Every other backend keeps skipping the type, exactly as for sequences.
+
+Three things to know:
+
+- **Row-major, whatever the matrix stores.** `operator()(i, j)` is the only access the registration promises, so the boundary is built row by row regardless of the type's own storage order.
+- **A ragged incoming array is squared off** to the first row's length: rows are the outer size, columns the first row's, short rows keep whatever `resize()` left and extra columns are dropped.
+- **A mutable `Mat&` parameter binds input-only**, like a sequence one — the adapter's local is a real lvalue, but in-place mutations are discarded.
+
+Where an `interop` library owns the type, the same split applies: registering `Eigen::MatrixXd` here gives node / wasm / lua the array of rows and costs the Python family nothing — they keep the numpy caster. See [Foreign-library interop](#foreign-library-interop-interop).
+
+---
+
+## Foreign-library interop (`interop`)
+
+A method taking or returning `Eigen::VectorXd` is, to the reflection walk, a method taking an ordinary class. Every backend used to bind it happily — and the call then **threw at run time**, because no caster for that class was ever registered. The workaround was a hand-written extension file per class flattening every Eigen type to `std::vector<double>`.
+
+`interop` names foreign libraries whose types the target's binding framework can already marshal on its own:
+
+```json
+"interop": ["eigen"]
+```
+
+`rosetta_gen` emits `template <> struct rosetta::interop_enabled<rosetta::eigen_interop> : std::true_type {};` into the generated `bindings.h` (or write it yourself — see `rosetta/interop.h`). Recognition is by **enclosing namespace**, not by a list of type names, so one line covers everything the library owns: `VectorXd`, `MatrixXd`, `Vector3d`, `Map`, `Ref`, `Block`, `Array`, the sparse types — including spellings a hand-maintained list would have missed.
+
+What follows splits by backend:
+
+| Backend | Behaviour |
+| --- | --- |
+| `python-expanded` | Emits `#include <pybind11/eigen.h>`; the types bind **natively as numpy arrays**, both directions, matrices included. No adapter, no copy where the layout allows a view. |
+| `nanobind-expanded` | Same, through `#include <nanobind/eigen/dense.h>`. (Sparse is not emitted — `<nanobind/eigen/sparse.h>` costs compile time a rare signature doesn't justify.) |
+| every other backend | **Skips** the member. Deliberate, and an improvement: a skipped method is honest, a bound one that always throws is not. |
+
+The IR marks these types with `GenType::interop` and leaves `kind` "unknown" — the same pattern raw pointers, callbacks and foreign sequences use, which is what makes the non-caster backends skip them without a single change of their own.
+
+Two practical notes:
+
+- **Eigen must be on the include path** of the generated binding. It already is if the manifest's `user_include` lists it, which it must anyway for the bound headers to compile.
+- **The caster header is only emitted when a bound signature actually names such a type.** Declaring `interop` on a library that never exposes one costs nothing.
+
+This replaces the flat-array extension-method pattern for the Python-family backends.
+
+### Reaching the caster-less backends: register the type as a sequence too
+
+`node-expanded` / `wasm-expanded` / `lua-expanded` have no caster to lean on, so on their own they skip every Eigen-typed member. Give them the flat array by ALSO registering the concrete type under [`sequences`](#registering-a-concrete-type):
+
+```json
+"interop":   ["eigen"],
+"sequences": [{ "type": "Eigen::VectorXd" }]
+```
+
+The IR then carries both marks, and each backend picks:
+
+| Backend | Behaviour |
+| --- | --- |
+| `python-expanded` / `nanobind-expanded` | The **caster wins** — still numpy, still no copy. A dual-marked type costs them nothing. |
+| `node-expanded` / `wasm-expanded` / `lua-expanded` | Bind through the **sequence adapter**: `Eigen::VectorXd` in, out and back through a `std::vector<double>` boundary; scripts see a plain array. |
+| `typescript` | Declares `number[]`, matching what those runtimes hand out. |
+
+The sequence rules apply as written — the copy is real, and a mutable `Eigen::VectorXd&` parameter binds input-only.
+
+**1-D only.** `MatrixXd` has no useful reading as a sequence — register it under [`matrices`](#foreign-matrices-matrices) instead, which splits the backends exactly the same way:
+
+```json
+"interop":   ["eigen"],
+"sequences": [{ "type": "Eigen::VectorXd" }],
+"matrices":  [{ "type": "Eigen::MatrixXd" }]
+```
+
+covers both shapes, in both directions, on every expanded backend.
 
 ---
 
@@ -527,6 +649,53 @@ The flags apply to the *bindings* (and any [`user_sources`](#compiling-user-sour
 
 ---
 
+## Python wheels (`version`)
+
+The `python-expanded` and `nanobind-expanded` backends emit, alongside `CMakeLists.txt`, everything needed to build a redistributable Python wheel:
+
+| File | Role |
+| --- | --- |
+| `pyproject.toml` | [scikit-build-core](https://scikit-build-core.readthedocs.io/) build config. It drives the generated `CMakeLists.txt` itself, so the wheel and a plain `cmake --build` compile the same target the same way — there is no second build description to keep in sync. |
+| `make_wheel.py` | One-command builder: builds the wheel, then bundles external shared libraries and fixes the platform tag. Python rather than a shell script, so Linux, macOS and Windows are all covered by one file — building a wheel needs an interpreter anyway. |
+
+```sh
+cd bindings/nanobind-expanded
+python make_wheel.py                    # -> dist/*.whl, dist/repaired/*.whl
+python3.11 make_wheel.py                # a specific interpreter
+python make_wheel.py --outdir /tmp/whl  # somewhere other than ./dist
+python make_wheel.py --no-repair        # skip the bundling / retagging step
+```
+
+The wheel is built for whichever interpreter runs the script — there is no `--python` flag, just invoke the one you want.
+
+`rosetta_gen --build manifest.json --wheel` runs the same step for every `python-expanded` / `nanobind-expanded` target in one go, and `--wheel-dir DIR` collects the results in one directory instead of a per-backend `dist/` (see [ROSETTA_GEN.md](ROSETTA_GEN.md#case-8-python-wheels)).
+
+For a project that always ships wheels, say so in the manifest instead of on every command line:
+
+```json
+"wheel": true,
+"wheel_dir": "./dist/wheels"
+```
+
+Both are **defaults for the flags**, and the flags still win — in the direction of doing more. `--wheel` on a manifest that says nothing packages anyway; a manifest saying `"wheel": false` cannot turn off a run that asked for `--wheel`. `wheel_dir` implies `wheel`, exactly as `--wheel-dir` implies `--wheel`, and resolves against the manifest's directory. With neither set, `--build` only compiles the extension module.
+
+`version` is the distribution version written into `pyproject.toml`:
+
+```json
+"version": "1.2.0"
+```
+
+A PEP 440 release string starting with a digit (`"1.2.0"`, `"0.3.0rc1"`; a bare number is accepted and stringified). Omitted ⇒ `0.1.0`. Edit it here and re-run the generator rather than editing the generated `pyproject.toml`, which is overwritten.
+
+A few things worth knowing:
+
+- **ABI tagging.** `nanobind-expanded` builds against CPython's stable ABI on 3.12+ and tags the wheel `abi3`, so one artifact covers every later interpreter. Below 3.12, and for `python-expanded` in every case (pybind11 has no stable-ABI mode), the wheel is tagged for the exact CPython that built it — covering several versions means running the script once per interpreter. The plain `cmake` build is unaffected either way; stable-ABI mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` forces it by hand).
+- **`user_lib` and wheel repair.** The generated CMake links [`user_lib`](#linking-external-libraries-user_lib) entries by absolute path, so a freshly built module refers to a directory that does not exist on the installing machine. `make_wheel.py` runs the platform's repair tool — `delocate` (macOS), `auditwheel` (Linux), `delvewheel` (Windows) — to copy those libraries *into* the wheel and rewrite the load paths; results land in `dist/repaired`. On Linux this also retags the wheel `manylinux_*`, without which PyPI rejects it. On Windows the `user_lib` directories are baked into the script as `USER_LIB_DIRS` and handed to `delvewheel --add-path`: a `.pyd` records no search path for its DLLs (Windows has no rpath), so unlike the other two tools delvewheel cannot discover them by following a load command. Repair failing is a warning, not an error — a wheel with nothing external to bundle is already correct. Declaring `"link": "static"` sidesteps the whole question.
+- **Wheels are redistributable; sdists are not.** The generated `CMakeLists.txt` embeds the header and library paths the manifest resolved on the generating machine. Ship wheels, or re-run the generator wherever you build.
+- **Matrix builds.** For several Python versions and platforms in one go, use [cibuildwheel](https://cibuildwheel.pypa.io/) (`pipx run cibuildwheel --platform auto`) instead of looping over the script. This is where the `-expanded` backends pay off: the generated source needs no reflection toolchain, so stock CI runners — including Windows/MSVC — can build it.
+
+---
+
 ## Full reference example
 
 ```json
@@ -548,6 +717,9 @@ The flags apply to the *bindings* (and any [`user_sources`](#compiling-user-sour
   "//build": "Default build type + explicit -O level for every compiled backend.",
   "build_type": "Release",
   "optimization": "-O2",
+
+  "//version": "Stamped into the pyproject.toml emitted for wheel builds.",
+  "version": "1.2.0",
 
   "targets": [
     { "lang": "python-expanded", "name": "geom" },

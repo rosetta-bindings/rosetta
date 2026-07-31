@@ -8,8 +8,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/C%2B%2B-26-blue.svg?logo=cplusplus" alt="C++26">
   <img src="https://img.shields.io/badge/status-prototype-yellow.svg" alt="Status: prototype">
-  <a href="https://xaliphostes.github.io/rosetta/#1"><img src="https://img.shields.io/badge/slides-rosetta-blue?logo=marp" alt="Slides"></a>
-  <a href="https://github.com/xaliphostes/rosetta2/stargazers"><img src="https://img.shields.io/github/stars/xaliphostes/rosetta2?style=social" alt="GitHub stars"></a>
+  <a href="https://github.com/rosetta-bindings/rosetta/#1"><img src="https://img.shields.io/badge/slides-rosetta-blue?logo=marp" alt="Slides"></a>
+  <a href="https://github.com/rosetta-bindings/rosetta/stargazers"><img src="https://img.shields.io/github/stars/xaliphostes/rosetta?style=social" alt="GitHub stars"></a>
 </p>
 
 <p align="center">
@@ -121,6 +121,8 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 > New backends register without touching the generator, thanks to the visitor pattern — see [EXTENDING_BACKEND](docs/EXTENDING_BACKEND.md).
 
 **Expanded (reflection-free) targets.** The default `python` / `nanobind` / `node` / `wasm` / `qt` / `qml` / `csharp` / `java` backends emit a *thin* binding that re-runs the reflection walk at the target's compile time, so building the binding also needs the C++26 toolchain. The `python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded`, `qt-expanded`, `qml-expanded`, `csharp-expanded`, `java-expanded`, `julia-expanded` and `lua-expanded` targets instead **fully expand** every field, method, constructor and enumerator into explicit pybind11 / nanobind / N-API / embind / Qt / sol2 / jlcxx / member-pointer calls. Reflection runs once, on the generation host; the generated binding is ordinary C++ that builds with a stock compiler — a plain C++17/20 compiler, a stock emsdk, or stock Qt 6 (the host still needs C++26 to *run the generator*, the target does not). This pairs naturally with [out-of-line annotations](docs/OUT_OF_LINE_ANNOTATIONS.md) so the bound headers stay stock C++ too — see [`examples/geom-expanded`](examples/geom-expanded).
+
+**Python wheels.** `python-expanded` and `nanobind-expanded` also emit a `pyproject.toml` and a `make_wheel.py`, so a generated binding goes from source to an installable, redistributable wheel in one command — `python make_wheel.py`, the same on Linux, macOS and Windows. External shared libraries are bundled in and the platform tag repaired; on 3.12+ nanobind wheels are tagged `abi3`, covering every later CPython with a single artifact. See [Python wheels](docs/MANIFEST.md#python-wheels-version).
 
 ## Mini-MOC — Qt signals / slots / properties, without moc
 

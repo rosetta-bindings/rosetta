@@ -35,6 +35,8 @@
 #include <map>
 #include <memory>
 #include <rosetta/annotations.h>
+#include <rosetta/interop.h>
+#include <rosetta/matrix.h>
 #include <rosetta/sequence.h>
 #include <rosetta/walk.h>
 #include <string>
@@ -84,6 +86,13 @@ namespace rosetta {
         // is only meaningful for the wasm backends and would break a native
         // link.
         std::vector<std::string> link_options;
+
+        // Where the BUILT ARTIFACT is copied after each build (manifest target
+        // "out_dir"): the .so / .pyd / .node / .js+.wasm, not the generated
+        // project tree. Absolute, and created if missing. Empty ⇒ the artifact
+        // stays where the build put it (plus whatever next-to-the-sources
+        // convenience copy the backend already makes).
+        std::string artifact_dir;
     };
 
     /**
@@ -172,6 +181,32 @@ namespace rosetta {
         // prints template names unqualified.
         bool        is_sequence = false;
         std::string seq_cpp;
+
+        // True when the (cvref-stripped) type is a trait-registered foreign
+        // 2-D matrix (rosetta::is_matrix<T>, e.g. Eigen::MatrixXd — see
+        // rosetta/matrix.h). Exactly the is_sequence contract one dimension up:
+        // `kind` stays "unknown", `element` holds the (arithmetic) element and
+        // `mat_cpp` the qualified spelling an adapter can construct, and an
+        // opted-in backend marshals it by COPY through a
+        // std::vector<std::vector<element>> — an array of rows, row-major
+        // whatever the matrix's own storage order is, since operator()(i, j) is
+        // the only access the registration promises.
+        bool        is_matrix = false;
+        std::string mat_cpp;
+
+        // Non-empty when the type belongs to a foreign library the manifest
+        // opted into ("interop": ["eigen"] — see rosetta/interop.h); holds that
+        // library's manifest name ("eigen"). Like is_pointer / is_sequence,
+        // `kind` stays "unknown", so a backend with no caster for the library
+        // keeps skipping the member — deliberately, since binding it would
+        // produce a call that always throws. A backend that CAN marshal it
+        // (python-expanded / nanobind-expanded, once the caster header is
+        // included) checks this flag and binds the type as it stands: no
+        // adapter and no copy, because the caster owns the conversion.
+        // `object` / `object_qualified` are still filled, so the exact
+        // spellings (ret_cpp / param_cpp) re-qualify through qualify_objects
+        // exactly like a bound class's.
+        std::string interop;
 
         // True when the type is a std::function<R(A...)>. Like is_pointer, `kind`
         // stays "unknown" so backends that don't opt in keep skipping callbacks;
@@ -413,6 +448,17 @@ namespace rosetta {
         std::string                name;       // reflected (unqualified) C++ identifier
         std::string                name_space; // enclosing namespace ("" if global, "a::b" if nested)
 
+        // Fully qualified C++ spelling: enclosing namespaces AND enclosing
+        // classes ("lookup::implicit3d::Modeler3D::SolverMode"). Distinct from
+        // `name_space::name`, which stops at the first non-namespace scope and
+        // therefore loses the owner of a *nested* enum — `name_space` is empty
+        // for one, leaving the bare identifier, which does not compile. Only
+        // this field is safe to emit as a C++ type spelling; `name_space` stays
+        // namespace-only because backends turn it into `using namespace`.
+        // Empty for hand-built IR (tests, direct render() callers), in which
+        // case emitters fall back to `name_space::name`.
+        std::string                qualified;
+
         // The name the enumeration binds under — binding_info<T>::expose
         // (manifest "expose") when set, else `name`. Same role as
         // GenClass::expose; emitters use it for every host-language-visible
@@ -523,6 +569,14 @@ namespace rosetta {
         // thin), which its runtime headers require. Empty (or "20") ⇒ no
         // per-source flag. C sources (.c) are never touched.
         std::string cxx_standard;
+
+        // Optional distribution version (manifest "version"), a PEP 440 /
+        // semver string ("1.2.0", "0.3.0rc1"). Only the packaging artifacts
+        // consume it — the pyproject.toml the python-expanded / nanobind-
+        // expanded backends emit for wheel builds. Empty ⇒ the backends fall
+        // back to DEFAULT_DIST_VERSION ("0.1.0"), so a manifest that never
+        // packages needs no change.
+        std::string version;
     };
 
     /**
@@ -548,6 +602,21 @@ namespace rosetta {
         std::string              build_type;      // default CMAKE_BUILD_TYPE ("" ⇒ not emitted)
         std::string              optimization;    // explicit -O flag overriding the build type's ("" ⇒ not emitted)
         std::string              cxx_standard;    // per-source -std for the user sources ("" or "20" ⇒ none)
+        std::string              version;         // distribution version for packaging ("" ⇒ DEFAULT_DIST_VERSION)
+
+        // Foreign libraries this binding opted into (manifest "interop", e.g.
+        // {"eigen"}) — the same names GenType::interop carries. A backend that
+        // owns a caster for one emits its header (<pybind11/eigen.h>,
+        // <nanobind/eigen/dense.h>); the others ignore the list, having already
+        // skipped every member that names such a type. Filled from the traits
+        // in the generated bindings.h, so it needs no GenerateOptions field.
+        std::vector<std::string> interop;
+
+        // Where this target's built artifact is copied after each build
+        // (TargetSpec::artifact_dir / manifest target "out_dir"). Consumed by
+        // render_meta's {{OUT_DIR_BLOCK}}, so a backend gets the behaviour by
+        // placing that placeholder in its CMake template.
+        std::string artifact_dir;
     };
 
     /**
