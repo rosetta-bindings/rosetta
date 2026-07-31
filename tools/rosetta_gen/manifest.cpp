@@ -221,6 +221,36 @@ Manifest load(const fs::path &manifest_path) {
                     e.link_options.push_back(std::move(flag));
                 }
             }
+            // Optional runtime pins (see TargetEntry::python and friends). A
+            // bare version is left as written — the CMake side turns "3.11"
+            // into python3.11 — so this only rejects what is certainly wrong.
+            const auto str_field = [&t](const char *key) {
+                std::string v;
+                if (t.contains(key)) {
+                    v = t.at(key).is_number() ? std::to_string(t.at(key).get<long long>())
+                                              : t.at(key).get<std::string>();
+                    if (v.empty()) {
+                        throw std::runtime_error(std::string("a target's \"") + key +
+                                                 "\" must not be empty");
+                    }
+                }
+                return v;
+            };
+            e.python          = str_field("python");
+            e.requires_python = str_field("requires_python");
+            e.napi_version    = str_field("napi_version");
+            e.node_engine     = str_field("node_engine");
+            if (!e.napi_version.empty() &&
+                e.napi_version.find_first_not_of("0123456789") != std::string::npos) {
+                throw std::runtime_error("\"napi_version\" must be a number, got \"" +
+                                         e.napi_version + "\"");
+            }
+            if (!e.requires_python.empty() &&
+                e.requires_python.find_first_of("0123456789") == std::string::npos) {
+                throw std::runtime_error("\"requires_python\" must name a version (e.g. \">=3.10\"), "
+                                         "got \"" +
+                                         e.requires_python + "\"");
+            }
             // Optional per-target artifact destination (see TargetEntry::out_dir).
             if (t.contains("out_dir")) {
                 const std::string d = t.at("out_dir").get<std::string>();

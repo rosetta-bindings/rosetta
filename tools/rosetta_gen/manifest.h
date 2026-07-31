@@ -222,6 +222,33 @@ struct TargetEntry {
     // copy step of its own. Empty ⇒ only the existing next-to-the-sources
     // convenience copy. Defaults to the manifest's top-level "out_dir".
     std::string out_dir;
+
+    // Optional runtime pins, per target because two python targets in one
+    // manifest may legitimately want different interpreters:
+    //
+    //   "python"          — the interpreter the binding is BUILT for, as a path
+    //                       ("/opt/py311/bin/python3") or a bare version
+    //                       ("3.11" ⇒ python3.11, resolved on PATH). Without
+    //                       one the generated CMake probes `python3`, i.e.
+    //                       whatever the PATH says — which is why a venv used
+    //                       to be the only way to choose. Also the interpreter
+    //                       `--build --wheel` runs make_wheel.py with, so the
+    //                       wheel is tagged for the pinned version.
+    //   "requires_python" — minimum version (">=3.10"), feeding BOTH the
+    //                       find_package(Python …) floor and pyproject.toml's
+    //                       requires-python, which cannot drift apart as a
+    //                       result. Default ">=3.8".
+    //   "napi_version"    — N-API version the addon targets (NAPI_VERSION=,
+    //                       default 8). This is the real Node floor: N-API 8
+    //                       means Node 12.22+, N-API 9 means Node 18.17+.
+    //   "node_engine"     — package.json "engines.node" (">=18"), which is
+    //                       documentation for npm rather than a compile
+    //                       setting; kept separate from napi_version for that
+    //                       reason, since only you know which you mean.
+    std::string python;
+    std::string requires_python;
+    std::string napi_version;
+    std::string node_engine;
 };
 
 struct Manifest {

@@ -31,12 +31,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 execute_process(
-    COMMAND python3 -c "import sys; print(sys.executable)"
+    COMMAND {{PYTHON_CMD}} -c "import sys; print(sys.executable)"
     OUTPUT_VARIABLE Python_EXECUTABLE
     OUTPUT_STRIP_TRAILING_WHITESPACE)
 set(Python_EXECUTABLE "${Python_EXECUTABLE}" CACHE FILEPATH "" FORCE)
 
-find_package(Python 3.8 COMPONENTS Interpreter Development.Module REQUIRED)
+find_package(Python {{PYTHON_MIN}} COMPONENTS Interpreter Development.Module REQUIRED)
 
 # Prefer the nanobind CMake package shipped with the pip/`nanobind` module,
 # fall back to fetching a pinned release.

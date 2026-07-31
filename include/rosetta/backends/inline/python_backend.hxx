@@ -28,7 +28,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 execute_process(
-    COMMAND python3 -c "import sys; print(sys.executable)"
+    COMMAND {{PYTHON_CMD}} -c "import sys; print(sys.executable)"
     OUTPUT_VARIABLE Python_EXECUTABLE
     OUTPUT_STRIP_TRAILING_WHITESPACE)
 set(Python3_EXECUTABLE "${Python_EXECUTABLE}" CACHE FILEPATH "" FORCE)

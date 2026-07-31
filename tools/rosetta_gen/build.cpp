@@ -82,6 +82,19 @@ static bool contains(const std::vector<std::string> &v, const std::string &s) {
     return std::find(v.begin(), v.end(), s) != v.end();
 }
 
+// The interpreter a target's wheel is built FOR. A wheel is tagged for whatever
+// interpreter runs make_wheel.py, so a manifest that pins "python" must pin it
+// here too — configuring CMake with python3.11 and then packaging with the
+// probed python3.12 would produce a cp312 wheel from a 3.11 build. A bare
+// version becomes pythonX.Y, resolved on PATH like any other command.
+static std::string target_python(const TargetEntry &t, const std::string &fallback) {
+    if (t.python.empty()) {
+        return fallback;
+    }
+    return t.python.find_first_not_of("0123456789.") == std::string::npos ? "python" + t.python
+                                                                          : t.python;
+}
+
 static int run_build(const BuildOptions &opt) {
     const Manifest m            = load(opt.manifest);
     const fs::path manifest_dir = fs::absolute(opt.manifest).parent_path();
@@ -260,14 +273,16 @@ static int run_build(const BuildOptions &opt) {
                 attempt(lang, false);
             } else if (!wheel || !is_wheel_backend(lang)) {
                 attempt(lang, true);
-            } else if (python.empty()) {
+            } else if (target_python(t, python).empty()) {
                 record(lang, "OK (no wheel — no python interpreter found)");
             } else {
                 // The wheel is a second, independent build: scikit-build-core
                 // re-runs this same CMakeLists in its own tree (SKBUILD set),
                 // so it neither reuses nor disturbs the build/ dir above.
                 std::fprintf(stderr, "== packaging %s\n", lang.c_str());
-                attempt(lang, run_cmd(q(python) + " make_wheel.py" + wheel_out, dir) == 0,
+                attempt(lang,
+                        run_cmd(q(target_python(t, python)) + " make_wheel.py" + wheel_out, dir) ==
+                            0,
                         " (wheel)");
             }
         }

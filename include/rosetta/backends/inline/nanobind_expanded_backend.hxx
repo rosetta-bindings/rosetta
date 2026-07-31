@@ -23,12 +23,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON){{BUILD_CONFIG}}
 
 execute_process(
-    COMMAND python3 -c "import sys; print(sys.executable)"
+    COMMAND {{PYTHON_CMD}} -c "import sys; print(sys.executable)"
     OUTPUT_VARIABLE Python_EXECUTABLE
     OUTPUT_STRIP_TRAILING_WHITESPACE)
 set(Python_EXECUTABLE "${Python_EXECUTABLE}" CACHE FILEPATH "" FORCE)
 
-find_package(Python 3.8 COMPONENTS Interpreter Development.Module REQUIRED)
+find_package(Python {{PYTHON_MIN}} COMPONENTS Interpreter Development.Module REQUIRED)
 
 # Prefer the nanobind CMake package shipped with the pip/`nanobind` module,
 # fall back to fetching a pinned release.
@@ -105,7 +105,7 @@ build-backend = "scikit_build_core.build"
 name = "{{LIB}}"
 version = "{{VERSION}}"
 description = "Auto-generated nanobind bindings for {{LIB}}."
-requires-python = ">=3.8"
+requires-python = "{{REQUIRES_PYTHON}}"
 
 [tool.scikit-build]
 cmake.version = ">=3.18"

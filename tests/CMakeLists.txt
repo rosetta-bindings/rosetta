@@ -156,6 +156,14 @@ target_compile_options(out_dir PRIVATE -fannotation-attributes)
 target_link_libraries(out_dir PRIVATE GTest::gtest_main)
 gtest_discover_tests(out_dir)
 
+# Per-target runtime pins (manifest "python" / "requires_python" /
+# "napi_version" / "node_engine") in the emitted CMake, pyproject and package.json.
+add_executable(runtime_pins runtime_pins.cpp)
+target_include_directories(runtime_pins PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(runtime_pins PRIVATE -fannotation-attributes)
+target_link_libraries(runtime_pins PRIVATE GTest::gtest_main)
+gtest_discover_tests(runtime_pins)
+
 # Reference returns in the Python family: a non-const lvalue-ref return of a
 # bound class binds with reference_internal instead of being copied.
 add_executable(ref_return ref_return.cpp)

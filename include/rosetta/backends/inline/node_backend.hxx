@@ -50,7 +50,7 @@ target_include_directories({{LIB}} PRIVATE
 
 target_link_libraries({{LIB}} PRIVATE ${CMAKE_JS_LIB})
 
-target_compile_definitions({{LIB}} PRIVATE NAPI_VERSION=8)
+target_compile_definitions({{LIB}} PRIVATE NAPI_VERSION={{NAPI_VERSION}})
 
 target_compile_options({{LIB}} PRIVATE
     {{REFLECTION_FLAGS}})
@@ -113,7 +113,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
   "devDependencies": {
     "cmake-js": "^7.3.0",
     "node-addon-api": "^8.0.0"
-  }
+  }{{NODE_ENGINES}}
 }
 )JSON";
 

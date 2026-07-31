@@ -216,21 +216,27 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     }
     out << "    opt.targets         = {\n";
     for (const auto &t : m.targets) {
-        out << "        {\"" << t.lang << "\", \"" << t.name << "\"";
-        // Per-target linker flags (manifest target "link_options") and the
-        // artifact destination ("out_dir"). Aggregate initialization is
-        // positional, so an out_dir with no link flags still needs the empty
-        // braces in between.
-        if (!t.link_options.empty() || !t.out_dir.empty()) {
-            out << ", {";
+        // DESIGNATED initializers: TargetSpec has grown past the point where a
+        // positional list is readable, and every field after `name` is optional
+        // — positionally, one of them means spelling every earlier one.
+        out << "        {.lang = \"" << t.lang << "\", .name = \"" << t.name << "\"";
+        if (!t.link_options.empty()) {
+            out << ", .link_options = {";
             for (std::size_t i = 0; i < t.link_options.size(); ++i) {
                 out << (i ? ", " : "") << "\"" << t.link_options[i] << "\"";
             }
             out << "}";
         }
-        if (!t.out_dir.empty()) {
-            out << ", \"" << t.out_dir << "\"";
-        }
+        const auto field = [&out](const char *name, const std::string &v) {
+            if (!v.empty()) {
+                out << ", ." << name << " = \"" << v << "\"";
+            }
+        };
+        field("artifact_dir", t.out_dir);
+        field("python", t.python);
+        field("requires_python", t.requires_python);
+        field("napi_version", t.napi_version);
+        field("node_engine", t.node_engine);
         out << "},\n";
     }
     out << "    };\n";

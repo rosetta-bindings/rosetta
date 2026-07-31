@@ -42,7 +42,7 @@ target_include_directories({{LIB}} PRIVATE
     {{ROSETTA_INCLUDE}})
 
 target_link_libraries({{LIB}} PRIVATE ${CMAKE_JS_LIB})
-target_compile_definitions({{LIB}} PRIVATE NAPI_VERSION=8)
+target_compile_definitions({{LIB}} PRIVATE NAPI_VERSION={{NAPI_VERSION}})
 
 {{USER_LIB_BLOCK}}
 

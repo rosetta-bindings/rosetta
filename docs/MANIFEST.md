@@ -88,6 +88,7 @@ cmake -B build && cmake --build build
 | `namespace` | — | — | Default C++ namespace for `classes` / `functions` / `extensions` names carrying no `::` of their own. See [Shared defaults](#shared-defaults-namespace-header_dir). |
 | `header_dir` | — | — | Directory fragment prepended to every `classes` / `functions` / `extensions` header. See [Shared defaults](#shared-defaults-namespace-header_dir). |
 | `sequences` | — | `[]` | Foreign sequence containers that marshal like `std::vector<T>` — a qualified template name with one type parameter (`"GEO::vector"`), or a concrete type spelled exactly (`{ "type": "Eigen::VectorXd" }`). See [Foreign sequence containers](#foreign-sequence-containers-sequences). |
+| `python` / `requires_python` / `napi_version` / `node_engine` | — | — | Per-target runtime pins: which Python the binding is built for, its minimum version, the N-API level and the npm `engines.node` entry. See [Pinning the runtime](#pinning-the-runtime-python-requires_python-napi_version-node_engine). |
 | `out_dir` | — | — | Where every target's **built artifact** is copied after each build (the `.so` / `.pyd` / `.node` / `.js`+`.wasm`). Per-target `out_dir` overrides it. See [Artifact output directory](#artifact-output-directory-out_dir). |
 | `wheel` | — | `false` | Build a Python wheel for the `python-expanded` / `nanobind-expanded` targets on every `--build`, without passing `--wheel`. See [Python wheels](#python-wheels). |
 | `wheel_dir` | — | — | Default for `--wheel-dir`: one directory collecting every backend's wheels. Implies `wheel`. |
@@ -262,6 +263,35 @@ print(len(m.vertices()) // 3)
 ```
 
 The receiver is dropped from the exposed signature; the remaining parameters and the return type marshal exactly like a free function's. The method name is the function's unqualified identifier. Supported by the `python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded` targets and all text backends (`typescript`, `markdown`, `html`); the thin (reflection-re-running) backends don't see them, and backends that can only emit member pointers (`qt`/`qml`/`csharp`/`java`) skip them.
+
+---
+
+## Pinning the runtime (`python`, `requires_python`, `napi_version`, `node_engine`)
+
+By default a generated project takes whatever the `PATH` gives it: the emitted CMake probes `python3` / `node`, with a 3.8 floor and N-API 8 written in. Pin them per target instead:
+
+```json
+"targets": [
+  { "lang": "nanobind-expanded", "name": "geom",
+    "python": "3.11", "requires_python": ">=3.10" },
+  { "lang": "node-expanded", "name": "geom",
+    "napi_version": 9, "node_engine": ">=18" }
+]
+```
+
+| field | effect | default |
+| --- | --- | --- |
+| `python` | The interpreter the binding is built for. A bare version (`"3.11"`) becomes `python3.11`, resolved on `PATH`; anything else is used as written (`"/opt/py311/bin/python3"`). | probe `python3` |
+| `requires_python` | Minimum version. Feeds **both** `find_package(Python …)` and `pyproject.toml`'s `requires-python`, so the build floor and the wheel metadata cannot drift apart. | `>=3.8` |
+| `napi_version` | `NAPI_VERSION=` for the addon. This is the real Node floor — N-API 8 means Node 12.22+, N-API 9 means Node 18.17+. | `8` |
+| `node_engine` | `engines.node` in `package.json` — documentation for npm rather than a compile setting, which is why it is separate from `napi_version`. | absent |
+
+Per-target, not top-level, so a manifest carrying both a `python-expanded` and a `nanobind-expanded` target can point them at different interpreters.
+
+Two things worth knowing:
+
+- **`--cmake-arg -DPython_EXECUTABLE=…` does not work**, which is why this exists. The generated CMake sets that variable with `CACHE … FORCE` after probing, overriding anything passed on the command line. Before these fields, a venv or a `pyenv` shim was the only way to choose an interpreter.
+- **`python` also drives the wheel.** A wheel is tagged for whichever interpreter runs `make_wheel.py`, so `rosetta_gen --build --wheel` packages with the pinned interpreter rather than the probed one — otherwise a 3.11 build would emit a `cp312` wheel.
 
 ---
 

@@ -93,6 +93,16 @@ namespace rosetta {
         // stays where the build put it (plus whatever next-to-the-sources
         // convenience copy the backend already makes).
         std::string artifact_dir;
+
+        // Runtime pins for this target (manifest "python" / "requires_python" /
+        // "napi_version" / "node_engine"). Empty ⇒ the generated project keeps
+        // its defaults: `python3` off PATH, a 3.8 floor, N-API 8, and no
+        // engines entry. `python` is a path or a bare version ("3.11", which
+        // the emitted CMake spells python3.11).
+        std::string python;
+        std::string requires_python;
+        std::string napi_version;
+        std::string node_engine;
     };
 
     /**
@@ -617,6 +627,15 @@ namespace rosetta {
         // render_meta's {{OUT_DIR_BLOCK}}, so a backend gets the behaviour by
         // placing that placeholder in its CMake template.
         std::string artifact_dir;
+
+        // Runtime pins (TargetSpec::python and friends), consumed by
+        // render_meta's {{PYTHON_CMD}} / {{PYTHON_MIN}} / {{REQUIRES_PYTHON}} /
+        // {{NAPI_VERSION}} / {{NODE_ENGINES}}. Each has a default, so a
+        // template names the placeholder unconditionally.
+        std::string python;
+        std::string requires_python;
+        std::string napi_version;
+        std::string node_engine;
     };
 
     /**

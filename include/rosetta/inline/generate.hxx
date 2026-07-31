@@ -639,7 +639,49 @@ endif()
                                      "        $<TARGET_FILE_DIR:" +
                                      c.lib + ">/" + c.lib + ".wasm " + d + ")";
             }
+            // Runtime pins (manifest "python" / "requires_python" /
+            // "napi_version" / "node_engine"), each falling back to what the
+            // templates hardcoded before they were configurable.
+            //
+            // {{PYTHON_CMD}} is the interpreter the emitted CMake PROBES: a
+            // path goes in as written, a bare "3.11" becomes python3.11, and
+            // the probe itself is kept either way — asking the interpreter for
+            // its own sys.executable is what turns a PATH name into the
+            // absolute path find_package needs.
+            std::string python_cmd = "python3";
+            if (!c.python.empty()) {
+                const bool bare_version =
+                    c.python.find_first_not_of("0123456789.") == std::string::npos;
+                python_cmd = bare_version ? "python" + c.python : c.python;
+            }
+            // {{PYTHON_MIN}} — the find_package(Python …) floor, taken from the
+            // SAME field as pyproject's requires-python so the two cannot drift:
+            // ">=3.10" ⇒ 3.10. The version is the first digit run onward, minus
+            // any trailing clause (">=3.10,<4" ⇒ 3.10).
+            std::string python_min = "3.8";
+            if (!c.requires_python.empty()) {
+                const auto b = c.requires_python.find_first_of("0123456789");
+                if (b != std::string::npos) {
+                    const auto e = c.requires_python.find_first_not_of("0123456789.", b);
+                    python_min   = c.requires_python.substr(b, e == std::string::npos ? e : e - b);
+                }
+            }
+            const std::string requires_python =
+                c.requires_python.empty() ? ">=3.8" : c.requires_python;
+            const std::string napi_version = c.napi_version.empty() ? "8" : c.napi_version;
+            // {{NODE_ENGINES}} — a package.json "engines" entry, or nothing.
+            // Emitted with its leading comma so the surrounding JSON stays
+            // valid when it is absent.
+            const std::string node_engines =
+                c.node_engine.empty()
+                    ? std::string{}
+                    : ",\n  \"engines\": {\n    \"node\": \"" + c.node_engine + "\"\n  }";
             return subst(tmpl, {{"LIB", c.lib},
+                                {"PYTHON_CMD", python_cmd},
+                                {"PYTHON_MIN", python_min},
+                                {"REQUIRES_PYTHON", requires_python},
+                                {"NAPI_VERSION", napi_version},
+                                {"NODE_ENGINES", node_engines},
                                 {"OUT_DIR_BLOCK", out_dir_block},
                                 {"OUT_DIR_BLOCK_WASM", out_dir_block_wasm},
                                 {"HEADER_BLOCK", CMAKE_HEADER},
@@ -2060,7 +2102,8 @@ namespace rosetta {
                                         opt.build_type, opt.optimization,
                                         opt.cxx_standard, opt.version,
                                         gen_detail::collect_interop(classes, opt.functions),
-                                        t.artifact_dir});
+                                        t.artifact_dir, t.python, t.requires_python,
+                                        t.napi_version, t.node_engine});
         }
     }
 
