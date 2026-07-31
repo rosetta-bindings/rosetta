@@ -28,7 +28,16 @@ execute_process(
     OUTPUT_STRIP_TRAILING_WHITESPACE)
 set(Python_EXECUTABLE "${Python_EXECUTABLE}" CACHE FILEPATH "" FORCE)
 
-find_package(Python {{PYTHON_MIN}} COMPONENTS Interpreter Development.Module REQUIRED)
+# Development.SABIModule is what defines the Python::SABIModule target, and
+# nanobind silently drops a STABLE_ABI request when that target is missing
+# (nanobind-config.cmake: "Stable ABI builds require CPython >= 3.12 and
+# Python::SABIModule"). Without it ROSETTA_STABLE_ABI below is accepted and
+# then ignored, so the module builds as cpython-3XX while the wheel is still
+# tagged abi3 — exactly the mismatch the pyproject comment warns about.
+# Optional, not required: PyPy and free-threaded builds have no SABI, and
+# nanobind already degrades to a per-version module there.
+find_package(Python {{PYTHON_MIN}} COMPONENTS Interpreter Development.Module
+                                   OPTIONAL_COMPONENTS Development.SABIModule REQUIRED)
 
 # Prefer the nanobind CMake package shipped with the pip/`nanobind` module,
 # fall back to fetching a pinned release.
