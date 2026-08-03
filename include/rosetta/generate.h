@@ -381,6 +381,18 @@ namespace rosetta {
         std::string name;       // reflected (unqualified) C++ identifier
         std::string name_space; // enclosing namespace ("" if global, "a::b" if nested)
 
+        // Fully qualified C++ spelling: enclosing namespaces AND enclosing
+        // classes ("sift::ParsedModel::TemporalDeriv"). Same role — and same
+        // reason — as GenEnum::qualified: `class_namespace<T>()` stops at the
+        // first non-namespace scope, so a class nested inside another class
+        // reports an EMPTY `name_space` and the `name_space::name`
+        // reconstruction collapses to the bare identifier. That is not a name
+        // the emitted code can resolve: backends open namespaces with
+        // `using namespace`, and cannot open a class. Read it through
+        // gen_detail::qualified_of(), which falls back to the old
+        // reconstruction when this is empty (hand-built IR).
+        std::string qualified;
+
         // The name the class binds under (module attribute, JS export,
         // TypeScript class, trampoline suffix). Defaults to `name`; overridden
         // by binding_info<T>::expose (manifest "expose") so two classes with

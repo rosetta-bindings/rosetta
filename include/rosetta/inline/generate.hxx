@@ -102,6 +102,13 @@ namespace rosetta {
         // `using namespace` directives and breaks down as soon as two bound
         // namespaces declare the same identifier (the "expose" rename case).
         inline std::string qualified_of(const GenClass &k) {
+            // Prefers GenClass::qualified, which also carries the enclosing
+            // *classes* — a nested class has an empty `name_space`, so the
+            // namespace-only spelling would emit the bare identifier and fail
+            // to compile. Falls back to `name_space::name` for hand-built IR.
+            if (!k.qualified.empty()) {
+                return k.qualified;
+            }
             return k.name_space.empty() ? k.name : k.name_space + "::" + k.name;
         }
 
@@ -1084,7 +1091,14 @@ endif()
                 // dealias: ^^T through an alias template (remove_cvref_t)
                 // reflects the alias, whose parent is the alias's own scope.
                 const std::meta::info ty = std::meta::dealias(^^T);
-                std::string     out(std::meta::identifier_of(ty));
+                // Same guard as class_name(): a class template SPECIALIZATION
+                // has no plain identifier ("SpatialFieldND<2>"), and asking for
+                // one makes this lambda non-constant. display_string_of yields
+                // the unqualified template-id, which the scope walk below then
+                // prefixes exactly like an ordinary identifier.
+                std::string     out(std::meta::has_identifier(ty)
+                                        ? std::meta::identifier_of(ty)
+                                        : std::meta::display_string_of(ty));
                 std::meta::info scope = std::meta::parent_of(ty);
                 while (std::meta::has_identifier(scope) &&
                        (std::meta::is_namespace(scope) || std::meta::is_type(scope))) {
@@ -1514,6 +1528,7 @@ endif()
             GenClass gc;
             gc.name       = class_name<T>();
             gc.name_space = class_namespace<T>();
+            gc.qualified  = qualified_class_name<T>();
             // The binding name: the trait's `expose` override (manifest
             // "expose") when present, else the reflected identifier.
             gc.expose = gc.name;
