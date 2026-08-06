@@ -116,7 +116,7 @@ A backend whose toolchain is **missing** (no `npm`, no `emcc`, no `julia`…) is
 --qt-dir PATH            -DQT_DIR for the qt-/qml-expanded builds
 --only a,b / --skip a,b  restrict the backend builds to / exclude these
 --cmake-arg ARG          extra argument for every CMake configure (repeatable)
---jobs N                 parallel build jobs
+--jobs N, -jN            parallel build jobs (bare -j: one per core)
 --fresh                  wipe the gen and bindings dirs first
 --wheel                  also build a Python wheel for the python-expanded /
                          nanobind-expanded targets (runs their make_wheel.py;
@@ -138,8 +138,8 @@ bin/rosetta_gen --build examples/generate/manifest.json
 While developing you rarely want the full matrix. `--only` / `--skip` filter **which backends get compiled** (generation still emits them all — the filters name the `lang` values):
 
 ```bash
-# just python and node, 8-way parallel
-bin/rosetta_gen --build manifest.json --only python-expanded,node-expanded --jobs 8
+# just python and node, 8-way parallel (`-j` alone: one job per core)
+bin/rosetta_gen --build manifest.json --only python-expanded,node-expanded -j8
 
 # everything except the slow wasm link
 bin/rosetta_gen --build manifest.json --skip wasm-expanded

@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -76,6 +77,22 @@ static std::vector<std::string> split_list(const std::string &s) {
         pos = end + 1;
     }
     return out;
+}
+
+// A job count as written on the command line: digits only, at least 1. The
+// value ends up inside a `cmake --build --parallel N` command line, so anything
+// else is rejected here rather than passed through to the shell.
+static bool is_job_count(const std::string &s) {
+    return !s.empty() && s.find_first_not_of("0123456789") == std::string::npos &&
+           s.find_first_not_of('0') != std::string::npos;
+}
+
+// The core count for a bare `-j` (make's "as many as you have"). 0 — an
+// unknowable hardware_concurrency — means "let CMake decide": an empty string
+// leaves --parallel off entirely.
+static std::string all_cores() {
+    const unsigned n = std::thread::hardware_concurrency();
+    return n ? std::to_string(n) : std::string{};
 }
 
 static bool contains(const std::vector<std::string> &v, const std::string &s) {
@@ -302,7 +319,7 @@ const char *kBuildOptions =
     "  --qt-dir PATH            -DQT_DIR for the qt-/qml-expanded builds\n"
     "  --only a,b / --skip a,b  restrict the backend builds to / exclude these\n"
     "  --cmake-arg ARG          extra argument for every CMake configure (repeatable)\n"
-    "  --jobs N                 parallel build jobs\n"
+    "  --jobs N, -jN            parallel build jobs (bare -j: one per core)\n"
     "  --fresh                  wipe the gen and bindings dirs first\n"
     "  --wheel                  also build a Python wheel for the python-expanded /\n"
     "                           nanobind-expanded targets (runs their make_wheel.py;\n"
@@ -340,8 +357,27 @@ int build_main(int argc, char **argv) {
             opt.skip = split_list(next());
         } else if (a == "--cmake-arg") {
             opt.cmake_args.push_back(next());
-        } else if (a == "--jobs") {
-            opt.jobs = next();
+        } else if (a == "--jobs" || a.rfind("-j", 0) == 0) {
+            // make-style spellings, all equivalent: `--jobs 8`, `-j8`, `-j 8`.
+            // A bare `-j` (nothing attached, no digits following) means "use
+            // every core", as it does for make.
+            std::string n;
+            if (a == "--jobs") {
+                n = next();
+            } else if (a.size() > 2) {
+                n = a.substr(2);
+            } else if (i + 1 < argc && is_job_count(argv[i + 1])) {
+                n = next();
+            } else {
+                n = all_cores();
+            }
+            if (!n.empty() && !is_job_count(n)) {
+                std::fprintf(stderr, "rosetta_gen: %s needs a positive job count, got %s\n",
+                             a.c_str(), n.c_str());
+                print_build_usage(stderr);
+                return 1;
+            }
+            opt.jobs = n;
         } else if (a == "--fresh") {
             opt.fresh = true;
         } else if (a == "--wheel") {
