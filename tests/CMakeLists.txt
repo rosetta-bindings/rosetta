@@ -102,6 +102,31 @@ target_compile_options(member_object PRIVATE -fannotation-attributes)
 target_link_libraries(member_object PRIVATE GTest::gtest_main)
 gtest_discover_tests(member_object)
 
+# Qualified C++ spelling of class template specializations: template arguments
+# keep their namespaces, and libc++'s std::__1 never leaks into emitted code.
+add_executable(template_spelling template_spelling.cpp)
+target_include_directories(template_spelling PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(template_spelling PRIVATE -fannotation-attributes)
+target_link_libraries(template_spelling PRIVATE GTest::gtest_main)
+gtest_discover_tests(template_spelling)
+
+# Overload support in the reflection walk: a class's whole overload set reaches
+# the IR, C++ name hiding is honoured across bases, and what the walk cannot bind
+# is recorded rather than silently dropped.
+add_executable(overload overload.cpp)
+target_include_directories(overload PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(overload PRIVATE -fannotation-attributes)
+target_link_libraries(overload PRIVATE GTest::gtest_main)
+gtest_discover_tests(overload)
+
+# The machine-readable coverage report (coverage.json): every bind/skip decision
+# is recorded with a reason, and the JSON parses.
+add_executable(coverage coverage.cpp)
+target_include_directories(coverage PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(coverage PRIVATE -fannotation-attributes)
+target_link_libraries(coverage PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
+gtest_discover_tests(coverage)
+
 # Foreign-sequence marshalling (rosetta::is_sequence — GEO::vector-style
 # containers through a std::vector boundary). Verifies generated sources.
 add_executable(sequence sequence.cpp)

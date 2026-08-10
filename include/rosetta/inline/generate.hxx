@@ -49,6 +49,122 @@ namespace rosetta {
             return nullptr;
         }
 
+        // ---- structural type spelling ------------------------------------------
+        //
+        // std::meta::display_string_of() is NOT a C++ spelling. For a class
+        // template specialization it renders the template-id with every argument
+        // stripped of its namespaces:
+        //
+        //     Horizon<std::vector<lookup::math::Point2D>>
+        //         -> "Horizon<vector<Point2D, allocator<Point2D>>>"
+        //
+        // Prefixing that with the OUTER class's namespace — which is all the
+        // scope walk can do — produces
+        // `lookup::…::Horizon<vector<Point2D, allocator<Point2D>>>`: the outer
+        // name is right and every argument is unresolvable. The expanded
+        // backends normally paper over bare identifiers with `using namespace`
+        // directives, but those only cover the namespaces of BOUND types
+        // (using_namespaces_of), so nothing rescues the `std::` half — and
+        // binding more classes cannot ever fix it.
+        //
+        // So spell the type STRUCTURALLY instead: walk template_of /
+        // template_arguments_of and qualify each argument recursively, the same
+        // way sequence_spelling() / marshal_spelling() already compose theirs by
+        // hand. Every backend and every future templated bind gets it right.
+        //
+        // Note this deliberately keeps defaulted template arguments
+        // (std::vector<T, std::allocator<T>>): they are what the reflection
+        // reports, they name the same type, and dropping them would mean knowing
+        // each template's defaults.
+
+        // Is `id` a namespace name reserved to the implementation? libc++ puts
+        // everything in the inline namespace `std::__1`, and the fork exposes no
+        // is_inline_namespace() to detect it properly — so emitting the walked
+        // scope verbatim would produce `std::__1::vector`, which is correct here
+        // and breaks the moment the generated source is built against libstdc++
+        // or MSVC (the whole point of the expanded backends). A leading
+        // underscore is reserved to the implementation at namespace scope, so
+        // user code cannot legally declare one and skipping these is safe.
+        consteval bool is_reserved_namespace_name(std::string_view id) {
+            return !id.empty() && id.front() == '_';
+        }
+
+        // "a::b::" for a type declared in a::b — enclosing namespaces AND
+        // classes, minus any implementation-reserved namespace. Empty at global
+        // scope. `r` may be a type or a template.
+        consteval std::string scope_prefix_of(std::meta::info r) {
+            std::vector<std::string_view> parts;
+            std::meta::info               scope = std::meta::parent_of(r);
+            while (std::meta::has_identifier(scope) &&
+                   (std::meta::is_namespace(scope) || std::meta::is_type(scope))) {
+                const std::string_view id = std::meta::identifier_of(scope);
+                if (!(std::meta::is_namespace(scope) && is_reserved_namespace_name(id))) {
+                    parts.push_back(id);
+                }
+                scope = std::meta::parent_of(scope);
+            }
+            std::string out;
+            for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+                out += std::string(*it) + "::";
+            }
+            return out;
+        }
+
+        // A fully qualified, compilable C++ spelling for the type `ty`.
+        consteval std::string qualified_type_spelling(std::meta::info ty) {
+            ty = std::meta::dealias(ty);
+
+            // Peel cv / reference / pointer so the qualification lands on the
+            // underlying type, which is the part display_string_of gets wrong.
+            //
+            // Known gap: a CONST POINTER template argument (`T *const`) comes out
+            // as `T *`, losing the pointer's own constness — telling it apart
+            // from pointer-to-const (`const T *`, which IS handled) needs a real
+            // declarator printer that tracks suffix position. Left alone
+            // deliberately: it has never appeared as a bound class's template
+            // argument, and every shape that has is now exact rather than
+            // uniformly wrong.
+            if (std::meta::is_lvalue_reference_type(ty)) {
+                return qualified_type_spelling(std::meta::remove_reference(ty)) + " &";
+            }
+            if (std::meta::is_rvalue_reference_type(ty)) {
+                return qualified_type_spelling(std::meta::remove_reference(ty)) + " &&";
+            }
+            if (std::meta::is_pointer_type(ty)) {
+                return qualified_type_spelling(std::meta::remove_pointer(ty)) + " *";
+            }
+            if (std::meta::is_const_type(ty)) {
+                return "const " + qualified_type_spelling(std::meta::remove_const(ty));
+            }
+
+            // A template-id: qualify the template, then each argument.
+            if (std::meta::has_template_arguments(ty)) {
+                const std::meta::info tmpl = std::meta::template_of(ty);
+                std::string out = scope_prefix_of(tmpl) + std::string(std::meta::identifier_of(tmpl));
+                out += "<";
+                bool first = true;
+                for (const std::meta::info arg : std::meta::template_arguments_of(ty)) {
+                    if (!first) {
+                        out += ", ";
+                    }
+                    first = false;
+                    // A non-type argument (SpatialFieldND<2>) is a value, not a
+                    // type: its display spelling is the literal and needs no
+                    // qualification.
+                    out += std::meta::is_type(arg) ? qualified_type_spelling(arg)
+                                                   : std::string(std::meta::display_string_of(arg));
+                }
+                return out + ">";
+            }
+
+            // A builtin (`int`, `double`) has no identifier and no scope; its
+            // display spelling is already the C++ one.
+            if (!std::meta::has_identifier(ty)) {
+                return std::string(std::meta::display_string_of(ty));
+            }
+            return scope_prefix_of(ty) + std::string(std::meta::identifier_of(ty));
+        }
+
         // Reflected name of T as a runtime string. A plain class/enum yields its
         // bare identifier ("Point"); a template specialization
         // (Eigen::SparseMatrix<double>, pmp::Matrix<float, 3, 1>) has no
@@ -88,13 +204,17 @@ namespace rosetta {
         }
 
         // Namespace-qualified spelling of T ("arch::sinv::Data"; the bare
-        // identifier for a global type). Distinct from qualified_class_name()
-        // below, which also walks enclosing CLASSES but requires an identifier;
-        // this one inherits class_name()'s display-string fallback, so template
-        // specializations (std::array<double, 9>) stay safe.
+        // identifier for a global type). This is what GenType::object_qualified
+        // carries, i.e. how a backend spells the type of a field, parameter or
+        // return — so it must be compilable for a template specialization too,
+        // and goes through the same structural spelling as
+        // qualified_class_name(). (It used to concatenate class_namespace() with
+        // class_name(), inheriting the latter's display-string fallback and its
+        // stripped template arguments.)
         template <typename T> inline std::string ns_qualified_name() {
-            const std::string ns = class_namespace<T>();
-            return ns.empty() ? class_name<T>() : ns + "::" + class_name<T>();
+            constexpr const char *n =
+                std::define_static_string(qualified_type_spelling(^^T));
+            return std::string(n);
         }
 
         // The qualified C++ spelling of a bound class, for emitted code. Always
@@ -1087,26 +1207,17 @@ endif()
         // stops at the first non-namespace scope, this keeps walking through
         // outer classes, so a nested type keeps its owner in the spelling.
         template <typename T> inline std::string qualified_class_name() {
-            constexpr const char *n = std::define_static_string([] consteval -> std::string {
-                // dealias: ^^T through an alias template (remove_cvref_t)
-                // reflects the alias, whose parent is the alias's own scope.
-                const std::meta::info ty = std::meta::dealias(^^T);
-                // Same guard as class_name(): a class template SPECIALIZATION
-                // has no plain identifier ("SpatialFieldND<2>"), and asking for
-                // one makes this lambda non-constant. display_string_of yields
-                // the unqualified template-id, which the scope walk below then
-                // prefixes exactly like an ordinary identifier.
-                std::string     out(std::meta::has_identifier(ty)
-                                        ? std::meta::identifier_of(ty)
-                                        : std::meta::display_string_of(ty));
-                std::meta::info scope = std::meta::parent_of(ty);
-                while (std::meta::has_identifier(scope) &&
-                       (std::meta::is_namespace(scope) || std::meta::is_type(scope))) {
-                    out   = std::string(std::meta::identifier_of(scope)) + "::" + out;
-                    scope = std::meta::parent_of(scope);
-                }
-                return out;
-            }());
+            // dealias inside: ^^T through an alias template (remove_cvref_t)
+            // reflects the alias, whose parent is the alias's own scope.
+            //
+            // A class template SPECIALIZATION has no plain identifier, so this
+            // used to fall back to display_string_of and prefix the result like
+            // an ordinary identifier — which left every template ARGUMENT
+            // unqualified and the emitted spelling uncompilable. See
+            // qualified_type_spelling(), which composes the template-id from
+            // template_of / template_arguments_of instead.
+            constexpr const char *n =
+                std::define_static_string(qualified_type_spelling(^^T));
             return std::string(n);
         }
 
@@ -1304,9 +1415,12 @@ endif()
         }
 
         // Whether the member function Fn is one of an overload set: more than
-        // one exportable member function of its declaring class shares its
-        // name. Baked into GenMethod::is_overloaded — the bare `&T::name` the
-        // emitters spell is ambiguous for an overload set, so they skip it.
+        // one exportable member function of its DECLARING CLASS shares its name.
+        // Baked into GenMethod::is_overloaded, which is what tells an emitter it
+        // must disambiguate `&T::name` with a static_cast (see
+        // px_member_pointer). Deliberately a question about the C++ source and
+        // not about the IR: gating may leave a single entry of the set in the
+        // IR, and the member pointer would still be ambiguous.
         template <std::meta::info Fn> consteval bool fn_is_overloaded() {
             constexpr auto parent = std::meta::parent_of(Fn);
             if constexpr (!std::meta::is_class_type(parent)) {
