@@ -220,11 +220,12 @@ local {{LIB}} = require("{{LIB}}")
         }
 
         inline bool lx_method_ok(const GenMethod &m, const GenContext &c) {
-            // Overload set: the bare `&T::name` the emitter spells would be
-            // ambiguous — skip the whole set.
-            if (m.is_overloaded) {
-                return false;
-            }
+            // An overload set is NOT rejected here: lua_method always spells an
+            // explicit static_cast to the exact signature, so the member pointer
+            // is unambiguous. Which entry of the set gets to bind is a separate
+            // question, settled by the first_only policy at the call site —
+            // sol2's `c["name"] = …` is an assignment, so a second one would
+            // simply overwrite the first.
             if (m.ret.kind != "void" && !lx_marshalable(m.ret, c)) {
                 return false;
             }
@@ -761,19 +762,36 @@ local {{LIB}} = require("{{LIB}}")
                 s += lua_field(k, f);
             }
             for (const auto &m : k.methods) {
+                // sol2 binds a method by assigning into the usertype table, so a
+                // second `c["f"] = …` silently REPLACES the first rather than
+                // adding an overload. Lua has no argument-type dispatch to fall
+                // back on, so the first-declared entry binds and the rest are
+                // recorded for the coverage report.
+                if (!coverage::emit_overload(coverage::overloads::first_only, "lua-expanded", k,
+                                             m)) {
+                    continue;
+                }
                 if (seq_touches(m)) {
                     // Foreign sequence in the signature: table-accepting
                     // adapter or nothing (sol2 has no usertype for the
                     // foreign container).
                     if (lx_seq_eligible(m, c)) {
                         s += lx_seq_method(k, m);
+                        coverage::note_bound("lua-expanded", k, m);
+                    } else {
+                        coverage::note_skip("lua-expanded", k, m, "sequence_not_adaptable",
+                                            "a registered sequence in the signature has no "
+                                            "std::vector boundary adapter for this backend");
                     }
                     continue;
                 }
                 if (!lx_method_ok(m, c)) {
+                    coverage::note_skip("lua-expanded", k, m, "unmarshalable_signature",
+                                        "sol2 has no conversion for a type in this signature");
                     continue; // signature the emitted sol2 line could not compile
                 }
                 s += lua_method(k, m);
+                coverage::note_bound("lua-expanded", k, m);
             }
             s += "    }\n";
             return s;

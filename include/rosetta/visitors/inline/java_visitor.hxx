@@ -144,8 +144,11 @@ namespace rosetta {
                 }
             }
 
+            // `ops.call` / `ops.scall` are maps keyed by the method name, so a
+            // second entry would overwrite the first rather than overload it —
+            // only the first-declared entry of a set binds (first_overload).
             template <std::meta::info Fn, auto... /*Anns*/> void method_instance(const char *name) {
-                if constexpr (method_supported<Fn>()) {
+                if constexpr (method_supported<Fn>() && first_overload<T, Fn>()) {
                     Store<T> &st   = store_of<T>();
                     ops.call[name] = [&st](int id, const json &args) -> json {
                         T *p = st.find(id);
@@ -160,7 +163,7 @@ namespace rosetta {
             }
 
             template <std::meta::info Fn, auto... /*Anns*/> void method_static(const char *name) {
-                if constexpr (method_supported<Fn>()) {
+                if constexpr (method_supported<Fn>() && first_overload<T, Fn>()) {
                     ops.scall[name] = [](const json &args) -> json {
                         constexpr auto arity =
                             std::define_static_array(std::meta::parameters_of(Fn)).size();

@@ -1555,6 +1555,27 @@ endif()
             }
         };
 
+        // Fill GenMethod::overload_index / overload_count across one class's
+        // method list. Grouping is by BINDING NAME in declaration order, which is
+        // the collision the target language actually sees — so an extension
+        // method that lands on a member's name joins that set, and this must be
+        // re-run after generate() attaches extensions.
+        inline void number_overloads(std::vector<GenMethod> &methods) {
+            for (std::size_t i = 0; i < methods.size(); ++i) {
+                std::size_t index = 0;
+                std::size_t count = 0;
+                for (std::size_t j = 0; j < methods.size(); ++j) {
+                    if (methods[j].name != methods[i].name) {
+                        continue;
+                    }
+                    index += (j < i) ? 1 : 0;
+                    ++count;
+                }
+                methods[i].overload_index = index;
+                methods[i].overload_count = count;
+            }
+        }
+
         // A readable type name for human docs: vectors as `element[]`, everything
         // else its prettified C++ spelling (falling back to the neutral kind).
         inline std::string readable_type(const GenType &t) {
@@ -1687,6 +1708,17 @@ endif()
             }
             IRVisitor<T> v{gc};
             walk<T>(v);
+            // Number each overload set now that the walk has filled `methods`:
+            // these ordinals describe what reached the IR (see GenMethod), so
+            // they can only be computed once it is complete.
+            number_overloads(gc.methods);
+            // Members the walk itself dropped — operators, member templates,
+            // base overloads hidden by a derived declaration. Recorded for the
+            // coverage report; no backend reads them.
+            constexpr auto drops = std::define_static_array(detail::member_drop_texts(^^T));
+            for (const drop_text &d : drops) {
+                gc.dropped.push_back(GenDrop{d.member, d.signature, d.reason});
+            }
             // Render the doc fragment after the walk has filled fields/methods.
             gc.doc = class_markdown(gc);
             return gc;
@@ -2182,6 +2214,11 @@ namespace rosetta {
             m.ext_qualified = ext.fn.qualified;
             m.ext_header    = ext.fn.header;
             target->methods.push_back(std::move(m));
+            // An extension can land on a member's name, which makes it part of
+            // that overload set as far as the target language is concerned — so
+            // the ordinals have to be recomputed now rather than left at what
+            // describe<T>() saw.
+            gen_detail::number_overloads(target->methods);
             // Refresh the class doc fragment so extension methods show up in
             // the markdown/html output like any other method.
             target->doc = gen_detail::class_markdown(*target);
@@ -2233,6 +2270,24 @@ namespace rosetta {
                                         gen_detail::collect_interop(classes, opt.functions),
                                         t.artifact_dir, t.python, t.requires_python,
                                         t.napi_version, t.node_engine});
+        }
+
+        // The coverage report, once every target has emitted and had its say.
+        // Written unconditionally: the value of the file is that it is always
+        // there to diff, and an empty skip list is itself the useful answer.
+        // A failure to write is a warning — nothing about the generated bindings
+        // depends on this file, and losing the report must not fail a build.
+        {
+            const std::filesystem::path path = opt.out_dir / "coverage.json";
+            std::error_code             ec;
+            std::filesystem::create_directories(opt.out_dir, ec);
+            std::ofstream out(path);
+            if (out) {
+                out << coverage::to_json(classes);
+            } else {
+                std::fprintf(stderr, "rosetta::generate: could not write %s — skipped\n",
+                             path.string().c_str());
+            }
         }
     }
 

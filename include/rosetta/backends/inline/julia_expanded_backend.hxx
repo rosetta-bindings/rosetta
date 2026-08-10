@@ -491,11 +491,19 @@ using .{{LIB}}
                 }
                 s += jx_field(k, f);
             }
+            // Every overload binds: jlcxx registers each one as a Julia method
+            // of the same name, and Julia's multiple dispatch picks by argument
+            // type at call time — the one target language where an overload set
+            // maps onto the host's own idiom exactly. jx_method spells an
+            // explicit cast, so the C++ member pointer is unambiguous.
             for (const auto &m : k.methods) {
                 if (!jx_method_ok(m, c)) {
+                    coverage::note_skip("julia-expanded", k, m, "unmarshalable_signature",
+                                        "jlcxx has no conversion for a type in this signature");
                     continue; // signature the emitted jlcxx line could not compile
                 }
                 s += jx_method(k, m);
+                coverage::note_bound("julia-expanded", k, m);
             }
             s += "    }\n";
             return s;

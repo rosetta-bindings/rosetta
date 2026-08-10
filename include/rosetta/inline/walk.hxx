@@ -58,69 +58,179 @@ namespace rosetta {
 
     namespace detail {
 
+        // Working state for one collect_members recursion. Bundled into a struct
+        // because the walk now tracks five parallel things and threading them as
+        // separate out-parameters made the recursive call unreadable.
+        struct collect_state {
+            std::vector<std::meta::info>  fields;
+            std::vector<std::meta::info>  methods;
+            std::vector<std::string_view> seen_fields;
+
+            // Method names introduced by an ALREADY-processed (i.e. more-derived)
+            // class. A base declaration of such a name is hidden — see the
+            // name-hiding note in collect_members.
+            std::vector<std::string_view> hidden_methods;
+
+            // The (name, function-type) pairs already emitted, as parallel
+            // vectors. Deduping on the PAIR is what lets an overload set survive
+            // while a diamond-shared base member is still emitted once.
+            std::vector<std::string_view> sig_names;
+            std::vector<std::meta::info>  sig_types;
+
+            std::vector<member_drop>      drops;
+            std::vector<std::meta::info>  seen_types;
+        };
+
         // Collect exportable fields and methods across `type` and all its public
-        // bases. Members are deduped by identifier so that a derived declaration
-        // shadows a base one (most-derived wins) and a diamond-shared base is
-        // emitted exactly once. `seen_types` guards against re-walking a shared
-        // (e.g. virtual) base subobject, so a diamond lattice stays linear.
+        // bases.
+        //
+        // Methods are deduped by (identifier, function type), so a class's whole
+        // OVERLOAD SET reaches the visitor — `at(int)` and `at(int, int)` are
+        // distinct entries, not one survivor. Two situations still collapse to a
+        // single emission:
+        //
+        //   * a diamond-shared base member, reached along two paths, whose name
+        //     AND signature are identical (also guarded structurally by
+        //     `seen_types`);
+        //   * a derived override of a base virtual — same name, same signature,
+        //     and the derived one is seen first, so it wins.
+        //
+        // Base declarations are subject to C++ NAME HIDING: if a more-derived
+        // class declares `f` at all, every base `f` is dropped, whatever its
+        // signature — the same thing a C++ caller sees without a `using Base::f`.
+        // Binding the hidden base overloads would hand scripts a call the C++ API
+        // does not offer. Each one is recorded in `drops` so the coverage report
+        // can name it rather than leaving it to be discovered by its absence.
+        //
+        // Two DIFFERENT bases declaring the same name is left alone: both sets
+        // are emitted. Such a call is ambiguous in C++ without qualification, but
+        // the binding has no ambiguity to resolve — each entry is spliced from
+        // its own reflection — so binding both beats binding neither.
         //
         // Own members are processed before bases, so on a name clash the
-        // most-derived declaration is the one that survives the dedup.
-        consteval void collect_members(std::meta::info type,
-                                       std::vector<std::meta::info> &fields,
-                                       std::vector<std::meta::info> &methods,
-                                       std::vector<std::string_view> &seen_fields,
-                                       std::vector<std::string_view> &seen_methods,
-                                       std::vector<std::meta::info> &seen_types) {
+        // most-derived declaration is the one that survives.
+        consteval void collect_members(std::meta::info type, collect_state &st) {
             auto ctx = std::meta::access_context::current();
             auto canon = std::meta::dealias(type);
 
-            for (auto t : seen_types)
+            for (auto t : st.seen_types)
                 if (t == canon)
                     return;
-            seen_types.push_back(canon);
+            st.seen_types.push_back(canon);
 
-            auto contains = [](std::vector<std::string_view> &xs, std::string_view n) {
+            auto contains = [](const std::vector<std::string_view> &xs, std::string_view n) {
                 for (auto x : xs)
                     if (x == n)
                         return true;
                 return false;
             };
+            auto contains_sig = [&](std::string_view n, std::meta::info t) {
+                for (std::size_t i = 0; i < st.sig_names.size(); ++i)
+                    if (st.sig_names[i] == n && st.sig_types[i] == t)
+                        return true;
+                return false;
+            };
 
-            // Own data members (declaration order), then own methods.
+            // Own data members (declaration order), then own methods. Fields
+            // cannot overload, so they keep the plain by-name dedup.
             for (auto f : std::meta::nonstatic_data_members_of(canon, ctx)) {
                 auto id = std::meta::identifier_of(f);
-                if (!contains(seen_fields, id)) {
-                    seen_fields.push_back(id);
-                    fields.push_back(f);
+                if (!contains(st.seen_fields, id)) {
+                    st.seen_fields.push_back(id);
+                    st.fields.push_back(f);
                 }
             }
+
+            // Names this class introduces. Collected into a local list and only
+            // merged into `hidden_methods` AFTER the loop: a class's own
+            // overloads must not hide each other.
+            std::vector<std::string_view> own_names;
             for (auto m : std::meta::members_of(canon, ctx)) {
-                if (is_exportable_member_function(m)) {
-                    auto id = std::meta::identifier_of(m);
-                    if (!contains(seen_methods, id)) {
-                        seen_methods.push_back(id);
-                        methods.push_back(m);
-                    }
+                if (std::meta::is_function_template(m)) {
+                    // A member template has no fixed parameter pack to splice;
+                    // only an explicit instantiation could be bound.
+                    st.drops.push_back({m, drop_reason::function_template});
+                    continue;
+                }
+                if (!std::meta::is_function(m) || std::meta::is_constructor(m) ||
+                    std::meta::is_destructor(m) || std::meta::is_special_member_function(m)) {
+                    continue; // not a member function, or a copy/move special
+                }
+                if (!std::meta::has_identifier(m)) {
+                    // operator==, operator[], operator T — no plain identifier to
+                    // bind to a target-language name.
+                    st.drops.push_back({m, drop_reason::no_identifier});
+                    continue;
+                }
+                auto id = std::meta::identifier_of(m);
+                if (contains(st.hidden_methods, id)) {
+                    st.drops.push_back({m, drop_reason::hidden_by_derived});
+                    continue;
+                }
+                auto ty = std::meta::type_of(m);
+                if (contains_sig(id, ty)) {
+                    continue; // diamond duplicate / already-seen override
+                }
+                st.sig_names.push_back(id);
+                st.sig_types.push_back(ty);
+                st.methods.push_back(m);
+                own_names.push_back(id);
+            }
+            for (auto n : own_names) {
+                if (!contains(st.hidden_methods, n)) {
+                    st.hidden_methods.push_back(n);
                 }
             }
 
             // Then recurse into public bases, depth-first.
             for (auto base : std::meta::bases_of(canon, ctx)) {
                 if (std::meta::is_public(base))
-                    collect_members(std::meta::type_of(base), fields, methods,
-                                    seen_fields, seen_methods, seen_types);
+                    collect_members(std::meta::type_of(base), st);
             }
         }
 
         // Flattened, deduped member list: all fields first (mirroring the
         // original fields-then-methods visitation order), then all methods.
         consteval std::vector<std::meta::info> flattened_members(std::meta::info type) {
-            std::vector<std::meta::info> fields, methods, seen_types;
-            std::vector<std::string_view> seen_fields, seen_methods;
-            collect_members(type, fields, methods, seen_fields, seen_methods, seen_types);
-            fields.insert(fields.end(), methods.begin(), methods.end());
-            return fields;
+            collect_state st;
+            collect_members(type, st);
+            st.fields.insert(st.fields.end(), st.methods.begin(), st.methods.end());
+            return st.fields;
+        }
+
+        // The members the walk did NOT hand to the visitor, with the reason. Fed
+        // to the coverage report by gen_detail::describe<T>(); nothing in the
+        // binding path consults it.
+        consteval std::vector<member_drop> member_drops(std::meta::info type) {
+            collect_state st;
+            collect_members(type, st);
+            return st.drops;
+        }
+
+        // The same list with every name resolved to a static string, ready to be
+        // copied into GenClass::dropped by ordinary runtime code. Note
+        // display_string_of rather than identifier_of: a dropped operator has no
+        // identifier at all (asking for one is a hard error), and its display
+        // spelling — "operator==" — is exactly what the report should show.
+        consteval std::vector<drop_text> member_drop_texts(std::meta::info type) {
+            std::vector<drop_text> out;
+            for (const member_drop &d : member_drops(type)) {
+                // A function TEMPLATE has no type to ask for — type_of() on one
+                // is ill-formed — so it reports an empty signature. Everything
+                // else (operators included) has one.
+                const char *sig =
+                    (d.reason == drop_reason::function_template)
+                        ? std::define_static_string("")
+                        : std::define_static_string(
+                              std::meta::display_string_of(std::meta::type_of(d.member)));
+                // Every string here must go through define_static_string: these
+                // become template arguments via define_static_array below, and a
+                // pointer into a string literal is not a valid one.
+                out.push_back(drop_text{
+                    std::define_static_string(std::meta::display_string_of(d.member)), sig,
+                    std::define_static_string(drop_reason_name(d.reason))});
+            }
+            return out;
         }
 
         // Annotation pack for one member: the user-authored / JSON side-car
@@ -141,6 +251,23 @@ namespace rosetta {
         }
 
     } // namespace detail
+
+    template <typename T, std::meta::info Fn> consteval bool first_overload() {
+        // Scan the same flattened list walk<T> visits, in the same order, and
+        // report whether Fn is the first entry carrying its name. Deriving it
+        // from that list rather than from members_of(parent) is what makes it
+        // agree with the walk in the cases that differ: an inherited method, a
+        // derived declaration that hides a base set, a diamond-shared base.
+        for (std::meta::info m : detail::flattened_members(^^T)) {
+            if (!is_exportable_member_function(m)) {
+                continue; // a field: same list, fields first
+            }
+            if (std::meta::identifier_of(m) == std::meta::identifier_of(Fn)) {
+                return m == Fn;
+            }
+        }
+        return true; // not found (a synthesized entry) — do not suppress it
+    }
 
     template <typename T, typename Visitor> void walk(Visitor &v) {
         // -------- fields + methods, flattened across public bases --------

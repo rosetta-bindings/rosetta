@@ -720,10 +720,22 @@ namespace rosetta_wx {
                 segs.push_back(wx_field_segment(k, f));
             }
             for (const auto &m : k.methods) {
+                // embind registers a method BY NAME: a second .function("f", …)
+                // on the same class is not an overload, it is a duplicate
+                // registration that throws BindingError when the module
+                // initialises. Only the first-declared overload can bind; the
+                // rest are recorded for the coverage report.
+                if (!coverage::emit_overload(coverage::overloads::first_only, "wasm-expanded", k,
+                                             m)) {
+                    continue;
+                }
                 if (seq_touches(m)) {
                     // Foreign sequence in the signature: adapter or nothing
                     // (embind has no type for the foreign container).
                     if (!wx_seq_eligible(m, c)) {
+                        coverage::note_skip("wasm-expanded", k, m, "sequence_not_adaptable",
+                                            "a registered sequence in the signature has no "
+                                            "std::vector boundary adapter for this backend");
                         continue;
                     }
                     const WxSeqSig sig = wx_seq_sig(m.params, m.param_cpp);
@@ -745,9 +757,14 @@ namespace rosetta_wx {
                     segs.push_back((m.is_static ? ".class_function(\"" : ".function(\"") +
                                    m.name + "\", +[](" + decls + ") {\n" + body +
                                    "        })");
+                    coverage::note_bound("wasm-expanded", k, m);
                     continue;
                 }
                 if (!wx_method_ok(m, c)) {
+                    coverage::note_skip("wasm-expanded", k, m, "unmarshalable_signature",
+                                        "embind has no conversion for a type in this signature "
+                                        "(e.g. a std::function parameter, or a pointer to an "
+                                        "unbound class)");
                     continue; // unmarshalable signature (e.g. std::function param)
                 }
                 // Extension method: bind the free function directly — embind
@@ -755,6 +772,7 @@ namespace rosetta_wx {
                 // (by ref) as an instance method.
                 if (m.is_extension) {
                     segs.push_back(".function(\"" + m.name + "\", &" + m.ext_qualified + ")");
+                    coverage::note_bound("wasm-expanded", k, m);
                     continue;
                 }
                 if (wx_params_have_callback(m.params)) {
@@ -763,6 +781,9 @@ namespace rosetta_wx {
                     // an emscripten::val. embind's static member functions can't take
                     // a receiver this way, so a static callback method is left out.
                     if (m.is_static) {
+                        coverage::note_skip("wasm-expanded", k, m, "static_callback_receiver",
+                                            "embind cannot give a static member function the "
+                                            "receiver argument the callback adapter needs");
                         continue;
                     }
                     const WxAdapterParams ad = wx_adapter_params(m.param_cpp, m.params);
@@ -776,6 +797,7 @@ namespace rosetta_wx {
                         wx_method_has_raw_ptr(m) ? ", emscripten::allow_raw_pointers()" : "";
                     segs.push_back(".function(\"" + m.name + "\", +[](" + decls + ") {\n" + body +
                                    "        }" + policy + ")");
+                    coverage::note_bound("wasm-expanded", k, m);
                     continue;
                 }
                 // Disambiguate the member-function pointer with an explicit cast to
@@ -807,6 +829,7 @@ namespace rosetta_wx {
                     wx_method_has_raw_ptr(m) ? ", emscripten::allow_raw_pointers()" : "";
                 segs.push_back((m.is_static ? ".class_function(\"" : ".function(\"") + m.name +
                                "\", " + mp + policy + ")");
+                coverage::note_bound("wasm-expanded", k, m);
             }
 
             std::string s =

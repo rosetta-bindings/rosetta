@@ -445,6 +445,12 @@ namespace rosetta {
     template <typename T>
     template <std::meta::info Fn, auto... Anns>
     inline void QtVisitor<T>::method_instance(const char *name) {
+        // No first_overload guard here, unlike the QML / node / embind visitors:
+        // this builds an independent widget row per method and never keys one by
+        // name, so each overload of a set gets its own row wired to its own
+        // spliced Fn. Two rows labelled "f" that take different arguments is a
+        // fair rendering of an overload set in an inspector — and strictly more
+        // useful than hiding all but one.
         constexpr auto dann     = ann::get_or<doc>(doc{""}, Anns...);
         constexpr auto btn      = ann::get_or<button>(button{}, Anns...);
         constexpr auto lbl      = ann::get_or<label>(label{""}, Anns...);

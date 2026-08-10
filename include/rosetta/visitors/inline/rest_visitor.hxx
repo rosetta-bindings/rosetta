@@ -191,8 +191,10 @@ namespace rosetta {
             } // rest_supported<F>
         }
 
+        // A route is a URL path, and two overloads would register the same
+        // path twice — only the first-declared entry of a set binds.
         template <std::meta::info Fn, auto... /*Anns*/> void method_instance(const char *name) {
-            if constexpr (detail::method_supported<Fn>()) {
+            if constexpr (detail::method_supported<Fn>() && first_overload<T, Fn>()) {
             auto *sp  = store_ptr;
             auto  url = base + R"(/(\d+)/)" + name;
 
@@ -217,7 +219,7 @@ namespace rosetta {
         }
 
         template <std::meta::info Fn, auto... /*Anns*/> void method_static(const char *name) {
-            if constexpr (detail::method_supported<Fn>()) {
+            if constexpr (detail::method_supported<Fn>() && first_overload<T, Fn>()) {
             auto url = base + "/" + name;
 
             server.Post(url, [](const httplib::Request &req, httplib::Response &res) {

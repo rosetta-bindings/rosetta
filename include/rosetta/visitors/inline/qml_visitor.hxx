@@ -265,6 +265,12 @@ namespace rosetta {
     template <typename T>
     template <std::meta::info Fn, auto... Anns>
     inline void QmlVisitor<T>::method_instance(const char *name) {
+        // registerInvoker keys the callable by name, and the QML side calls it
+        // by that name with an untyped QVariantList — there is nothing to
+        // dispatch a second overload on. Only the first-declared entry binds.
+        if constexpr (!first_overload<T, Fn>()) {
+            return;
+        } else {
         constexpr auto dann     = ann::get_or<doc>(doc{""}, Anns...);
         constexpr auto btn      = ann::get_or<button>(button{}, Anns...);
         constexpr auto lbl      = ann::get_or<label>(label{""}, Anns...);
@@ -296,6 +302,7 @@ namespace rosetta {
             return qml_detail::invoke_method_impl<Fn>(*tgt, args,
                                                      std::make_index_sequence<arity>{});
         });
+        }
     }
 
     template <typename T>

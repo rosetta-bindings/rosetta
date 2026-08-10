@@ -101,14 +101,17 @@ namespace rosetta {
             }
         }
 
+        // embind keys a method by name — a second .function("f", …) is a
+        // duplicate registration that throws at module init, not an overload —
+        // so only the first-declared entry of a set binds (first_overload).
         template <std::meta::info Fn, auto... /*Anns*/> void method_instance(const char *name) {
-            if constexpr (wasm_bindable_fn<Fn>()) {
+            if constexpr (wasm_bindable_fn<Fn>() && first_overload<T, Fn>()) {
                 cls.function(name, &[:Fn:]);
             }
         }
 
         template <std::meta::info Fn, auto... /*Anns*/> void method_static(const char *name) {
-            if constexpr (wasm_bindable_fn<Fn>()) {
+            if constexpr (wasm_bindable_fn<Fn>() && first_overload<T, Fn>()) {
                 cls.class_function(name, &[:Fn:]);
             }
         }

@@ -547,8 +547,11 @@ namespace rosetta {
             }
         }
 
+        // N-API property descriptors are keyed by name and JS cannot dispatch
+        // on argument types, so only the first-declared entry of an overload set
+        // binds (first_overload) — matching the node-expanded emitter.
         template <std::meta::info Fn, auto... Anns> void method_instance(const char *name) {
-            if constexpr (method_supported<Fn>()) {
+            if constexpr (method_supported<Fn>() && first_overload<T, Fn>()) {
                 props.push_back(
                     This::template InstanceMethod<&This::template call_method<Fn>>(name));
                 if constexpr (ann::has<virtual_spec>(Anns...)) {
@@ -560,7 +563,7 @@ namespace rosetta {
         }
 
         template <std::meta::info Fn, auto... /*Anns*/> void method_static(const char *name) {
-            if constexpr (method_supported<Fn>()) {
+            if constexpr (method_supported<Fn>() && first_overload<T, Fn>()) {
                 props.push_back(
                     This::template StaticMethod<&This::template call_static<Fn>>(name));
             }

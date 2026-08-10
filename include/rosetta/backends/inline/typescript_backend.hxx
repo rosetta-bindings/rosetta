@@ -125,11 +125,20 @@ namespace rosetta {
                     // Same visibility rule as the runtime backends: a
                     // non-copyable class return or a non-copyable by-value
                     // parameter is skipped there, so don't declare it here
-                    // either. An overload set IS declared — the runtime
-                    // backends bind its surviving (first-declared) entry via
-                    // an explicit-signature cast / a by-name adapter. A
-                    // signature touching a foreign sequence follows the
-                    // adapter rule: declared iff adaptable, hidden otherwise.
+                    // either. A signature touching a foreign sequence follows
+                    // the adapter rule: declared iff adaptable, hidden
+                    // otherwise.
+                    //
+                    // Overloads follow the NODE runtime rather than what
+                    // TypeScript could express. TypeScript does support
+                    // declaration overloads, but this .d.ts describes the N-API
+                    // module, which binds only the first-declared entry — so
+                    // declaring the others would promise the caller a method
+                    // that is not there, which is worse than not declaring it.
+                    if (!coverage::emit_overload(coverage::overloads::first_only, "typescript", k,
+                                                 m)) {
+                        continue;
+                    }
                     bool visible;
                     if (seq_touches(m)) {
                         visible = seq_adaptable(m);

@@ -53,6 +53,7 @@ Everything below is discovered by **reflection** from your unmodified headers �
 - **Public methods** — both instance and `static` members.
 - **Inheritance** — public base-class fields and methods are flattened into the derived binding; a derived declaration shadows the base one (most-derived wins) and a virtual diamond collapses to a single member. Virtual / overriding methods are flagged (`virtual_spec`) so backends can tell them apart from plain ones.
 - **Multiple constructors** — default *and* parameterized; each overload is bound.
+- **Overloaded methods** — the whole set reaches the binding. Targets whose runtime dispatches on argument types (pybind11, nanobind, jlcxx) bind every overload; targets that key a method by name (embind, N-API, sol2, C#/Java, REST) bind the first-declared one and report the rest — see [overloads and coverage](docs/COVERAGE.md).
 - **Enums** — `enum` / `enum class`, with enumerators surfaced as named constants.
 - **Free (non-member) functions** — declared in the [manifest](./docs/MANIFEST.md), no edit to your headers ([details](docs/FREE_FUNCTIONS.md)).
 - **Nested user types & `std::vector`** — `Surface` returning `Point`/`Triangle`, vector members, etc. are marshalled across the language boundary.

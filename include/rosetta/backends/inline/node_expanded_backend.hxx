@@ -273,7 +273,10 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
 
         inline bool nx_method_ok(const GenMethod &m) {
             // Overload set: `&T::name` in the thunk template argument would be
-            // ambiguous — skip the whole set.
+            // ambiguous. The emitter routes such a method through the free
+            // adapter path instead (which calls by name), so reaching here with
+            // is_overloaded means the member-pointer spelling was about to be
+            // used — reject it.
             if (m.is_overloaded) {
                 return false;
             }
@@ -362,12 +365,25 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             // their free function through ext_method (receiver = the wrapped
             // object) instead of a member pointer.
             for (const auto &m : k.methods) {
+                // N-API property descriptors are keyed by name: two
+                // InstanceMethod entries called "f" are a duplicate, not an
+                // overload, and the two free adapters below would collide on
+                // the same C++ function name. JS cannot dispatch on argument
+                // types, so only the first-declared overload binds; the rest
+                // are recorded for the coverage report.
+                if (!coverage::emit_overload(coverage::overloads::first_only, "node-expanded", k,
+                                             m)) {
+                    continue;
+                }
                 if (seq_touches(m)) {
                     // Foreign sequence in the signature: free-adapter or
                     // nothing (from_napi has no conversion for the foreign
                     // type; overloaded sets are fine here, see the adapter
                     // notes above).
                     if (!seq_adaptable(m) || !nx_seq_rest_ok(m)) {
+                        coverage::note_skip("node-expanded", k, m, "sequence_not_adaptable",
+                                            "a registered sequence in the signature has no "
+                                            "std::vector boundary adapter for this backend");
                         continue;
                     }
                     const std::string an = "seq_" + kx + "_" + m.name; // identifier-safe
@@ -386,18 +402,23 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                         s += "        props.push_back(This::InstanceMethod<&This::ext_method<"
                              "&rosetta_nx_seq::" + an + ">>(\"" + m.name + "\"));\n";
                     }
+                    coverage::note_bound("node-expanded", k, m);
                     continue;
                 }
                 if (m.is_overloaded && !m.is_extension) {
                     // Overload set: `&T::name` in the thunk template argument
-                    // would be ambiguous. Bind the surviving (first-declared)
-                    // entry through a free adapter that calls by NAME with
-                    // concrete arguments — same trick as the sequence path.
+                    // would be ambiguous. The entry that got past the gate above
+                    // (the first-declared one) binds through a free adapter that
+                    // calls by NAME with concrete arguments — same trick as the
+                    // sequence path.
                     GenMethod probe    = m;
                     probe.is_overloaded = false;
                     if (!nx_method_ok(probe)) {
+                        coverage::note_skip("node-expanded", k, m, "unmarshalable_signature",
+                                            "no N-API conversion for a type in this signature");
                         continue; // the survivor's own signature fails the gates
                     }
+                    coverage::note_bound("node-expanded", k, m);
                     const std::string an = "ovl_" + kx + "_" + m.name;
                     if (m.is_static) {
                         adapters += nx_seq_adapter_def(an, "", m, self + "::" + m.name);
@@ -411,11 +432,16 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     continue;
                 }
                 if (!nx_method_ok(m)) {
+                    coverage::note_skip("node-expanded", k, m, "unmarshalable_signature",
+                                        "no N-API conversion for a type in this signature "
+                                        "(e.g. a std::function parameter, or a non-const "
+                                        "reference the converted temporary cannot bind to)");
                     continue;
                 }
                 if (m.is_extension) {
                     s += "        props.push_back(This::InstanceMethod<&This::ext_method<&" +
                          m.ext_qualified + ">>(\"" + m.name + "\"));\n";
+                    coverage::note_bound("node-expanded", k, m);
                     continue;
                 }
                 const std::string mp = "&" + self + "::" + m.name;
@@ -426,6 +452,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     s += "        props.push_back(This::InstanceMethod<&This::call_method<" + mp +
                          ">>(\"" + m.name + "\"));\n";
                 }
+                coverage::note_bound("node-expanded", k, m);
             }
 
             s += "        Napi::Function ctor = This::DefineClass(env, \"" + kx + "\", props);\n";

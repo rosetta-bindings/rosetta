@@ -586,6 +586,40 @@ script once per interpreter.)MD";
             return true;
         }
 
+        // Why px_method_ok said no, as one human sentence for the coverage
+        // report. Deliberately mirrors that function's gates in the same order:
+        // a reason that drifts out of step with the decision is worse than no
+        // reason, so the two are meant to be read (and edited) side by side.
+        inline std::string px_skip_reason(const GenMethod &m, const GenContext &c) {
+            if (!px_marshalable(m.ret, c)) {
+                return "no pybind11 type-caster for the return type '" +
+                       (m.ret_cpp.empty() ? m.ret.spelling : m.ret_cpp) + "'";
+            }
+            if (m.ret.kind == "object" && !m.ret.copy_constructible) {
+                return "returns '" + m.ret.spelling +
+                       "' by value or by reference, and it is not copy-constructible (pybind's "
+                       "automatic return policy copies)";
+            }
+            if (m.ret.kind == "vector" && !px_copyable(m.ret)) {
+                return "returns a vector whose element type is not copyable";
+            }
+            for (std::size_t i = 0; i < m.params.size(); ++i) {
+                const GenParam   &p  = m.params[i];
+                const std::string at = " (parameter " + std::to_string(i + 1) + ")";
+                if (!px_marshalable(p.type, c)) {
+                    return "no pybind11 type-caster for '" + p.type.spelling + "'" + at;
+                }
+                if (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) {
+                    return "takes '" + p.type.spelling +
+                           "' by value and it is not copy-constructible" + at;
+                }
+                if (p.type.kind == "vector" && !px_copyable(p.type)) {
+                    return "takes a vector whose element type is not copyable" + at;
+                }
+            }
+            return "rejected by the python-expanded marshalling gates";
+        }
+
         // Explicit pybind for one enum: py::enum_<E>(m,"E").value("A", E::A)...;
         inline std::string expanded_enum(const GenEnum &e) {
             const std::string eq = qualified_of(e);
@@ -822,12 +856,13 @@ script once per interpreter.)MD";
             return s;
         }
 
-        // Explicit pybind for one method. Overloads are deduped by name in the
-        // walk; the surviving (first-declared) entry is flagged is_overloaded
-        // and binds through an explicit static_cast to its exact signature —
-        // the bare &T::m member pointer would be ambiguous for the set. An
-        // extension method binds its free function instead — pybind treats a
-        // free function whose first parameter is T& as an instance method.
+        // Explicit pybind for one method. EVERY overload of a name binds: pybind11
+        // collects repeated .def("name", …) into one overload set and dispatches
+        // on the argument types at call time, so `at(i)` and `at(i, j)` both reach
+        // Python under the same name. Each is spelled through px_member_pointer,
+        // which casts away the &T::m ambiguity. An extension method binds its free
+        // function instead — pybind treats a free function whose first parameter
+        // is T& as an instance method.
         //
         // A raw-pointer return (Model::addSurface() -> Surface*) rides
         // reference_internal (plain reference for a static): pybind's automatic
@@ -852,6 +887,46 @@ script once per interpreter.)MD";
                    m.ret_cpp.rfind("const", 0) != 0 && px_is_bound_class(m.ret, c);
         }
 
+        // The member-function-pointer expression for `m`, disambiguated when it
+        // needs to be. `&T::name` names an OVERLOAD SET, not a function, so for
+        // any name the C++ class declares more than once it must be resolved by
+        // an explicit cast to this entry's exact signature — otherwise the
+        // emitted line does not compile. Every expanded backend that spells a
+        // member pointer needs exactly this, so it lives here (python-expanded is
+        // included before the others — see the include block in generate.hxx) and
+        // is shared rather than re-derived per backend.
+        //
+        // Note the gate is `is_overloaded` (does the C++ class overload the
+        // name?) and NOT `overload_count` (how many entries reached the IR): a
+        // set whose siblings were all gated out still needs the cast.
+        inline std::string px_member_pointer(const GenClass &k, const GenMethod &m) {
+            const std::string kq = qualified_of(k);
+            const std::string mp = "&" + kq + "::" + m.name;
+            if (!m.is_overloaded) {
+                return mp;
+            }
+            std::string args;
+            for (std::size_t j = 0; j < m.param_cpp.size(); ++j) {
+                std::string one = qualify_std(m.param_cpp[j]);
+                if (j < m.params.size()) {
+                    one = qualify_objects(std::move(one), m.params[j].type);
+                }
+                args += (j ? ", " : "") + one;
+            }
+            std::string quals;
+            if (m.is_const) {
+                quals += " const";
+            }
+            if (m.is_noexcept) {
+                quals += " noexcept";
+            }
+            const std::string ret = qualify_objects(qualify_std(m.ret_cpp), m.ret);
+            const std::string fp  = m.is_static
+                                        ? (ret + " (*)(" + args + ")" + quals)
+                                        : (ret + " (" + kq + "::*)(" + args + ")" + quals);
+            return "static_cast<" + fp + ">(" + mp + ")";
+        }
+
         inline std::string expanded_method(const GenClass &k, const GenMethod &m,
                                            const GenContext &c) {
             const std::string dq = doc_arg(m.doc);
@@ -862,30 +937,7 @@ script once per interpreter.)MD";
                     px_ref_return(m, c) ? ", py::return_value_policy::reference_internal" : "";
                 return "    c.def(\"" + m.name + "\", &" + m.ext_qualified + ep + dq + ");\n";
             }
-            const std::string kq = qualified_of(k);
-            std::string       mp = "&" + kq + "::" + m.name;
-            if (m.is_overloaded) {
-                std::string args;
-                for (std::size_t j = 0; j < m.param_cpp.size(); ++j) {
-                    std::string one = qualify_std(m.param_cpp[j]);
-                    if (j < m.params.size()) {
-                        one = qualify_objects(std::move(one), m.params[j].type);
-                    }
-                    args += (j ? ", " : "") + one;
-                }
-                std::string quals;
-                if (m.is_const) {
-                    quals += " const";
-                }
-                if (m.is_noexcept) {
-                    quals += " noexcept";
-                }
-                const std::string ret = qualify_objects(qualify_std(m.ret_cpp), m.ret);
-                const std::string fp  = m.is_static
-                                            ? (ret + " (*)(" + args + ")" + quals)
-                                            : (ret + " (" + kq + "::*)(" + args + ")" + quals);
-                mp = "static_cast<" + fp + ">(" + mp + ")";
-            }
+            const std::string mp = px_member_pointer(k, m);
             const std::string policy =
                 m.ret.is_pointer
                     ? (m.is_static ? ", py::return_value_policy::reference"
@@ -1133,13 +1185,21 @@ script once per interpreter.)MD";
                     // px_seq_method).
                     if (seq_adaptable(m) && px_seq_rest_ok(m, c)) {
                         s += indent(px_seq_method(k, m));
+                        coverage::note_bound("python-expanded", k, m);
+                    } else {
+                        coverage::note_skip("python-expanded", k, m, "sequence_not_adaptable",
+                                            "a registered sequence in the signature has no "
+                                            "std::vector boundary adapter for this backend");
                     }
                     continue;
                 }
                 if (!px_method_ok(m, c)) {
+                    coverage::note_skip("python-expanded", k, m, "unmarshalable_signature",
+                                        px_skip_reason(m, c));
                     continue; // signature the emitted pybind line could not compile
                 }
                 s += indent(expanded_method(k, m, c));
+                coverage::note_bound("python-expanded", k, m);
             }
             s += "    }\n";
             return s;

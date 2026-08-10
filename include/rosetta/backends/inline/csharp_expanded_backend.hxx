@@ -166,10 +166,31 @@ ROSETTA_CS_EXPORT void rosetta_csharp_free(char *p) { std::free(p); }
             // Methods → call (instance) / call_function (static; a static member
             // is a plain function pointer).
             for (const auto &m : k.methods) {
-                if (m.is_extension || !jsonable_method(m)) { // extensions: no member pointer
+                // `ops.call` is a map keyed by the method name, so a second
+                // entry for the same name overwrites the first rather than
+                // adding an overload — and the host language's marshalling goes
+                // through JSON, which carries no C++ types to dispatch on. Only
+                // the first-declared overload binds.
+                if (!coverage::emit_overload(coverage::overloads::first_only, "csharp-expanded", k, m)) {
                     continue;
                 }
-                const std::string mp = "&" + t + "::" + m.name;
+                if (m.is_extension || !jsonable_method(m)) { // extensions: no member pointer
+                    coverage::note_skip("csharp-expanded", k, m,
+                                        m.is_extension ? "extension_has_no_member_pointer"
+                                                       : "unmarshalable_signature",
+                                        m.is_extension
+                                            ? "this backend dispatches through a member pointer, "
+                                              "which an extension method does not have"
+                                            : "a type in this signature has no JSON "
+                                              "representation for the op table");
+                    continue;
+                }
+                // px_member_pointer, not the bare `&T::name`: for an overloaded
+                // name the bare form names the whole set, and the template
+                // argument below would not compile at all. (That was true before
+                // the walk started emitting every overload too — the entry that
+                // reached the IR was already unbindable here.)
+                const std::string mp = px_member_pointer(k, m);
                 if (m.is_static) {
                     s += "        ops.scall[\"" + m.name + "\"] = &rosetta::cs::call_function<" + mp +
                          ">;\n";
@@ -177,6 +198,7 @@ ROSETTA_CS_EXPORT void rosetta_csharp_free(char *p) { std::free(p); }
                     s += "        ops.call[\"" + m.name + "\"] = &rosetta::cs::call_method<" + mp +
                          ">;\n";
                 }
+                coverage::note_bound("csharp-expanded", k, m);
             }
 
             // Constructors → construct<T, Args...>, keyed by arity. Skip 0-arg

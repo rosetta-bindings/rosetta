@@ -249,6 +249,19 @@ namespace rosetta {
         double max = 0;
     };
 
+    /**
+     * @brief One member the reflection walk dropped before any backend saw it,
+     * as plain data for the coverage report. `reason` is a stable slug from
+     * rosetta::drop_reason_name() ("no_identifier", "function_template",
+     * "hidden_by_derived"); `signature` is the member's C++ type spelling, which
+     * is what tells two hidden overloads apart.
+     */
+    struct GenDrop {
+        std::string member;
+        std::string signature;
+        std::string reason;
+    };
+
     struct GenField {
         std::string name;
         GenType     type;
@@ -317,13 +330,30 @@ namespace rosetta {
         // returning a non-copyable store&).
         bool ret_is_ref = false;
 
-        // True when the declaring class has MORE THAN ONE member function with
-        // this name. The walk dedups overloads by name (one IR entry survives),
-        // but the emitters spell the bare member pointer `&T::name`, which is
-        // ambiguous for an overload set — the generated line would not compile.
-        // Emitters consult this to skip the whole set (conservative; overload
-        // selection by explicit signature is the planned lift).
+        // True when the DECLARING C++ CLASS has more than one member function
+        // with this name — a property of the source, not of the IR. The bare
+        // member pointer `&T::name` is ambiguous for such a set, so an emitter
+        // that spells one must disambiguate with an explicit static_cast to
+        // this entry's exact signature (ret_cpp / param_cpp / is_const /
+        // is_noexcept carry it). Note this stays true even when gating left a
+        // single entry of the set in the IR: the ambiguity is in the C++, so
+        // the cast is still required.
         bool is_overloaded = false;
+
+        // Position of this entry within the IR's set of same-named methods, in
+        // declaration order, and the size of that set. Unlike `is_overloaded`
+        // these describe what actually REACHED the IR, which is what a backend
+        // needs to act: `overload_count > 1` means the target language sees a
+        // name collision it must resolve.
+        //
+        // A backend whose framework dispatches on argument types (pybind11,
+        // nanobind, jlcxx) binds every entry and ignores both. One that keys
+        // methods by name (embind, N-API, the C#/Java/REST op tables) can only
+        // register a name once, and uses `overload_index == 0` to keep the
+        // first-declared entry — see overload_policy in rosetta/coverage.h,
+        // which also records the dropped siblings for the coverage report.
+        std::size_t overload_index = 0;
+        std::size_t overload_count = 1;
 
         // Extension method (manifest class "extensions"): a free function whose
         // first parameter is `Cls&`, exposed as an instance method of Cls.
@@ -459,6 +489,14 @@ namespace rosetta {
         // (e.g. py::init<const std::vector<double>&, ...>()) uses these, since
         // GenType::spelling is cvref-stripped and may not round-trip.
         std::vector<std::vector<std::string>> ctor_param_cpp;
+
+        // Members the reflection walk could not hand to any backend — operators
+        // and conversion functions (no bindable name), member templates, and
+        // base overloads hidden by a derived declaration. These never become
+        // GenMethods, so a backend cannot report them and their absence is
+        // otherwise invisible; the coverage report reads them from here. Purely
+        // informational: nothing in the binding path consults it.
+        std::vector<GenDrop> dropped;
     };
 
     /**
@@ -715,5 +753,10 @@ namespace rosetta {
                               const char *expose = nullptr);
 
 } // namespace rosetta
+
+// The coverage vocabulary (rosetta::coverage::) sits between the IR structs it
+// describes and inline/generate.hxx, whose generate() writes the report. See the
+// ordering note at the top of coverage.h.
+#include <rosetta/coverage.h>
 
 #include "inline/generate.hxx"

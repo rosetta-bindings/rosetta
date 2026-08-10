@@ -62,6 +62,53 @@ namespace rosetta {
 
     } // namespace ann
 
+    // -------- what the walk left behind --------
+    //
+    // A member the walk could not hand to a visitor. These never reach the IR,
+    // so no backend can report them and their absence from a binding is
+    // otherwise only discoverable by noticing the call is missing. The coverage
+    // report (rosetta/coverage.h) turns each one into a line naming the member
+    // and the reason.
+    enum class drop_reason {
+        no_identifier,     // operator==, operator[], operator T — no bindable name
+        function_template, // member template: no fixed parameter pack to splice
+        hidden_by_derived, // base overload hidden by a derived declaration of the name
+    };
+
+    struct member_drop {
+        std::meta::info member;
+        drop_reason     reason;
+    };
+
+    /**
+     * @brief A member_drop with its names already resolved to static strings.
+     *
+     * The reflection has to be turned into text INSIDE a consteval context —
+     * `std::meta::display_string_of` and `define_static_string` are consteval,
+     * and a `template for` loop variable is not usable as a constant expression
+     * in the call. So detail::member_drop_texts() does the conversion during the
+     * walk and hands back plain `const char*`s that runtime code can just copy.
+     */
+    struct drop_text {
+        const char *member;
+        const char *signature;
+        const char *reason;
+    };
+
+    // Stable, machine-readable spelling of a drop reason ("no_identifier", …),
+    // used as the `reason` field in the emitted coverage JSON.
+    constexpr const char *drop_reason_name(drop_reason r) {
+        switch (r) {
+        case drop_reason::no_identifier:
+            return "no_identifier";
+        case drop_reason::function_template:
+            return "function_template";
+        case drop_reason::hidden_by_derived:
+            return "hidden_by_derived";
+        }
+        return "unknown";
+    }
+
     // Keep regular and static methods; drop constructors/destructors and
     // the compiler-generated copy/move specials.
     consteval bool is_exportable_member_function(std::meta::info fn);
@@ -76,6 +123,25 @@ namespace rosetta {
      * @brief Walk over reflected members of T and pass them to the visitor.
      */
     template <typename T, typename Visitor> void walk(Visitor &v);
+
+    /**
+     * @brief Is `Fn` the FIRST member function named `Fn` that walk<T> emits?
+     *
+     * The compile-time visitors (node, wasm, C#, Java, REST, Qt, QML) register a
+     * method under its name — in a property table, an op map, a URL route — where
+     * a name can only appear once. walk<T> now hands them every overload, so such
+     * a visitor guards its entry point with
+     *
+     *     if constexpr (!first_overload<T, Fn>()) return;
+     *
+     * to keep the first-declared entry and ignore the rest. It is a `consteval`
+     * counterpart to GenMethod::overload_index == 0, needed because a visitor
+     * sees one member at a time and cannot know about its siblings.
+     *
+     * Visitors whose framework dispatches on argument types (pybind11, nanobind,
+     * jlcxx) must NOT use this — for them every overload is meant to bind.
+     */
+    template <typename T, std::meta::info Fn> consteval bool first_overload();
 
 } // namespace rosetta
 

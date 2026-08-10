@@ -11,9 +11,13 @@
 // the parent kept alive (pybind reference_internal / the node runtime's
 // aliased Wrap pinning the parent object).
 //
-// Overload gating: the walk dedups overloads by name, but the emitters spell
-// the bare `&T::name`, which is ambiguous for an overload set. The surviving
-// IR entry is flagged is_overloaded and every runtime backend skips it.
+// Overload gating: the walk emits EVERY overload, and each backend applies the
+// policy its target language can honour. pybind11 / nanobind / jlcxx dispatch on
+// argument types, so every entry binds; embind, N-API, sol2, the C#/Java op
+// tables and REST routes key a method by name, so only the first-declared entry
+// binds and the rest are recorded in the coverage report. Either way the member
+// pointer is spelled through an explicit static_cast — the bare `&T::name` is
+// ambiguous for a set and would not compile.
 //
 // Verifies the generated sources (render), not a live build — mirroring
 // python_trampoline.cpp / node_trampoline.cpp.
@@ -109,14 +113,36 @@ TEST(MemberObject, PythonStillBindsPlainFieldAndStoreMethods) {
     EXPECT_NE(s.find("c.def(\"grow\", &MoStore::grow"), std::string::npos);
 }
 
-TEST(MemberObject, PythonBindsOverloadSurvivorViaCastKeepsPlain) {
+TEST(MemberObject, PythonBindsEveryOverloadViaCastKeepsPlain) {
     const std::string s = source_for("python-expanded");
-    // The surviving (first-declared) overload binds through an explicit
-    // static_cast to its exact signature — the bare &MoOver::f would be
-    // ambiguous.
+    // BOTH overloads bind: pybind11 collects repeated .def("f", …) into one
+    // overload set and dispatches on the argument types. Each is spelled
+    // through an explicit static_cast — the bare &MoOver::f is ambiguous.
     EXPECT_NE(s.find("c.def(\"f\", static_cast<int (MoOver::*)() const>(&MoOver::f)"),
               std::string::npos);
+    EXPECT_NE(s.find("c.def(\"f\", static_cast<int (MoOver::*)(int) const>(&MoOver::f)"),
+              std::string::npos);
     EXPECT_NE(s.find("c.def(\"g\", &MoOver::g"), std::string::npos);
+}
+
+TEST(MemberObject, NanobindBindsEveryOverload) {
+    // nanobind used to skip an overload set outright (it spelled the bare
+    // member pointer and could not have compiled one).
+    const std::string s = source_for("nanobind-expanded");
+    EXPECT_NE(s.find(".def(\"f\", static_cast<int (MoOver::*)() const>(&MoOver::f)"),
+              std::string::npos);
+    EXPECT_NE(s.find(".def(\"f\", static_cast<int (MoOver::*)(int) const>(&MoOver::f)"),
+              std::string::npos);
+}
+
+TEST(MemberObject, JuliaBindsEveryOverload) {
+    // jlcxx registers each as a Julia method of the same name; Julia's own
+    // multiple dispatch picks by argument type.
+    const std::string s = source_for("julia-expanded");
+    EXPECT_NE(s.find("c.method(\"f\", static_cast<int (MoOver::*)() const>(&MoOver::f)"),
+              std::string::npos);
+    EXPECT_NE(s.find("c.method(\"f\", static_cast<int (MoOver::*)(int) const>(&MoOver::f)"),
+              std::string::npos);
 }
 
 // ---- node-expanded ----------------------------------------------------------
@@ -199,13 +225,30 @@ TEST(MemberObject, FinalSuppressesPythonTrampoline) {
 
 // ---- gates stay conservative where not implemented ---------------------------
 
-TEST(MemberObject, WasmBindsOverloadSurvivorLuaSkips) {
-    // wasm always spells an explicit-signature cast, so the surviving
-    // (first-declared) overload binds; lua still spells the bare member
-    // pointer and keeps skipping the set.
+TEST(MemberObject, NameKeyedBackendsBindExactlyTheFirstOverload) {
+    // embind and sol2 both key a method by name — a second registration is a
+    // duplicate (embind throws at module init; sol2's assignment overwrites),
+    // so exactly ONE entry of the set binds, and it is the first-declared one.
     const std::string w = source_for("wasm-expanded");
-    EXPECT_NE(w.find("static_cast<int (MoOver::*)() const>(&MoOver::f)"),
+    EXPECT_NE(w.find(".function(\"f\", static_cast<int (MoOver::*)() const>(&MoOver::f)"),
               std::string::npos);
+    EXPECT_EQ(w.find("static_cast<int (MoOver::*)(int) const>(&MoOver::f)"),
+              std::string::npos);
+
+    // lua used to skip the whole set; it now binds the first overload.
     const std::string l = source_for("lua-expanded");
-    EXPECT_EQ(l.find("&MoOver::f"), std::string::npos);
+    EXPECT_NE(l.find("c[\"f\"] = static_cast<int (MoOver::*)() const>(&MoOver::f)"),
+              std::string::npos);
+    EXPECT_EQ(l.find("static_cast<int (MoOver::*)(int) const>(&MoOver::f)"),
+              std::string::npos);
+}
+
+TEST(MemberObject, CsharpQualifiesTheOverloadedMemberPointer) {
+    // The op table is keyed by name, so one entry binds — but it must be
+    // spelled with the cast: `&MoOver::f` names the whole set and would not
+    // compile. (This was already true before the walk emitted every overload.)
+    const std::string s = source_for("csharp-expanded");
+    EXPECT_NE(s.find("call_method<static_cast<int (MoOver::*)() const>(&MoOver::f)>"),
+              std::string::npos);
+    EXPECT_EQ(s.find("call_method<&MoOver::f>"), std::string::npos);
 }

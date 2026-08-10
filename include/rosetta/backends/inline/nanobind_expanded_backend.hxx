@@ -283,7 +283,7 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             if (m.is_extension) {
                 return ".def(\"" + m.name + "\", &" + m.ext_qualified + policy + dq + ")";
             }
-            const std::string mp = "&" + qualified_of(k) + "::" + m.name;
+            const std::string mp = px_member_pointer(k, m);
             if (m.is_static) {
                 return ".def_static(\"" + m.name + "\", " + mp + policy + dq + ")";
             }
@@ -331,16 +331,27 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
                 if (seq_touches(m)) {
                     if (seq_adaptable(m) && px_seq_rest_ok(m, c)) {
                         segs.push_back(nbx_seq_method_segment(k, m));
+                        coverage::note_bound("nanobind-expanded", k, m);
+                    } else {
+                        coverage::note_skip("nanobind-expanded", k, m, "sequence_not_adaptable",
+                                            "a registered sequence in the signature has no "
+                                            "std::vector boundary adapter for this backend");
                     }
                     continue; // adapter or nothing (see px_seq_method)
                 }
-                // px_method_ok no longer rejects an overload set (the pybind
-                // emitter disambiguates with a static_cast); this emitter
-                // still spells the bare `&T::name`, so keep skipping the set.
-                if (m.is_overloaded || !px_method_ok(m, c)) {
+                // Every overload binds. nanobind, like pybind11, collects
+                // repeated .def("name", …) into one overload set and dispatches
+                // on the argument types; the ambiguity is only in the C++ member
+                // pointer, which px_member_pointer casts away. (This backend used
+                // to skip overload sets outright, because it spelled the bare
+                // `&T::name` and could not have compiled one.)
+                if (!px_method_ok(m, c)) {
+                    coverage::note_skip("nanobind-expanded", k, m, "unmarshalable_signature",
+                                        px_skip_reason(m, c));
                     continue; // signature the emitted line could not compile
                 }
                 segs.push_back(nbx_method_segment(k, m, c));
+                coverage::note_bound("nanobind-expanded", k, m);
             }
 
             std::string s = "    nb::class_<" + qualified_of(k) + ">(m, \"" + exposed_of(k) + "\")";
