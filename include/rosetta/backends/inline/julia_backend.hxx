@@ -101,7 +101,7 @@ end
 )MD";
 
         inline void JuliaBackend::emit(const GenContext &c) const {
-            std::string binds;
+            std::string binds = init_block(c);
             // Enums first so class fields/methods can resolve them.
             for (const auto &e : c.enums) {
                 binds += "    rosetta::bind_julia_enum<" + qualified_of(e) + ">(mod, \"" +
@@ -112,6 +112,9 @@ end
                          "\");\n";
             }
             for (const auto &f : c.functions) {
+                if (fn_needs_reflection_skip(f, "julia")) {
+                    continue;
+                }
                 binds += "    rosetta::bind_julia_function<^^" + f.qualified + ">(mod, \"" +
                          f.name + "\");\n";
             }

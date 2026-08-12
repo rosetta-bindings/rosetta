@@ -465,9 +465,11 @@ script once per interpreter.)MD";
         inline std::string expanded_includes(const GenContext &c) {
             std::string s = "#include <pybind11/pybind11.h>\n"
                             "#include <pybind11/stl.h>\n"
+                            "#include <pybind11/stl/filesystem.h>\n"
                             "#include <pybind11/functional.h>\n"
                             "#include <algorithm>\n"
-                            "#include <memory>\n" // std::shared_ptr holders
+                            "#include <filesystem>\n" // the path adapter
+                            "#include <memory>\n"     // std::shared_ptr holders
                             "#include <type_traits>\n"
                             "#include <vector>\n";
             // Caster headers for the opted-in foreign libraries (manifest
@@ -477,6 +479,7 @@ script once per interpreter.)MD";
             // opt-in is present, so the include and the marking cannot drift.
             s += px_interop_includes(c.interop);
             auto add = [&](const std::string &h) { append_include(s, h); };
+            s += init_includes(c);
             for (const auto &k : c.classes) {
                 add(k.header);
                 for (const auto &m : k.methods) {
@@ -547,6 +550,19 @@ script once per interpreter.)MD";
             if (t.kind == "vector" && !t.element.empty()) {
                 return px_marshalable(t.element.front(), c);
             }
+            // A class the module never registered has no caster: pybind11 binds
+            // the member and then throws "Unable to convert function return
+            // value to a Python type" the first time it is called
+            // (GEO::CSGCompiler::builder() returning an unbound
+            // GEO::CSGBuilder&). std:: spellings are exempt — <pybind11/stl.h>
+            // and its siblings cover map / pair / tuple / optional / variant /
+            // array, none of which is a bound class either. A shared_ptr asks
+            // about its pointee, which is where the holder lives.
+            if (t.kind == "object") {
+                const GenType    &q  = shared_pointee(t);
+                const std::string sp = q.object_qualified.empty() ? q.spelling : q.object_qualified;
+                return px_is_bound_class(q, c) || sp.rfind("std::", 0) == 0;
+            }
             return true;
         }
 
@@ -554,19 +570,34 @@ script once per interpreter.)MD";
             return px_marshalable(f.type, c) && px_copyable(f.type);
         }
 
+        // Defined below (it needs the bound-class lookup): does this method
+        // return an lvalue reference that binds with `reference_internal`?
+        inline bool px_ref_return(const GenMethod &m, const GenContext &c);
+
         inline bool px_method_ok(const GenMethod &m, const GenContext &c) {
             // An overload set is NOT rejected here: the walk keeps its
             // first-declared entry, and expanded_method() spells an explicit
             // static_cast to that entry's exact signature, so the member
             // pointer is unambiguous. The remaining gates below check the
             // survivor's own signature as usual.
+            // An overload needs its exact signature spelled for the cast; a
+            // type with no name of its own cannot be. See sig_spellable().
+            if (m.is_overloaded && !sig_spellable(m)) {
+                return false;
+            }
             if (!px_marshalable(m.ret, c)) {
                 return false;
             }
-            // Lvalue-ref class return: policy `automatic` copies it; a by-value
-            // class return needs copy/move too (copy_constructible is the
-            // conservative proxy for both).
-            if (m.ret.kind == "object" && !m.ret.copy_constructible) {
+            // A by-value class return needs copy/move (copy_constructible is
+            // the conservative proxy for both), and so did an lvalue-ref return
+            // back when the automatic policy copied it. It no longer does:
+            // px_ref_return attaches `reference_internal`, which hands Python
+            // the object itself. So a non-copyable class is a perfectly good
+            // REFERENCE return — `facet_corners.attributes()` handing out the
+            // mesh's own AttributesManager — and only the by-value case is
+            // still out.
+            if (m.ret.kind == "object" && !m.ret.copy_constructible &&
+                !px_ref_return(m, c)) {
                 return false;
             }
             if (m.ret.kind == "vector" && !px_copyable(m.ret)) {
@@ -595,7 +626,7 @@ script once per interpreter.)MD";
                 return "no pybind11 type-caster for the return type '" +
                        (m.ret_cpp.empty() ? m.ret.spelling : m.ret_cpp) + "'";
             }
-            if (m.ret.kind == "object" && !m.ret.copy_constructible) {
+            if (m.ret.kind == "object" && !m.ret.copy_constructible && !px_ref_return(m, c)) {
                 return "returns '" + m.ret.spelling +
                        "' by value or by reference, and it is not copy-constructible (pybind's "
                        "automatic return policy copies)";
@@ -742,6 +773,30 @@ script once per interpreter.)MD";
         // Do the NON-sequence parts of the signature still satisfy the python
         // gates? (The sequence parts go through the adapter, which lifts the
         // vector-copy and overload restrictions.)
+        // Does this signature need the copy ADAPTER here? The same question
+        // seq_touches asks, minus std::filesystem::path: pybind11 and nanobind
+        // ship their own path caster (<pybind11/stl/filesystem.h> /
+        // <nanobind/stl/filesystem.h>, both in the emitted include block), so a
+        // path binds NATIVELY in this family — and Python may then pass a str or
+        // any os.PathLike, where the std::string boundary the caster-less
+        // backends need would refuse a pathlib.Path. A signature that also
+        // touches a foreign container still takes the adapter, which converts
+        // the path too (correct either way, and one code path instead of two).
+        inline bool px_touches(const GenMethod &m) {
+            auto adapts = [](const GenType &t) { return is_adapted(t) && !t.is_path; };
+            if (adapts(m.ret)) {
+                return true;
+            }
+            for (const auto &p : m.params) {
+                // An out-parameter needs the adapter here as much as anywhere:
+                // the caller does not pass it, and its value joins the return.
+                if (adapts(p.type) || is_out_param(p)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         inline bool px_seq_rest_ok(const GenMethod &m, const GenContext &c) {
             if (!is_adapted(m.ret) && !px_marshalable(m.ret, c)) {
                 return false;
@@ -753,7 +808,7 @@ script once per interpreter.)MD";
                 return false;
             }
             for (const auto &p : m.params) {
-                if (is_adapted(p.type)) {
+                if (is_adapted(p.type) || is_out_param(p)) {
                     continue;
                 }
                 if (!px_marshalable(p.type, c)) {
@@ -774,34 +829,49 @@ script once per interpreter.)MD";
             std::string decls;
             std::string pre;
             std::string args;
+            // Out-parameters: locals the adapter declared and passes by
+            // reference, whose values join the return (see out_return_stmts).
+            std::vector<OutParam> outs;
         };
         inline PxSeqSig px_seq_sig(const std::vector<GenParam>    &params,
                                    const std::vector<std::string> &param_cpp) {
             PxSeqSig    o;
             const bool  exact = param_cpp.size() == params.size();
+            // Declarations and arguments are collected separately and joined at
+            // the end: an out-parameter contributes an ARGUMENT (the local) but
+            // no DECLARATION, so the two lists no longer run in lockstep.
+            std::vector<std::string> decls, args;
             for (std::size_t j = 0; j < params.size(); ++j) {
                 const std::string an = "arg" + std::to_string(j);
-                if (j) {
-                    o.decls += ", ";
-                    o.args += ", ";
+                const GenType    &t  = params[j].type;
+                if (is_out_param(params[j])) {
+                    // The caller does not pass an out-parameter, it receives
+                    // one: a local goes in, its value comes back with the
+                    // return (see out_return_stmts).
+                    const std::string on = "out" + std::to_string(j);
+                    o.pre += "        " + out_local_cpp(t) + " " + on + "{};\n";
+                    args.push_back(on);
+                    o.outs.push_back({on, out_expr(t, on)});
+                    continue;
                 }
-                const GenType &t = params[j].type;
                 if (is_adapted(t)) {
                     const std::string sn = adapt_local(t, j);
-                    o.decls += adapt_boundary_cpp(t) + " " + an;
+                    decls.push_back(adapt_boundary_cpp(t) + " " + an);
                     o.pre += adapt_decl_stmts(t, an, sn, "        ");
-                    o.args += sn;
+                    args.push_back(sn);
                 } else if (exact) {
-                    o.decls += qualify_objects(qualify_std(param_cpp[j]), t) + " " + an;
-                    o.args += an;
+                    decls.push_back(qualify_objects(qualify_std(param_cpp[j]), t) + " " + an);
+                    args.push_back(an);
                 } else if (t.kind == "object") {
-                    o.decls += px_cpp_type(t) + " &" + an; // bound class, by ref
-                    o.args += an;
+                    decls.push_back(px_cpp_type(t) + " &" + an); // bound class, by ref
+                    args.push_back(an);
                 } else {
-                    o.decls += px_cpp_type(t) + " " + an;
-                    o.args += an;
+                    decls.push_back(px_cpp_type(t) + " " + an);
+                    args.push_back(an);
                 }
             }
+            o.decls = join(decls, ", ");
+            o.args  = join(args, ", ");
             return o;
         }
 
@@ -822,7 +892,11 @@ script once per interpreter.)MD";
                 call  = "self." + m.name + "(" + sig.args + ")";
             }
             std::string body = sig.pre;
-            if (is_adapted(m.ret)) {
+            if (!sig.outs.empty()) {
+                // pybind11 marshals a std::tuple as a Python tuple, so an
+                // out-parameter comes back as an extra element.
+                body += out_return_stmts(m, sig.outs, call, "        ");
+            } else if (is_adapted(m.ret)) {
                 body += "        auto &&r = " + call + ";\n";
                 body += "        return " + adapt_from_expr(m.ret, "r") + ";\n";
             } else if (m.ret.kind == "void") {
@@ -1032,55 +1106,8 @@ script once per interpreter.)MD";
         // derived — that follows from manifest order).
         // Walk one type (and its element / callback children) for shared_ptr
         // pointees that name a class, collecting their qualified spellings.
-        inline void px_collect_shared(const GenType &t, std::vector<std::string> &out) {
-            if (t.is_shared_ptr && !t.element.empty() &&
-                !t.element[0].object_qualified.empty()) {
-                const std::string &q = t.element[0].object_qualified;
-                if (std::find(out.begin(), out.end(), q) == out.end()) {
-                    out.push_back(q);
-                }
-            }
-            for (const auto &e : t.element) {
-                px_collect_shared(e, out);
-            }
-            for (const auto &e : t.callback_sig) {
-                px_collect_shared(e, out);
-            }
-        }
-
-        // Every bound class the module ever hands across the boundary inside a
-        // std::shared_ptr must be registered as py::class_<T, std::shared_ptr<T>>.
-        // Without it pybind11 compiles happily and then throws at CALL time:
-        // "Unable to convert std::shared_ptr<T> to Python when the bound type
-        // does not use std::shared_ptr ... as its holder type" — so a factory
-        // like `std::shared_ptr<Executor> local()` binds and is unusable.
-        //
-        // std::shared_ptr (rather than py::smart_holder) because it is the one
-        // spelling that works on pybind11 2.x and 3.x alike.
         inline std::vector<std::string> px_shared_holders(const GenContext &c) {
-            std::vector<std::string> need;
-            for (const auto &k : c.classes) {
-                for (const auto &f : k.fields) {
-                    px_collect_shared(f.type, need);
-                }
-                for (const auto &m : k.methods) {
-                    px_collect_shared(m.ret, need);
-                    for (const auto &p : m.params) {
-                        px_collect_shared(p.type, need);
-                    }
-                }
-                for (const auto &ct : k.ctors) {
-                    for (const auto &p : ct) {
-                        px_collect_shared(p.type, need);
-                    }
-                }
-            }
-            for (const auto &f : c.functions) {
-                px_collect_shared(f.ret, need);
-                for (const auto &p : f.params) {
-                    px_collect_shared(p.type, need);
-                }
-            }
+            std::vector<std::string> need = shared_pointees(c);
             // pybind requires one holder per inheritance chain: registering a
             // base with std::shared_ptr and a derived with the default holder
             // (or the reverse) is a runtime error the moment either crosses the
@@ -1116,6 +1143,17 @@ script once per interpreter.)MD";
         }
 
         inline std::string expanded_class(const GenClass &k, const GenContext &c) {
+            // A class whose destructor is not public cannot be wrapped: every
+            // runtime backend destroys what it holds. Skip it with a note —
+            // the alternative is a compile error inside the framework headers.
+            if (!k.is_destructible) {
+                std::fprintf(stderr,
+                             "rosetta::%s: class '%s' has a non-public destructor "
+                             "(ref-counted?) — skipped\n",
+                             "python-expanded", k.name.c_str());
+                return {};
+            }
+
             const bool        has_tramp = !virtual_methods(k).empty();
             const std::string kq        = qualified_of(k);
             std::string       extra;
@@ -1178,7 +1216,7 @@ script once per interpreter.)MD";
                 s += indent(expanded_field(k, f));
             }
             for (const auto &m : k.methods) {
-                if (seq_touches(m)) {
+                if (px_touches(m)) {
                     // Foreign sequence in the signature: adapter or nothing —
                     // the member-pointer path would hand pybind the casterless
                     // foreign type (and an overloaded set is fine here, see
@@ -1224,12 +1262,14 @@ script once per interpreter.)MD";
                 GenMethod probe; // free functions go through the same gates
                 probe.ret    = f.ret;
                 probe.params = f.params;
-                if (seq_touches(probe)) {
+                if (px_touches(probe)) {
                     if (seq_adaptable(probe) && px_seq_rest_ok(probe, c)) {
                         const PxSeqSig sig = px_seq_sig(f.params, {});
                         std::string body2 = sig.pre;
-                        const std::string call = f.qualified + "(" + sig.args + ")";
-                        if (is_adapted(f.ret)) {
+                        const std::string call = fn_call_expr(f) + "(" + sig.args + ")";
+                        if (!sig.outs.empty()) {
+                            body2 += out_return_stmts(probe, sig.outs, call, "        ");
+                        } else if (is_adapted(f.ret)) {
                             body2 += "        auto &&r = " + call + ";\n";
                             body2 += "        return " + adapt_from_expr(f.ret, "r") + ";\n";
                         } else if (f.ret.kind == "void") {
@@ -1245,7 +1285,7 @@ script once per interpreter.)MD";
                 if (!px_method_ok(probe, c)) {
                     continue;
                 }
-                body += "    m.def(\"" + f.name + "\", &" + f.qualified + doc_arg(f.doc) + ");\n";
+                body += "    m.def(\"" + f.name + "\", " + fn_addr(f) + doc_arg(f.doc) + ");\n";
             }
 
             std::string out = "// Generated by rosetta::generate (expanded, reflection-free) — "
@@ -1255,6 +1295,7 @@ script once per interpreter.)MD";
             out += "\nnamespace py = pybind11;\n";
             out += trampolines_of(c); // reflection-free; empty when no virtuals
             out += "\nPYBIND11_MODULE(" + c.lib + ", m) {\n";
+            out += init_block(c);
             out += "    m.doc() = \"Auto-generated (expanded) bindings for " + c.lib + ".\";\n";
             out += body;
             out += "}\n";

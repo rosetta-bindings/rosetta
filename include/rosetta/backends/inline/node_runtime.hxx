@@ -46,6 +46,29 @@ namespace rosetta {
         } else if constexpr (std::is_enum_v<U>) {
             return Napi::Number::New(
                 env, static_cast<double>(static_cast<std::underlying_type_t<U>>(v)));
+        } else if constexpr (is_std_tuple<U>::value) {
+            // The shape an out-parameter adapter returns: the return value (when
+            // there is one) followed by the out-parameters. JS has no tuple, so
+            // it arrives as an array — `const [ok, uv, dim] = attrs.get_doubles(…)`
+            // destructures it the way the C++ reads.
+            Napi::Array arr = Napi::Array::New(env, std::tuple_size_v<U>);
+            std::apply(
+                [&](const auto &...xs) {
+                    std::uint32_t i = 0;
+                    ((arr.Set(i++, to_napi(env, xs))), ...);
+                },
+                v);
+            return arr;
+        } else if constexpr (is_shared_ptr<U>::value) {
+            // Hand the OWNERSHIP across, not a copy: the JS object adopts the
+            // shared_ptr and keeps the C++ object alive for as long as it lives.
+            // The generic class branch below could not serve here — it
+            // copy-assigns into a default-constructed instance, which is wrong
+            // for a factory's result and does not even compile for the
+            // non-copyable classes shared_ptr factories tend to hand out.
+            using P = typename U::element_type;
+            auto *holder = new std::shared_ptr<P>(v); // adopted (and deleted) by Wrap
+            return ctor_ref<P>().New({Napi::External<void>::New(env, holder)});
         } else if constexpr (std::is_class_v<U>) {
             Napi::Object obj = ctor_ref<U>().New({});
             Wrap<U>::Unwrap(obj)->inner() = v;
@@ -154,6 +177,29 @@ namespace rosetta {
                 parent_ = Napi::Persistent(info[1].As<Napi::Object>());
                 return;
             }
+            // Adopt construction: (External<void> = a heap std::shared_ptr<T>
+            // to take over). One argument, where aliasing takes two — and, like
+            // aliasing, reachable only from rosetta's own code, since JS cannot
+            // forge an External. The holder is deleted here; the count it
+            // carried lives on in shared_.
+            if (info.Length() == 1 && info[0].IsExternal()) {
+                auto *holder =
+                    static_cast<std::shared_ptr<Tramp> *>(info[0].As<Napi::External<void>>().Data());
+                shared_ = std::move(*holder);
+                delete holder;
+                ptr_   = shared_.get();
+                owned_ = false;
+                return;
+            }
+        } else if (info.Length() == 1 && info[0].IsExternal()) {
+            // A trampolined class reached through the adopt path: the external
+            // holds a shared_ptr<T>, and storing it where a Js_T* is expected
+            // would be undefined behavior. The emitter's gate (nx_ret_ok) keeps
+            // this unreachable; say so plainly rather than corrupt memory if it
+            // ever stops holding.
+            throw Napi::TypeError::New(info.Env(),
+                                       "rosetta: cannot adopt a shared_ptr for a class with "
+                                       "virtual methods (its wrapper holds a trampoline)");
         }
         if constexpr (std::is_default_constructible_v<Tramp>) {
             ptr_   = new Tramp();
@@ -311,6 +357,29 @@ namespace rosetta {
                 from_napi<std::remove_cvref_t<typename FT::template arg<Is>>>(info[Is])...);
             return to_napi(info.Env(), r);
         }
+    }
+
+    template <typename T, typename Tramp>
+    template <auto MFP, std::size_t... Is>
+    Napi::Value Wrap<T, Tramp>::call_method_alias_impl(const Napi::CallbackInfo &info,
+                                                       std::index_sequence<Is...>) {
+        using FT     = fn_traits<decltype(MFP)>;
+        using RefT   = typename FT::ret;                  // an lvalue reference
+        using Held   = std::remove_reference_t<RefT>;
+        Held &r      = (inner().*MFP)(
+            from_napi<std::remove_cvref_t<typename FT::template arg<Is>>>(info[Is])...);
+        // Same aliasing construction get_member_object uses: wrap the ADDRESS,
+        // do not own it, and pin this object as the parent so the referent
+        // outlives every handle onto it.
+        return ctor_ref<std::remove_cv_t<Held>>().New(
+            {Napi::External<void>::New(info.Env(), static_cast<void *>(const_cast<std::remove_cv_t<Held> *>(&r))),
+             this->Value()});
+    }
+
+    template <typename T, typename Tramp>
+    template <auto MFP> Napi::Value Wrap<T, Tramp>::call_method_alias(const Napi::CallbackInfo &info) {
+        using FT = fn_traits<decltype(MFP)>;
+        return call_method_alias_impl<MFP>(info, std::make_index_sequence<FT::arity>{});
     }
 
     template <typename T, typename Tramp>

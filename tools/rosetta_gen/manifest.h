@@ -118,11 +118,27 @@
 //     ],
 //     "functions": [                                // optional: free (non-member) fns
 //       { "name": "transform", "header": "common.h", "doc": "...",
-//         "expose": "warp" }                        // optional: binding name, overriding
-//     ],                                            //   the identifier (same rule as a
+//         "expose": "warp",                         // optional: binding name, overriding
+//                                                   //   the identifier (same rule as a
 //                                                   //   class's "expose"; also valid on
 //                                                   //   an "extensions" entry). Name may
 //                                                   //   be qualified (api::add).
+//         "signature": "void(Point&, double)" }     // optional: bind ONE overload of an
+//     ],                                            //   overloaded name — the only way in,
+//                                                   //   since ^^name is ill-formed for an
+//                                                   //   overload set.
+//     "module_init": {                              // optional: statements the module
+//       "headers": ["lib/lifecycle.h"],             //   runs when it LOADS, plus the
+//       "statements": ["lib::initialize()"]         //   headers declaring them. The
+//     },                                            //   library's lifecycle — not a
+//                                                   //   binding. A bare array = the
+//                                                   //   statements alone.
+//     "generated_headers": [                        // optional: headers the bound
+//       {"path": "geogram/version.h",               //   library's OWN build system
+//        "template": "./ext/version.h.in",          //   generates. Written into the
+//        "substitutions": {"VERSION": "1.10.1"}}    //   bindings tree and put FIRST on
+//     ],                                            //   the include path. "content":
+//                                                   //   [lines] instead of a template.
 //     "sequences": [                                // optional: foreign sequence
 //       "GEO::vector",                              //   containers (ONE type param) —
 //       { "type": "Eigen::VectorXd" }               //   marshal like std::vector<T>.
@@ -133,6 +149,7 @@
 #pragma once
 
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -149,6 +166,14 @@ struct FunctionEntry {
     // is renamed on the class it attaches to. Empty means the function binds
     // under its own (unqualified) identifier.
     std::string expose;
+
+    // Optional "signature": the C++ function TYPE of the one overload to bind,
+    // e.g. "void(GEO::Mesh&, const GEO::Mesh&, const GEO::Mesh&, bool)". Only
+    // needed when `name` is overloaded — `^^name` is ill-formed for an overload
+    // set, so the reflection path cannot say which one is meant; the signature
+    // can, and it is what the generated driver passes to make_function_sig.
+    // Empty ⇒ the ordinary `make_function<^^name>` path.
+    std::string signature;
 };
 
 // One entry of the manifest's "sequences" / "matrices": a foreign container
@@ -166,6 +191,25 @@ struct FunctionEntry {
 struct ContainerEntry {
     std::string name;          // "GEO::vector" | "Eigen::VectorXd"
     bool        exact = false; // true ⇒ concrete type (full specialization)
+};
+
+// The manifest's "module_init": C++ statements run when the generated module
+// loads, plus the headers that declare them. A library's LIFECYCLE — geogram's
+// GEO::initialize() + CmdLine::import_arg_group() run + nlPrintfFuncs() —
+// is not a binding, and this is the only field that expresses it.
+struct ModuleInit {
+    std::vector<std::string> headers;
+    std::vector<std::string> statements;
+};
+
+// One entry of the manifest's "generated_headers": a header the bound library's
+// own build system would have produced, which rosetta must write itself because
+// it compiles that library's sources without running its build. Either form
+// resolves to the same finished text here — a template file with @KEY@
+// placeholders plus substitutions, or literal lines.
+struct GeneratedHeaderEntry {
+    std::string path;    // relative include path ("geogram/version.h")
+    std::string content; // resolved text, ready to write
 };
 
 struct ClassEntry {
@@ -258,6 +302,13 @@ struct Manifest {
     std::vector<TargetEntry>   targets;         // backends + per-backend module name
     std::vector<ClassEntry>    classes;
     std::vector<FunctionEntry> functions; // free functions to expose
+    ModuleInit                 module_init; // "module_init": load-time statements
+
+    // "out_params": which parameters are OUTPUTS, keyed "Class::method" or
+    // "ns::function", each a list of 0-based indices. Never inferred — see
+    // GenParam::is_out for why the C++ cannot say.
+    std::map<std::string, std::vector<std::size_t>> out_params;
+    std::vector<GeneratedHeaderEntry> generated_headers; // "generated_headers"
 
     // Optional foreign sequence containers ("sequences"): qualified template
     // names with ONE type parameter ("GEO::vector"), or concrete types spelled

@@ -27,8 +27,10 @@
 #include <cstddef>
 #include <functional>
 #include <napi.h>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -39,6 +41,14 @@ namespace rosetta {
 
     template <typename T> struct is_std_vector : std::false_type {};
     template <typename U, typename A> struct is_std_vector<std::vector<U, A>> : std::true_type {};
+
+    template <typename T> struct is_shared_ptr : std::false_type {};
+    template <typename U> struct is_shared_ptr<std::shared_ptr<U>> : std::true_type {};
+
+    // What an out-parameter adapter returns (see to_napi): the return value, if
+    // any, followed by the out-parameters — handed to JS as an array.
+    template <typename T> struct is_std_tuple : std::false_type {};
+    template <typename... U> struct is_std_tuple<std::tuple<U...>> : std::true_type {};
 
     // ---- Compile-time helpers unique to the expanded runtime ----
 
@@ -181,6 +191,16 @@ namespace rosetta {
         template <auto MFP> Napi::Value call_method(const Napi::CallbackInfo &info);
 
         /**
+         * @brief Instance-method thunk for a method returning `T&` to a BOUND
+         * class: hands out an aliased wrap of the referent, pinned to this
+         * object — `facet_corners.attributes()` gives the store's own
+         * AttributesManager, not a copy of it. The alternative, to_napi's
+         * default, copy-assigns into a fresh wrapper, which is wrong for a
+         * reference and does not compile at all for a non-copyable class.
+         */
+        template <auto MFP> Napi::Value call_method_alias(const Napi::CallbackInfo &info);
+
+        /**
          * @brief Extension method: a FREE function whose first parameter is
          * `T&` (or `const T&`), exposed as an instance method — the wrapped
          * object is passed as the receiver and info[i] maps to parameter i+1.
@@ -195,11 +215,23 @@ namespace rosetta {
         bool                  owned_ = false;
         Napi::ObjectReference parent_; // pins the owner while aliased
 
+        // Shared ownership: set when this JS object was built from a
+        // std::shared_ptr the C++ side handed out (to_napi's shared_ptr branch),
+        // in which case ptr_ aliases into it and `owned_` stays false — the
+        // reference count, not the destructor, decides when the object dies. The
+        // third ownership mode, next to "owns a new'd object" and "aliases a
+        // member of a pinned parent".
+        std::shared_ptr<Tramp> shared_;
+
         template <auto FP, std::size_t... Is>
         Napi::Value ext_method_impl(const Napi::CallbackInfo &info, std::index_sequence<Is...>);
 
         template <auto MFP, std::size_t... Is>
         Napi::Value call_method_impl(const Napi::CallbackInfo &info, std::index_sequence<Is...>);
+
+        template <auto MFP, std::size_t... Is>
+        Napi::Value call_method_alias_impl(const Napi::CallbackInfo &info,
+                                           std::index_sequence<Is...>);
 
         template <auto FP, std::size_t... Is>
         static Napi::Value call_static_impl(const Napi::CallbackInfo &info,

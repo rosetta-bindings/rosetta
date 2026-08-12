@@ -156,6 +156,17 @@ local {{LIB}} = require("{{LIB}}")
             if (t.kind == "unknown") {
                 return false; // callbacks are allowed per-parameter, see lx_param_ok
             }
+            // std::shared_ptr<T>: sol2 marshals one through its own
+            // unique_usertype_traits — a returned shared_ptr becomes userdata of
+            // T's usertype (member access dereferences), and the reference count
+            // keeps the C++ object alive for as long as Lua holds it. Nothing to
+            // register beyond T itself, so the only question is whether the
+            // POINTEE is bound; `object` on a shared_ptr descriptor is the
+            // literal "shared_ptr". Must precede the "object" branch, whose kind
+            // a shared_ptr also has.
+            if (t.is_shared_ptr) {
+                return lx_is_bound(shared_pointee(t).object, c);
+            }
             if (t.kind == "object") {
                 // std::array rides sol2's fixed-size container support.
                 if (qualify_std(t.spelling).rfind("std::array<", 0) == 0) {
@@ -226,6 +237,11 @@ local {{LIB}} = require("{{LIB}}")
             // question, settled by the first_only policy at the call site —
             // sol2's `c["name"] = …` is an assignment, so a second one would
             // simply overwrite the first.
+            // An overload needs its exact signature spelled for the cast; a
+            // type with no name of its own cannot be. See sig_spellable().
+            if (m.is_overloaded && !sig_spellable(m)) {
+                return false;
+            }
             if (m.ret.kind != "void" && !lx_marshalable(m.ret, c)) {
                 return false;
             }
@@ -380,7 +396,7 @@ local {{LIB}} = require("{{LIB}}")
                 }
             }
             for (const auto &p : m.params) {
-                if (is_adapted(p.type)) {
+                if (is_adapted(p.type) || is_out_param(p)) {
                     continue;
                 }
                 if (!lx_param_ok(p.type, c)) {
@@ -405,9 +421,10 @@ local {{LIB}} = require("{{LIB}}")
         // (decls, pre-call statements, call args) — sequence params arrive as
         // sol::nested tables; the rest mirrors lua_table_params.
         struct LxSeqSig {
-            std::string decls;
-            std::string pre;
-            std::string args;
+            std::string           decls;
+            std::string           pre;
+            std::string           args;
+            std::vector<OutParam> outs; // manifest "out_params" — joined to the return
         };
         // `tables`: vector-ish parameters arrive as sol::nested (plain Lua
         // tables). Otherwise they arrive as std::vector container userdata —
@@ -416,42 +433,51 @@ local {{LIB}} = require("{{LIB}}")
         // vector-parameter convention (primary + table overload).
         inline LxSeqSig lx_seq_sig(const std::vector<GenParam> &params, bool tables) {
             LxSeqSig o;
+            // Declarations and arguments are collected separately: an
+            // out-parameter contributes an ARGUMENT (its local) but no
+            // DECLARATION, so the two lists no longer run in lockstep.
+            std::vector<std::string> decls, args;
             for (std::size_t j = 0; j < params.size(); ++j) {
                 const std::string an = "arg" + std::to_string(j);
-                if (j) {
-                    o.decls += ", ";
-                    o.args += ", ";
+                const GenType    &t  = params[j].type;
+                if (is_out_param(params[j])) {
+                    const std::string on = "out" + std::to_string(j);
+                    o.pre += "        " + out_local_cpp(t) + " " + on + "{};\n";
+                    args.push_back(on);
+                    o.outs.push_back({on, out_expr(t, on)});
+                    continue;
                 }
-                const GenType &t = params[j].type;
                 if (is_adapted(t)) {
                     const std::string sn = adapt_local(t, j);
                     if (tables) {
-                        o.decls += "sol::nested<" + adapt_boundary_cpp(t) + "> " + an;
+                        decls.push_back("sol::nested<" + adapt_boundary_cpp(t) + "> " + an);
                         o.pre += adapt_decl_stmts(t, an + ".value()", sn, "        ");
                     } else {
-                        o.decls += "const " + adapt_boundary_cpp(t) + " &" + an;
+                        decls.push_back("const " + adapt_boundary_cpp(t) + " &" + an);
                         o.pre += adapt_decl_stmts(t, an, sn, "        ");
                     }
-                    o.args += sn;
+                    args.push_back(sn);
                 } else if (t.kind == "vector") {
                     if (tables) {
-                        o.decls += "sol::nested<" + lua_cpp_type(t) + "> " + an;
-                        o.args += an + ".value()";
+                        decls.push_back("sol::nested<" + lua_cpp_type(t) + "> " + an);
+                        args.push_back(an + ".value()");
                     } else {
-                        o.decls += "const " + lua_cpp_type(t) + " &" + an;
-                        o.args += an;
+                        decls.push_back("const " + lua_cpp_type(t) + " &" + an);
+                        args.push_back(an);
                     }
                 } else if (t.is_pointer) {
-                    o.decls += t.object + " *" + an;
-                    o.args += an;
+                    decls.push_back(t.object + " *" + an);
+                    args.push_back(an);
                 } else if (t.kind == "object") {
-                    o.decls += lua_cpp_type(t) + " &" + an; // bound userdata, by ref
-                    o.args += an;
+                    decls.push_back(lua_cpp_type(t) + " &" + an); // bound userdata, by ref
+                    args.push_back(an);
                 } else {
-                    o.decls += lua_cpp_type(t) + " " + an;
-                    o.args += an;
+                    decls.push_back(lua_cpp_type(t) + " " + an);
+                    args.push_back(an);
                 }
             }
+            o.decls = join(decls, ", ");
+            o.args  = join(args, ", ");
             return o;
         }
 
@@ -470,7 +496,12 @@ local {{LIB}} = require("{{LIB}}")
         inline std::string lx_seq_body(const GenMethod &m, const LxSeqSig &sig,
                                        const std::string &call) {
             std::string body = sig.pre;
-            if (is_adapted(m.ret)) {
+            if (!sig.outs.empty()) {
+                // sol2 unpacks a std::tuple into Lua's own multiple returns, so
+                // an out-parameter reads exactly as it would in hand-written Lua:
+                //   local ok, uv, dim = attrs:get_doubles("tex_coord")
+                body += out_return_stmts(m, sig.outs, call, "        ");
+            } else if (is_adapted(m.ret)) {
                 body += "        auto &&r = " + call + ";\n";
                 body += "        return " + adapt_from_expr(m.ret, "r") + ";\n";
             } else if (m.ret.kind == "void") {
@@ -729,6 +760,17 @@ local {{LIB}} = require("{{LIB}}")
         // One class block: new_usertype + one assignment per member, inside an
         // open scope so the local `c` never leaks.
         inline std::string lua_class(const GenClass &k, const GenContext &c) {
+            // A class whose destructor is not public cannot be wrapped: every
+            // runtime backend destroys what it holds. Skip it with a note —
+            // the alternative is a compile error inside the framework headers.
+            if (!k.is_destructible) {
+                std::fprintf(stderr,
+                             "rosetta::%s: class '%s' has a non-public destructor "
+                             "(ref-counted?) — skipped\n",
+                             "lua-expanded", k.name.c_str());
+                return {};
+            }
+
             std::string s = "    {\n";
             s += "    sol::usertype<" + qualified_of(k) + "> c = m.new_usertype<" +
                  qualified_of(k) + ">(\"" + exposed_of(k) + "\",\n        " +
@@ -813,7 +855,7 @@ local {{LIB}} = require("{{LIB}}")
                     if (lx_seq_eligible(probe, c)) {
                         auto lambda = [&](bool tables) {
                             const LxSeqSig    sig  = lx_seq_sig(f.params, tables);
-                            const std::string call = f.qualified + "(" + sig.args + ")";
+                            const std::string call = fn_call_expr(f) + "(" + sig.args + ")";
                             return "[](" + sig.decls + ") {\n" +
                                    lx_seq_body(probe, sig, call) + "    }";
                         };
@@ -834,11 +876,11 @@ local {{LIB}} = require("{{LIB}}")
                 if (lx_has_vector_param(f.params)) {
                     // Same table-accepting second overload as methods get.
                     const LuaTableParams tp = lua_table_params(f.params);
-                    body += "    m.set_function(\"" + f.name + "\", sol::overload(\n        &" +
-                            f.qualified + ",\n        [](" + tp.decls + ") { return " +
-                            f.qualified + "(" + tp.args + "); }));\n";
+                    body += "    m.set_function(\"" + f.name + "\", sol::overload(\n        " +
+                            fn_addr(f) + ",\n        [](" + tp.decls + ") { return " +
+                            fn_call_expr(f) + "(" + tp.args + "); }));\n";
                 } else {
-                    body += "    m.set_function(\"" + f.name + "\", &" + f.qualified + ");\n";
+                    body += "    m.set_function(\"" + f.name + "\", " + fn_addr(f) + ");\n";
                 }
             }
 
@@ -847,12 +889,15 @@ local {{LIB}} = require("{{LIB}}")
             out += "#define SOL_ALL_SAFETIES_ON 1\n"
                    "#include <sol/sol.hpp>\n"
                    "#include <algorithm>\n"
+                   "#include <filesystem>\n"
                    "#include <functional>\n"
+                   "#include <memory>\n"
                    "#include <stdexcept>\n"
                    "#include <string>\n"
                    "#include <vector>\n";
             // sol2-only: just the user's (stock) headers below.
             auto add = [&](const std::string &h) { append_include(out, h); };
+            out += init_includes(c);
             for (const auto &k : c.classes) {
                 add(k.header);
                 for (const auto &m : k.methods) {
@@ -879,6 +924,7 @@ local {{LIB}} = require("{{LIB}}")
             out += "#if defined(_WIN32)\n__declspec(dllexport)\n";
             out += "#else\n__attribute__((visibility(\"default\")))\n#endif\n";
             out += "int luaopen_" + c.lib + "(lua_State *L) {\n";
+            out += init_block(c);
             out += "    // Refuse a foreign interpreter with a clean error instead of a\n";
             out += "    // segfault: on macOS the module resolves the Lua C API from the\n";
             out += "    // HOST at load time (-undefined dynamic_lookup), so loading this\n";

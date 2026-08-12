@@ -119,6 +119,42 @@ target_compile_options(overload PRIVATE -fannotation-attributes)
 target_link_libraries(overload PRIVATE GTest::gtest_main)
 gtest_discover_tests(overload)
 
+# Overload selection on FREE functions (manifest "signature"): one member of a
+# namespace-scope overload set reaches the IR without a reflection of it, and the
+# backends that form a function pointer disambiguate with a static_cast.
+add_executable(free_overload free_overload.cpp)
+target_include_directories(free_overload PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(free_overload PRIVATE -fannotation-attributes)
+target_link_libraries(free_overload PRIVATE GTest::gtest_main)
+gtest_discover_tests(free_overload)
+
+# std::filesystem::path as a string boundary + std::shared_ptr on the
+# caster-less backends (embind smart_ptr, the N-API adopt path, sol2's native
+# handling) — the two gaps that kept a factory API off those targets.
+add_executable(path_shared path_shared.cpp)
+target_include_directories(path_shared PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(path_shared PRIVATE -fannotation-attributes)
+target_link_libraries(path_shared PRIVATE GTest::gtest_main)
+gtest_discover_tests(path_shared)
+
+# The two manifest fields for what is not a binding: "module_init" (statements
+# run at module load) and "generated_headers" (a header the bound library's own
+# build system would have produced).
+add_executable(module_init module_init.cpp)
+target_include_directories(module_init PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(module_init PRIVATE -fannotation-attributes)
+target_link_libraries(module_init PRIVATE GTest::gtest_main)
+gtest_discover_tests(module_init)
+
+# Out-parameters (manifest "out_params"): a value a function returns through a
+# reference leaves the exposed signature and joins the return — a tuple in
+# Python, multiple returns in Lua, an array in JS. Never inferred.
+add_executable(out_params out_params.cpp)
+target_include_directories(out_params PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(out_params PRIVATE -fannotation-attributes)
+target_link_libraries(out_params PRIVATE GTest::gtest_main)
+gtest_discover_tests(out_params)
+
 # The machine-readable coverage report (coverage.json): every bind/skip decision
 # is recorded with a reason, and the JSON parses.
 add_executable(coverage coverage.cpp)

@@ -101,6 +101,9 @@ cmake -B build && cmake --build build
 | `optimization` | — | — | Explicit optimization flag (`-O0`…`-O3`, `-Os`, `-Oz`, `-Og`, `-Ofast`) applied to every compiled backend, overriding the build type's own `-O` level. See [Build type & optimization](#build-type--optimization-build_type-optimization). |
 | `version` | — | `0.1.0` | Distribution version stamped into the packaging artifacts — the `pyproject.toml` the `python-expanded` / `nanobind-expanded` backends emit for wheel builds. See [Python wheels](#python-wheels-version). |
 | `plugins` | — | `[]` | Extra `.cpp` sources to compile into the generator driver (e.g. a custom backend). Paths relative to the manifest. |
+| `out_params` | — | `{}` | Which parameters a method returns **through a reference**, keyed `"Class::method"`. Never inferred. See [below](#out-parameters-out_params). |
+| `module_init` | — | — | Statements the generated module runs when it **loads** (plus the headers declaring them) — a library's lifecycle, which is not a binding. See [below](#module-init-module_init). |
+| `generated_headers` | — | `[]` | Headers the bound library's own build system would have produced (e.g. a configured `version.h`), written into the generated tree and put first on the include path. See [below](#generated-headers-generated_headers). |
 | `qt_dir` | — | a built-in path | Qt 6 install prefix used by the `qt` / `qml` (and `-expanded`) backends. e.g. `"$ENV{HOME}/Qt/6.8.3/macos"`. |
 | `cpp26_root` | — | `$ENV{HOME}/devs/c++/clang-p2996/build` | Root of the C++26 / P2996 reflection toolchain used by the *thin* backends. Moves `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` together. |
 | `cpp26_cxx` | — | `${cpp26_root}/bin/clang++` | C++ compiler (name or path) for the reflection toolchain. |
@@ -431,6 +434,197 @@ covers both shapes, in both directions, on every expanded backend.
 
 ---
 
+## Standard types that need no declaration: `std::filesystem::path`, `std::shared_ptr<T>`
+
+Nothing to write in the manifest for these two — they are listed here because
+until recently a signature naming either was quietly unbindable on the
+caster-less backends, and a factory API tends to name both at once:
+
+```cpp
+std::shared_ptr<Mesh> compile_file(const std::filesystem::path &input);
+```
+
+**`std::filesystem::path` marshals as a string.** To the walk it used to be an
+ordinary unregistered class, so every member naming one was skipped everywhere.
+It is now described as `kind: "string"` with an `is_path` flag, and the two
+families differ in how they honour it:
+
+| Backend | Behaviour |
+| --- | --- |
+| `python-expanded` / `nanobind-expanded` (and the thin `python` / `nanobind`) | **Native**, through `<pybind11/stl/filesystem.h>` / `<nanobind/stl/filesystem.h>` — callers pass a `str` **or** any `os.PathLike`, and a returned path comes back as `pathlib.Path`. |
+| `node-expanded` / `wasm-expanded` / `lua-expanded` | Through the same **copy adapter** the foreign containers use: the boundary declares `std::string`, the emitted code builds a `std::filesystem::path` from it and calls `.string()` on the way back. Scripts see a plain string. |
+| `typescript` | Declares `string`. |
+
+**`std::shared_ptr<T>` crosses in the return direction**, which is where a
+factory needs it. The pointee `T` must itself be a bound class; what each
+backend does with it:
+
+| Backend | Behaviour |
+| --- | --- |
+| `python-expanded` | `py::class_<T, std::shared_ptr<T>>` — the holder is declared automatically for every pointee the module hands out. |
+| `nanobind-expanded` | Native, through `<nanobind/stl/shared_ptr.h>`. |
+| `wasm-expanded` | The class registration gains `.smart_ptr<std::shared_ptr<T>>("T_sp")`, and only for classes that actually travel that way. |
+| `lua-expanded` | Native — sol2's own `unique_usertype_traits` handles it; the userdata is T's usertype. |
+| `node-expanded` | The JS object **adopts** the pointer: a third ownership mode in the wrapper, next to "owns" and "aliases a member of a pinned parent". The C++ object lives as long as the JS handle does. |
+| `typescript` | Declares the **pointee** (`Doc`), not `shared_ptr`. |
+
+Two limits worth knowing:
+
+- **Returns only.** A `shared_ptr<T>` *parameter* stays skipped: converting an
+  incoming script object would mean manufacturing a control block over memory
+  the binding does not own — a double-free waiting to happen. Take `const T&`.
+- **node: untrampolined pointees only.** A class with virtual methods is wrapped
+  as its trampoline subclass, and the adopting wrapper stores a `T*`; reading
+  one as the other is undefined, so such a return stays skipped there (the other
+  backends have no such restriction).
+
+Both work with a non-copyable `T` — which is the point, since a class handed out
+by a factory usually is one.
+
+---
+
+## Out-parameters (`out_params`)
+
+```cpp
+bool get_doubles(const std::string &name, vector<double> &out, index_t &dim) const;
+```
+
+Three results, C++-style. No host language has that shape, and every backend
+skipped such a member: the argument its runtime converts is a temporary, which
+cannot bind to a non-const reference. Name the outputs and they leave the
+exposed signature and join the return instead:
+
+```json
+"out_params": {
+  "AttributesManager::get_doubles": [1, 2]
+}
+```
+
+Keys are `"Class::method"` or `"ns::function"`; values are **0-based parameter
+indices**. A key matching nothing is reported on stderr rather than ignored.
+
+```py
+ok, uv, dim = mesh.facet_corners.attributes().get_doubles("tex_coord")
+```
+
+| Backend | Shape |
+| --- | --- |
+| `python-expanded` / `nanobind-expanded` | A tuple — `(ok, uv, dim)`. |
+| `lua-expanded` | Lua's own **multiple returns** — `local ok, uv, dim = …`. |
+| `node-expanded` | An **array** — `const [ok, uv, dim] = …`. |
+| `wasm-expanded` | An array too, built as an `emscripten::val` (embind marshals no tuple). |
+| `typescript` | A tuple type: `get_doubles(arg0: string): [boolean, number[], number]`. |
+
+The return value comes first when the function has one; with a `void` return
+the outputs are all there is. A foreign container out-parameter arrives already
+flattened to the boundary array, exactly as a container return does.
+
+**Never inferred, and that is the whole design.** These two are the same C++:
+
+```cpp
+void assign_points(vector<double> &pts, index_t dim, bool steal); // an INPUT it steals from
+bool get_doubles(const std::string &, vector<double> &out, index_t &dim); // an OUTPUT
+```
+
+Guessing wrong silently drops an argument in one direction or a result in the
+other, so rosetta does not guess: an unmarked mutable reference keeps binding
+exactly as before (input-only for a container, skipped for a scalar). Marking a
+`const` reference does nothing — the callee cannot write through it. A mutable
+reference to a **bound class** is not an out-parameter either: it already
+crosses as a handle the callee writes through, which is the more faithful
+reading and needs no adapter.
+
+---
+
+## Module init (`module_init`)
+
+A library is more than its API. geogram wants `GEO::initialize()`, a run of
+`CmdLine::import_arg_group()` calls and a C-function-pointer registration to
+have happened before anything works — none of which is expressible as "bind
+this name", so it lived in a hand-written `georo::initialize()` that every
+script had to remember to call first. `module_init` names statements the
+generated module runs **when it loads**:
+
+```json
+"module_init": {
+  "headers": ["geogram/basic/command_line.h", "geogram/basic/command_line_args.h"],
+  "statements": [
+    "GEO::initialize(GEO::GEOGRAM_INSTALL_NONE)",
+    "GEO::CmdLine::import_arg_group(\"standard\")",
+    "GEO::CmdLine::import_arg_group(\"algo\")"
+  ]
+}
+```
+
+A bare array is the shorthand for `statements` alone. The statements are spliced
+**verbatim** into the module entry point — `PYBIND11_MODULE` / `NB_MODULE` /
+`Init` / `EMSCRIPTEN_BINDINGS` / `luaopen_*` / `JLCXX_MODULE` — at the very top,
+before any binding is registered, so an I/O handler an init call installs is in
+place before a bound loader can be reached. A trailing `;` is optional (and never
+doubled). `headers` are emitted as `#include` lines ahead of the bound classes'
+own, since an init statement usually names a namespace the bound headers never
+mention.
+
+Because the statements are spliced verbatim, they must compile at that point:
+spell types qualified, and remember the module has no arguments to offer — this
+is *fixed* start-up work, not a configurable entry point. Anything a caller
+should be able to vary (a verbosity flag, a thread count) still belongs in a
+bound function.
+
+Emitted by the `python`, `nanobind`, `node`, `wasm`, `lua` and `julia` backends
+(thin and expanded alike) — the ones with a module entry point. The C#, Java,
+REST, Qt/QML/ImGui and documentation backends ignore the field: they have no
+single load-time hook to hang it on.
+
+---
+
+## Generated headers (`generated_headers`)
+
+A header the bound library's own build system produces, which is simply absent
+when rosetta compiles that library's sources without running its build. geogram's
+`<geogram/version.h>` is the case in point — configured by geogram's CMake from
+`version.h.in`, and previously faked by a checked-in copy that shadowed the real
+one:
+
+```json
+"generated_headers": [
+  {
+    "path": "geogram/version.h",
+    "template": "./extern/geogram/src/lib/geogram/basic/version.h.in",
+    "substitutions": {
+      "VORPALINE_VERSION_MAJOR": "1",
+      "VORPALINE_VERSION_MINOR": "10",
+      "VORPALINE_VERSION_PATCH": "1",
+      "VORPALINE_VERSION": "1.10.1-rosetta",
+      "VORPALINE_BUILD_NUMBER": "",
+      "VORPALINE_BUILD_DATE": "",
+      "VORPALINE_SVN_REVISION": ""
+    }
+  }
+]
+```
+
+| Field | Required | Meaning |
+|---|:---:|---|
+| `path` | ✅ | The **relative include path** — exactly what the sources `#include`. |
+| `template` | one of | A file with `@KEY@` placeholders (CMake's `configure_file` form), resolved against the manifest's directory. |
+| `content` | one of | Literal lines, as an array of strings, for a header with no template. |
+| `substitutions` | — | `@KEY@` → value, applied to `template`. |
+
+The file is written to `<bindings>/include/<path>` and that directory is placed
+**first** on every generated target's include path — ahead of the library's own
+sources, so a stale copy of the same header cannot win the lookup. Substitution
+happens when the manifest is read, so a missing key is reported against your
+manifest (`no substitution for @VORPALINE_VERSION@`) rather than compiling a
+literal `@KEY@` into the binding; only the `@KEY@` form is recognised, since
+`${KEY}` would collide with the shell and CMake expansions such templates carry.
+
+A `-D` define is a different tool for a nearby job: geogram's `GEOGRAM_VERSION`
+is passed by its CMake on the command line, not written into the header, so it
+belongs in [`compile_definitions`](#preprocessor-definitions-compile_definitions).
+
+---
+
 ## Multiple include directories
 
 When your headers don't all live under a single root, give `user_include` an **array** of directories instead of a single string:
@@ -466,6 +660,7 @@ The single-string form is just the one-directory shorthand:
 | `header` | ✅ | — | Header declaring it (emitted into `#include`). |
 | `doc` | — | — | Optional description (free functions carry no in-source annotations). |
 | `expose` | — | unqualified `name` | The **binding name** — what scripts call it. Same rule as a class's [`expose`](#renaming-a-class-expose): a plain identifier, leaving the emitted C++ (which spells the function qualified) untouched. |
+| `signature` | — | — | The C++ **function type** of the one overload to bind (`"void(Mesh&, bool)"`). Required when `name` is overloaded, meaningless otherwise. See [below](#binding-one-overload-signature). |
 
 Free functions share the module namespace with classes, so `arch::solve` and `arch::sinv::solve` — or a function and a class of the same name — collide exactly like two classes do, and `rosetta_gen` rejects the manifest with the same "rename one with `expose`" error:
 
@@ -479,6 +674,53 @@ Free functions share the module namespace with classes, so `arch::solve` and `ar
 Every backend that binds free functions honors it (python, nanobind, node, wasm, lua, julia, C#, Java, REST, typescript, markdown, html, openapi) — each emits the exposed name as a label and the qualified name as the C++ spelling.
 
 `expose` works the same way on an [extension method](#extension-methods-extensions), where it renames the method on the class it attaches to (and two extensions of one class may not resolve to the same name).
+
+### Binding one overload (`signature`)
+
+An overloaded free function has no reflection to name: `^^GEO::mesh_union` is
+ill-formed the moment the namespace declares the name twice, so the entry could
+not be written at all — the workaround was a wrapper function under a different
+name, in a file you then had to maintain. Give the entry the **signature** of the
+one you want instead:
+
+```json
+"functions": [
+  { "name": "GEO::mesh_union", "header": "geogram/mesh/mesh_surface_intersection.h",
+    "signature": "void(GEO::Mesh&, const GEO::Mesh&, const GEO::Mesh&, bool)" }
+]
+```
+
+The signature is a C++ function type — return type first, then the parameter
+list — and it is spliced into the generated driver **verbatim**, so it must
+resolve there: spell the types the way the header does, qualified. rosetta_gen
+checks only its shape (a return type, balanced parentheses); the types are the
+compiler's business, and an error names your manifest entry's own spelling.
+
+It is not a *filter* over the overload set: it names one member, and only that
+one binds. List the entry twice, with two signatures and two `expose` names, to
+bind two of them:
+
+```json
+{ "name": "GEO::mesh_union", "header": "…", "expose": "mesh_union_flags",
+  "signature": "void(GEO::Mesh&, const GEO::Mesh&, const GEO::Mesh&, GEO::MeshBooleanOperationFlags)" }
+```
+
+Backends form the function pointer through a disambiguating
+`static_cast<void(*)(…)>(&GEO::mesh_union)` — including where the pointer is a
+template argument (`napi_free_entry<…>`) — so **every backend that emits a
+pointer binds the selected overload**: python, nanobind, wasm, lua, node, julia,
+C#, Java (thin and expanded alike), and typescript declares it like any other
+function. The five that spell the function's *reflection* instead — the thin
+`node`, `rest`, `julia`, `csharp` and `java` backends, which emit
+`bind_*_function<^^name>` — **skip the entry with a note on stderr**: there is no
+reflection for one member of an overload set, and a skipped function is honest
+where an ambiguous one would not compile.
+
+Overload selection is a `functions` feature. An [extension
+method](#extension-methods-extensions) cannot take a `signature` (rosetta_gen
+rejects it): an extension reaches the backends as a *method*, whose emitters
+spell its address in many more places than a free function's single
+address-of.
 
 See [FREE_FUNCTIONS](FREE_FUNCTIONS.md) for details.
 

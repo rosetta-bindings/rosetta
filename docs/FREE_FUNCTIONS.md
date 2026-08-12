@@ -99,6 +99,47 @@ opt.functions = {
 | TypeScript | `export function transform(arg0: Point): Point;`  |
 | Markdown   | a `## Functions` section                          |
 
+### Binding one overload (`signature`)
+
+`^^api::add` is ill-formed when `add` is overloaded, so the reflection path above
+has nothing to splice. The manifest entry carries the signature of the one to
+bind instead:
+
+```json
+"functions": [
+  { "name": "api::add", "header": "common.h", "signature": "int(int, int)" }
+]
+```
+
+and `rosetta_gen` emits the signature path, which reflects **nothing**:
+
+```cpp
+opt.functions = {
+    rosetta::make_function_sig<int(int, int)>("api::add", "common.h", "", "", "int(int, int)"),
+};
+```
+
+`Sig` is an ordinary type argument — a function type, not an overload set — so
+the return type and parameters come from decomposing it (`fn_sig_of<R(A...)>`)
+rather than from `return_type_of` / `parameters_of`, and the resulting
+`GenFunction` is the same shape the reflection path produces plus `sig_cpp`. The
+exposed name is `expose`, or the tail of the qualified spelling after the last
+`::` (there is no `identifier_of` to ask).
+
+Every emitted **pointer** is then cast to that signature:
+
+| Backend | Output |
+|---------|--------|
+| pybind / nanobind | `m.def("add", static_cast<int(*)(int, int)>(&api::add))` |
+| embind | `emscripten::function("add", static_cast<int(*)(int, int)>(&api::add))` |
+| sol2 | `m.set_function("add", static_cast<int(*)(int, int)>(&api::add))` |
+| N-API (expanded) | `napi_free_entry<static_cast<int(*)(int, int)>(&api::add)>` — a cast is a valid non-type template argument; `&api::add` is not |
+| TypeScript | `export function add(arg0: number, arg1: number): number;` |
+
+The backends that splice `^^name` (thin `node`, `rest`, `julia`, `csharp`,
+`java`) skip such an entry and say so on stderr — one member of an overload set
+has no reflection to splice.
+
 ### Renaming a function (`expose`)
 
 A function binds under one module-level name — its reflected identifier, unless
@@ -119,7 +160,7 @@ manifest where two of them resolve to the same name. The same field renames an
 [extension method](MANIFEST.md#extension-methods-extensions) on its class.
 
 Caveats inherited from the reflection model:
-- **Overloads**: an overloaded `name` makes `^^name` ill-formed; bind a specific signature, or skip. N-API/REST dispatch is arity-only anyway.
+- **Overloads**: an overloaded `name` makes `^^name` ill-formed — give the entry a `"signature"` (below) to bind one of them.
 - **Function templates** can't be bound without instantiation arguments.
 - **REST** skips a function whose parameter/return types aren't JSON-(de)serializable (e.g. user class types), mirroring how it skips such methods.
 - **doc** comes from the manifest, since the user's headers carry no annotations.

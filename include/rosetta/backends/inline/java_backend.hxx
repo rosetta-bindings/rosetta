@@ -762,6 +762,9 @@ final class Rt {
                 s += "    rosetta::bind_java<" + qualified_of(k) + ">(\"" + exposed_of(k) + "\");\n";
             }
             for (const auto &f : c.functions) {
+                if (fn_needs_reflection_skip(f, "java")) {
+                    continue;
+                }
                 s += "    rosetta::bind_java_function<^^" + f.qualified + ">(\"" + f.name + "\");\n";
             }
             return s;

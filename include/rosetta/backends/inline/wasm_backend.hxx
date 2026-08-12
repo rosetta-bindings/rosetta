@@ -77,7 +77,7 @@ node -e "require('./build/{{LIB}}.js')().then(M => console.log(Object.keys(M)))"
 )MD";
 
         inline void WasmBackend::emit(const GenContext &c) const {
-            std::string binds;
+            std::string binds = init_block(c);
             // Enums first so class fields/methods can resolve them.
             for (const auto &e : c.enums) {
                 binds += "    rosetta::bind_wasm_enum<" + qualified_of(e) + ">(\"" + exposed_of(e) +
@@ -87,7 +87,7 @@ node -e "require('./build/{{LIB}}.js')().then(M => console.log(Object.keys(M)))"
                 binds += "    rosetta::bind_wasm<" + qualified_of(k) + ">(\"" + exposed_of(k) + "\");\n";
             }
             for (const auto &f : c.functions) {
-                binds += "    emscripten::function(\"" + f.name + "\", &" + f.qualified +
+                binds += "    emscripten::function(\"" + f.name + "\", " + fn_addr(f) +
                          ");\n";
             }
             auto dir = c.out_dir / "wasm";

@@ -112,6 +112,14 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             if (!nx_marshalable(t)) {
                 return false;
             }
+            // Shared ownership travels OUT only. from_napi would have to
+            // manufacture a shared_ptr for an object whose JS wrapper may own it
+            // outright or merely alias a member of another object — inventing a
+            // control block over memory rosetta does not own is how a
+            // double-free starts. A `const T&` parameter takes the same call.
+            if (t.is_shared_ptr) {
+                return false;
+            }
             if (t.kind == "object") {
                 return p.is_ref || t.copy_constructible; // by-ref never copies
             }
@@ -131,14 +139,60 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
         }
 
         // OK as an output (return / field get side, i.e. through to_napi)?
-        inline bool nx_ret_ok(const GenType &t) {
+        inline const GenClass *nx_bound_class(const GenType &t, const GenContext &c); // below
+
+        // Does this method hand out a REFERENCE to a bound class? Such a method
+        // binds through call_method_alias — the wrap aliases the referent and
+        // pins the receiver — instead of to_napi, which would copy. A const
+        // reference is included: JS has no constness to preserve, and the
+        // alternative (a copy) is worse for a store the caller means to reach.
+        inline bool nx_alias_return(const GenMethod &m, const GenContext &c) {
+            return m.ret_is_ref && m.ret.kind == "object" && !m.ret.is_shared_ptr &&
+                   nx_bound_class(m.ret, c) != nullptr;
+        }
+
+        inline bool nx_ret_ok(const GenType &t, const GenContext &c, bool ref_return = false) {
             if (t.kind == "void") {
                 return true;
             }
             if (!nx_marshalable(t)) {
                 return false;
             }
+            // std::shared_ptr<T>: to_napi hands the OWNERSHIP to the JS object,
+            // which adopts the shared_ptr and keeps the C++ object alive (the
+            // third ownership mode in Wrap — see node_runtime.h). Two conditions,
+            // both structural: T must be bound (its ctor_ref is what the adopt
+            // path calls) and must have no virtuals, since the adopting Wrap
+            // stores a T* and reading it as a trampoline subclass would be
+            // undefined — the same restriction the aliased member-object path
+            // carries, for the same reason. Must precede the "object" branch,
+            // whose kind a shared_ptr also has.
+            if (t.is_shared_ptr) {
+                const GenClass *pk = nx_bound_class(shared_pointee(t), c);
+                return pk != nullptr && node_virtual_methods(*pk).empty();
+            }
             if (t.kind == "object") {
+                // to_napi builds the wrapper through `ctor_ref<T>()`, which is
+                // only set for a class this module REGISTERED. For anything else
+                // — GEO::CSGCompiler::builder() returning an unbound
+                // GEO::CSGBuilder&, a std::map, an incomplete helper — that
+                // reference is empty and calling the method takes the process
+                // down with a FATAL N-API error. Skipping is the honest reading,
+                // and it is what wasm-expanded / lua-expanded already do.
+                const GenClass *pk = nx_bound_class(t, c);
+                if (pk == nullptr) {
+                    return false;
+                }
+                // A REFERENCE return does not go through to_napi at all: it
+                // hands out an aliased wrap pinned to the receiver
+                // (call_method_alias), so copy-assignability is beside the
+                // point — which is what lets `facet_corners.attributes()` bind
+                // to a non-copyable AttributesManager. The alias stores a T*,
+                // so the class must be untrampolined, exactly as the
+                // member-object property path requires.
+                if (ref_return) {
+                    return node_virtual_methods(*pk).empty();
+                }
                 return t.copy_assignable; // to_napi: Wrap(...)->inner() = v
             }
             if (t.kind == "vector" && !t.element.empty()) {
@@ -175,12 +229,12 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
         // overload set whose surviving IR entry is the sequence one binds too.
 
         // Do the NON-sequence parts of the signature satisfy the node gates?
-        inline bool nx_seq_rest_ok(const GenMethod &m) {
-            if (!is_adapted(m.ret) && !nx_ret_ok(m.ret)) {
+        inline bool nx_seq_rest_ok(const GenMethod &m, const GenContext &c) {
+            if (!is_adapted(m.ret) && !nx_ret_ok(m.ret, c, nx_alias_return(m, c))) {
                 return false;
             }
             for (const auto &p : m.params) {
-                if (is_adapted(p.type)) {
+                if (is_adapted(p.type) || is_out_param(p)) {
                     continue;
                 }
                 if (!nx_pass_ok(p)) {
@@ -224,39 +278,72 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
         inline std::string nx_seq_adapter_def(const std::string &fn_name,
                                               const std::string &receiver, const GenMethod &m,
                                               const std::string &callee, bool ext_self = false) {
-            std::string decls = receiver.empty() ? "" : receiver + " &self";
-            std::string pre, args;
+            // Declarations and arguments are collected separately: an
+            // out-parameter contributes an ARGUMENT (its local) but no
+            // DECLARATION.
+            std::vector<std::string> decls, args;
+            if (!receiver.empty()) {
+                decls.push_back(receiver + " &self");
+            }
+            std::string pre;
             const bool  exact = m.param_cpp.size() == m.params.size();
             for (std::size_t j = 0; j < m.params.size(); ++j) {
                 const std::string an = "arg" + std::to_string(j);
-                if (!decls.empty()) {
-                    decls += ", ";
+                const GenType    &t  = m.params[j].type;
+                if (is_out_param(m.params[j])) {
+                    const std::string on = "out" + std::to_string(j);
+                    pre += "        " + out_local_cpp(t) + " " + on + "{};\n";
+                    args.push_back(on);
+                    continue;
                 }
-                if (j) {
-                    args += ", ";
-                }
-                const GenType &t = m.params[j].type;
                 if (is_adapted(t)) {
                     const std::string sn = adapt_local(t, j);
-                    decls += adapt_boundary_cpp(t) + " " + an;
+                    decls.push_back(adapt_boundary_cpp(t) + " " + an);
                     pre += adapt_decl_stmts(t, an, sn, "        ");
-                    args += sn;
+                    args.push_back(sn);
                 } else if (exact) {
-                    decls += qualify_objects(qualify_std(m.param_cpp[j]), t) + " " + an;
-                    args += an;
+                    decls.push_back(qualify_objects(qualify_std(m.param_cpp[j]), t) + " " + an);
+                    args.push_back(an);
                 } else if (t.kind == "object") {
-                    decls += nx_cpp_type(t) + " &" + an;
-                    args += an;
+                    decls.push_back(nx_cpp_type(t) + " &" + an);
+                    args.push_back(an);
                 } else {
-                    decls += nx_cpp_type(t) + " " + an;
-                    args += an;
+                    decls.push_back(nx_cpp_type(t) + " " + an);
+                    args.push_back(an);
                 }
             }
+            // The receiver is spelled in the declaration list but passed
+            // separately by the ext_self form, so it never joins `args`.
+            const std::string arg_list = join(args, ", ");
             const std::string invoke =
-                ext_self ? (callee + "(self" + (args.empty() ? "" : ", " + args) + ")")
-                         : (callee + "(" + args + ")");
-            std::string       ret, body = pre;
-            if (is_adapted(m.ret)) {
+                ext_self ? (callee + "(self" + (arg_list.empty() ? "" : ", " + arg_list) + ")")
+                         : (callee + "(" + arg_list + ")");
+            // Out-parameters: rebuild them here rather than in the shared helper,
+            // because the adapter must also name its own return TYPE.
+            std::vector<OutParam> outs;
+            for (std::size_t j = 0; j < m.params.size(); ++j) {
+                if (is_out_param(m.params[j])) {
+                    const std::string on = "out" + std::to_string(j);
+                    outs.push_back({on, out_expr(m.params[j].type, on)});
+                }
+            }
+            std::string ret, body = pre;
+            if (!outs.empty()) {
+                // A std::tuple, which to_napi turns into a JS array: the return
+                // value first when there is one, then the out-parameters.
+                std::vector<std::string> types;
+                if (m.ret.kind != "void") {
+                    types.push_back(is_adapted(m.ret) ? adapt_boundary_cpp(m.ret)
+                                                      : nx_cpp_type(m.ret));
+                }
+                for (std::size_t j = 0; j < m.params.size(); ++j) {
+                    if (is_out_param(m.params[j])) {
+                        types.push_back(out_boundary_cpp(m.params[j].type));
+                    }
+                }
+                ret = "std::tuple<" + join(types, ", ") + ">";
+                body += out_return_stmts(m, outs, invoke, "        ");
+            } else if (is_adapted(m.ret)) {
                 ret = adapt_boundary_cpp(m.ret);
                 body += "        auto &&r = " + invoke + ";\n";
                 body += "        return " + adapt_from_expr(m.ret, "r") + ";\n";
@@ -267,11 +354,11 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 ret = "decltype(auto)"; // preserve a reference return (to_napi copies)
                 body += "        return " + invoke + ";\n";
             }
-            return "    inline " + ret + " " + fn_name + "(" + decls + ") {\n" + body +
+            return "    inline " + ret + " " + fn_name + "(" + join(decls, ", ") + ") {\n" + body +
                    "    }\n";
         }
 
-        inline bool nx_method_ok(const GenMethod &m) {
+        inline bool nx_method_ok(const GenMethod &m, const GenContext &c) {
             // Overload set: `&T::name` in the thunk template argument would be
             // ambiguous. The emitter routes such a method through the free
             // adapter path instead (which calls by name), so reaching here with
@@ -280,7 +367,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             if (m.is_overloaded) {
                 return false;
             }
-            if (!nx_ret_ok(m.ret)) {
+            if (!nx_ret_ok(m.ret, c, nx_alias_return(m, c))) {
                 return false;
             }
             for (const auto &p : m.params) {
@@ -310,6 +397,17 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
 
         inline std::string node_expanded_class(const GenClass &k, const GenContext &c,
                                                std::string &adapters) {
+            // A class whose destructor is not public cannot be wrapped: every
+            // runtime backend destroys what it holds. Skip it with a note —
+            // the alternative is a compile error inside the framework headers.
+            if (!k.is_destructible) {
+                std::fprintf(stderr,
+                             "rosetta::%s: class '%s' has a non-public destructor "
+                             "(ref-counted?) — skipped\n",
+                             "node-expanded", k.name.c_str());
+                return {};
+            }
+
             const auto        virts = node_virtual_methods(k);
             const std::string kx    = exposed_of(k);
             const std::string held =
@@ -328,7 +426,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             // member-object property returning an aliased wrap that pins the
             // parent (get_member_object in node_runtime.h).
             for (const auto &f : k.fields) {
-                if (!nx_marshalable(f.type) || !nx_ret_ok(f.type) ||
+                if (!nx_marshalable(f.type) || !nx_ret_ok(f.type, c) ||
                     (f.type.kind == "object" && !f.type.copy_assignable)) {
                     const GenClass *fk = f.type.kind == "object"
                                              ? nx_bound_class(f.type, c)
@@ -380,7 +478,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     // nothing (from_napi has no conversion for the foreign
                     // type; overloaded sets are fine here, see the adapter
                     // notes above).
-                    if (!seq_adaptable(m) || !nx_seq_rest_ok(m)) {
+                    if (!seq_adaptable(m) || !nx_seq_rest_ok(m, c)) {
                         coverage::note_skip("node-expanded", k, m, "sequence_not_adaptable",
                                             "a registered sequence in the signature has no "
                                             "std::vector boundary adapter for this backend");
@@ -413,7 +511,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     // sequence path.
                     GenMethod probe    = m;
                     probe.is_overloaded = false;
-                    if (!nx_method_ok(probe)) {
+                    if (!nx_method_ok(probe, c)) {
                         coverage::note_skip("node-expanded", k, m, "unmarshalable_signature",
                                             "no N-API conversion for a type in this signature");
                         continue; // the survivor's own signature fails the gates
@@ -431,7 +529,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     }
                     continue;
                 }
-                if (!nx_method_ok(m)) {
+                if (!nx_method_ok(m, c)) {
                     coverage::note_skip("node-expanded", k, m, "unmarshalable_signature",
                                         "no N-API conversion for a type in this signature "
                                         "(e.g. a std::function parameter, or a non-const "
@@ -448,6 +546,11 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 if (m.is_static) {
                     s += "        props.push_back(This::StaticMethod<&This::call_static<" + mp +
                          ">>(\"" + m.name + "\"));\n";
+                } else if (nx_alias_return(m, c)) {
+                    // Returns a reference to a bound class: alias it, pinning
+                    // this object as the parent (see call_method_alias).
+                    s += "        props.push_back(This::InstanceMethod<&This::call_method_alias<" +
+                         mp + ">>(\"" + m.name + "\"));\n";
                 } else {
                     s += "        props.push_back(This::InstanceMethod<&This::call_method<" + mp +
                          ">>(\"" + m.name + "\"));\n";
@@ -502,7 +605,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 s += "            Napi::Object proto = ctor.Get(\"prototype\").As<Napi::Object>();\n";
                 s += "            auto &guard = rosetta::napi_override_guard<" + self + ">();\n";
                 for (const GenMethod *m : virts) {
-                    if (!nx_method_ok(*m)) {
+                    if (!nx_method_ok(*m, c)) {
                         continue;
                     }
                     s += "            if (proto.Get(\"" + m->name + "\").IsFunction()) {\n";
@@ -539,9 +642,9 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 probe.ret    = f.ret;
                 probe.params = f.params;
                 if (seq_touches(probe)) {
-                    if (seq_adaptable(probe) && nx_seq_rest_ok(probe)) {
+                    if (seq_adaptable(probe) && nx_seq_rest_ok(probe, c)) {
                         const std::string an = "seq_fn_" + f.name;
-                        adapters += nx_seq_adapter_def(an, "", probe, f.qualified);
+                        adapters += nx_seq_adapter_def(an, "", probe, fn_call_expr(f));
                         body += "    exports.Set(\"" + f.name +
                                 "\", Napi::Function::New(env, "
                                 "&rosetta::napi_free_entry<&rosetta_nx_seq::" + an +
@@ -549,13 +652,13 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     }
                     continue;
                 }
-                bool ok = nx_ret_ok(f.ret);
+                bool ok = nx_ret_ok(f.ret, c);
                 for (const auto &p : f.params) {
                     ok = ok && nx_pass_ok(p);
                 }
                 if (ok) {
                     body += "    exports.Set(\"" + f.name +
-                            "\", Napi::Function::New(env, &rosetta::napi_free_entry<&" + f.qualified +
+                            "\", Napi::Function::New(env, &rosetta::napi_free_entry<" + fn_addr(f) +
                             ">, \"" + f.name + "\"));\n";
                 }
             }
@@ -565,6 +668,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             out += "#include <napi.h>\n";
             out += "#include <rosetta/backends/node_runtime.h>\n";
             auto add = [&](const std::string &h) { append_include(out, h); };
+            out += init_includes(c);
             for (const auto &k : c.classes) {
                 add(k.header);
                 for (const auto &m : k.methods) {
@@ -586,11 +690,14 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                        "// matrix; the adapter builds the foreign container around the real\n"
                        "// call (a mutable Seq& / Mat& binds input-only).\n"
                        "#include <algorithm>\n"
+                       "#include <filesystem>\n"
+                       "#include <tuple>\n"
                        "#include <vector>\n"
                        "namespace rosetta_nx_seq {\n" + adapters + "}\n";
             }
             out += node_trampolines_of(c); // reflection-free; empty when no virtuals
             out += "\nNapi::Object Init(Napi::Env env, Napi::Object exports) {\n";
+            out += init_block(c);
             out += body;
             out += "    return exports;\n}\n\n";
             out += "NODE_API_MODULE(" + c.lib + ", Init)\n";

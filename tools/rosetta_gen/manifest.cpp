@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <sstream>
 #include <functional>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -363,6 +364,35 @@ Manifest load(const fs::path &manifest_path) {
     // identifier. It names a module attribute (and, for a class, a generated
     // trampoline), so it must be a plain identifier. Shared by classes, free
     // functions and extension methods.
+    // An entry's optional "signature": the C++ function type of the ONE overload
+    // to bind. Checked only for the shape the generated driver needs — a
+    // parameter list with balanced parentheses and a return type before it — so
+    // that a typo surfaces here, naming the manifest entry, instead of as a
+    // template error deep in the driver. The types themselves are the compiler's
+    // business; they are spliced verbatim.
+    auto entry_signature = [](const json &e, const std::string &name, const char *what) {
+        std::string sig;
+        if (!e.contains("signature")) {
+            return sig;
+        }
+        sig                     = e.at("signature").get<std::string>();
+        const auto  open        = sig.find('(');
+        int         depth       = 0;
+        bool        balanced    = true;
+        for (char ch : sig) {
+            depth += ch == '(';
+            depth -= ch == ')';
+            balanced = balanced && depth >= 0;
+        }
+        if (open == std::string::npos || open == 0 || depth != 0 || !balanced ||
+            sig.find(')') == std::string::npos) {
+            throw std::runtime_error(
+                std::string(what) + " \"" + name + "\": \"signature\" (\"" + sig +
+                "\") must be a C++ function type, e.g. \"void(Mesh&, bool)\" — return type "
+                "first, then a parenthesized parameter list");
+        }
+        return sig;
+    };
     auto entry_expose = [](const json &e, const std::string &name, const char *what) {
         std::string expose;
         if (e.contains("expose")) {
@@ -431,6 +461,18 @@ Manifest load(const fs::path &manifest_path) {
                             x.contains("doc") ? x.at("doc").get<std::string>() : std::string{};
                         // `expose` renames the method on the class it attaches to.
                         xe.expose = entry_expose(x, xe.name, "extension");
+                        // Overload selection is a "functions" feature: an
+                        // extension reaches the backends as a GenMethod, whose
+                        // emitters spell ext_qualified in many more places than
+                        // a free function's single address-of. Reject it here
+                        // rather than bind the wrong overload silently.
+                        if (x.contains("signature")) {
+                            throw std::runtime_error(
+                                "extension \"" + xe.name +
+                                "\": \"signature\" (overload selection) is supported on "
+                                "\"functions\" entries only — write the wrapper as a free "
+                                "function, or give the extension a distinct name");
+                        }
                         e.extensions.push_back(std::move(xe));
                     }
                 }
@@ -463,6 +505,9 @@ Manifest load(const fs::path &manifest_path) {
                     // `expose` is optional: the binding name, overriding the C++
                     // identifier (see FunctionEntry::expose).
                     e.expose = entry_expose(f, e.name, "function");
+                    // `signature` is optional: bind ONE overload of an
+                    // overloaded name (see FunctionEntry::signature).
+                    e.signature = entry_signature(f, e.name, "function");
                     m.functions.push_back(std::move(e));
                 }
             };
@@ -507,6 +552,122 @@ Manifest load(const fs::path &manifest_path) {
     }
     if (j.contains("matrices")) {
         m.matrices = read_containers(j.at("matrices"), "matrices");
+    }
+
+    // `module_init` is optional: C++ statements the generated module runs when
+    // it LOADS, plus the headers that declare them. Two forms — a bare array of
+    // statements, or an object with "headers" + "statements" — because the
+    // headers are usually needed (an init statement tends to name a namespace
+    // the bound classes never mention) but not always.
+    if (j.contains("module_init")) {
+        const json &mi = j.at("module_init");
+        if (mi.is_array()) {
+            m.module_init.statements = mi.get<std::vector<std::string>>();
+        } else if (mi.is_object()) {
+            if (mi.contains("headers")) {
+                // Spelled exactly as written — these are include paths for the
+                // emitted `#include`, not entry headers, so the manifest's
+                // "header_dir" default does not apply to them.
+                m.module_init.headers = mi.at("headers").get<std::vector<std::string>>();
+            }
+            if (!mi.contains("statements")) {
+                throw std::runtime_error("\"module_init\" object needs \"statements\"");
+            }
+            m.module_init.statements = mi.at("statements").get<std::vector<std::string>>();
+        } else {
+            throw std::runtime_error(
+                "\"module_init\" must be an array of statements or an object with "
+                "\"headers\" + \"statements\"");
+        }
+        for (const std::string &st : m.module_init.statements) {
+            if (st.empty()) {
+                throw std::runtime_error("\"module_init\" statements must not be empty");
+            }
+        }
+    }
+
+    // `out_params` is optional: which parameters a method RETURNS through a
+    // reference. Not inferable — `assign_points(vector<double>&, ...)` takes its
+    // vector as an input it may steal from and `get_doubles(..., vector<double>&,
+    // index_t&)` fills its own as an output, and the two are the same C++.
+    if (j.contains("out_params")) {
+        for (const auto &[key, idx] : j.at("out_params").items()) {
+            if (key.empty()) {
+                throw std::runtime_error("\"out_params\" keys must name a method or function");
+            }
+            std::vector<std::size_t> indices;
+            for (const auto &i : idx) {
+                indices.push_back(i.get<std::size_t>());
+            }
+            if (indices.empty()) {
+                throw std::runtime_error("\"out_params\" entry \"" + key +
+                                         "\" lists no parameter index");
+            }
+            m.out_params[key] = std::move(indices);
+        }
+    }
+
+    // `generated_headers` is optional: headers the bound library's own build
+    // system would have generated. Either a "template" file with @KEY@
+    // placeholders plus "substitutions", or literal "content" lines — resolved
+    // to finished text HERE, so the driver carries no file paths and a missing
+    // template is reported against the manifest that named it.
+    if (j.contains("generated_headers")) {
+        for (const auto &g : j.at("generated_headers")) {
+            GeneratedHeaderEntry e;
+            e.path = g.at("path").get<std::string>();
+            if (e.path.empty() || fs::path(e.path).is_absolute()) {
+                throw std::runtime_error("\"generated_headers\" path must be a relative include "
+                                         "path, e.g. \"geogram/version.h\"");
+            }
+            if (g.contains("template") == g.contains("content")) {
+                throw std::runtime_error(
+                    "\"generated_headers\" entry \"" + e.path +
+                    "\" needs exactly one of \"template\" (a file with @KEY@ placeholders) "
+                    "or \"content\" (literal lines)");
+            }
+            if (g.contains("content")) {
+                for (const auto &line : g.at("content")) {
+                    e.content += line.get<std::string>() + "\n";
+                }
+            } else {
+                const fs::path tpl =
+                    fs::weakly_canonical(base / g.at("template").get<std::string>());
+                std::ifstream in(tpl);
+                if (!in) {
+                    throw std::runtime_error("\"generated_headers\": cannot read template '" +
+                                             tpl.string() + "'");
+                }
+                std::stringstream ss;
+                ss << in.rdbuf();
+                e.content = ss.str();
+                // configure_file's @KEY@ form, and only that form: ${KEY} would
+                // collide with the shell/CMake expansions such templates carry.
+                if (g.contains("substitutions")) {
+                    for (const auto &[k, v] : g.at("substitutions").items()) {
+                        const std::string tok = "@" + k + "@";
+                        const std::string rep = v.get<std::string>();
+                        for (std::size_t pos = e.content.find(tok); pos != std::string::npos;
+                             pos             = e.content.find(tok, pos + rep.size())) {
+                            e.content.replace(pos, tok.size(), rep);
+                        }
+                    }
+                }
+                // A leftover placeholder means the substitution list is
+                // incomplete: the emitted header would carry a literal @KEY@
+                // into the compile. Name the first one.
+                const auto at = e.content.find('@');
+                if (at != std::string::npos) {
+                    const auto end = e.content.find('@', at + 1);
+                    if (end != std::string::npos) {
+                        throw std::runtime_error(
+                            "\"generated_headers\" entry \"" + e.path +
+                            "\": no substitution for " + e.content.substr(at, end - at + 1));
+                    }
+                }
+            }
+            m.generated_headers.push_back(std::move(e));
+        }
     }
 
     // `interop` is optional: foreign libraries whose types the target's binding

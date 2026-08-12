@@ -341,6 +341,9 @@ if(SPEC.functions.length){
                          exposed_of(e) + "\");\n";
             }
             for (const auto &f : c.functions) {
+                if (fn_needs_reflection_skip(f, "rest")) {
+                    continue;
+                }
                 binds += "    rosetta::bind_rest_function<^^" + f.qualified + ">(server, \"/" +
                          f.name + "\");\n";
             }

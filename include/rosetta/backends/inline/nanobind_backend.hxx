@@ -108,7 +108,7 @@ python3 -c "import {{LIB}}"
 ```)MD";
 
         inline std::string nanobind_bindings(const GenContext &c) {
-            std::string binds;
+            std::string binds = init_block(c);
             for (const auto &e : c.enums) {
                 binds += "    rosetta::bind_nanobind_enum<" + qualified_of(e) + ">(m, \"" +
                          exposed_of(e) + "\");\n";
@@ -118,7 +118,7 @@ python3 -c "import {{LIB}}"
                          "\");\n";
             }
             for (const auto &f : c.functions) {
-                binds += "    m.def(\"" + f.name + "\", &" + f.qualified +
+                binds += "    m.def(\"" + f.name + "\", " + fn_addr(f) +
                          (f.doc.empty() ? "" : ", \"" + f.doc + "\"") + ");\n";
             }
             return binds;

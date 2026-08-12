@@ -227,7 +227,7 @@ python3 -c "import {{LIB}}"
                 return false;
             };
 
-            std::string binds;
+            std::string binds = init_block(c);
             // Enums first so class fields/methods can resolve them.
             for (const auto &e : c.enums) {
                 binds += "    rosetta::bind_pybind_enum<" + qualified_of(e) + ">(m, \"" +
@@ -257,7 +257,7 @@ python3 -c "import {{LIB}}"
                 }
             }
             for (const auto &f : c.functions) {
-                binds += "    m.def(\"" + f.name + "\", &" + f.qualified +
+                binds += "    m.def(\"" + f.name + "\", " + fn_addr(f) +
                          (f.doc.empty() ? "" : ", \"" + f.doc + "\"") + ");\n";
             }
             return binds;

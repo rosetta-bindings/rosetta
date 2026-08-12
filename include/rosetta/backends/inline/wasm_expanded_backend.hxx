@@ -167,6 +167,22 @@ namespace rosetta_wx {
             return false;
         }
 
+        // `.smart_ptr<std::shared_ptr<T>>("T_sp")` for a class the module hands
+        // out inside a shared_ptr, and nothing at all for one it does not —
+        // embind needs the pointee registered with a matching smart_ptr before
+        // it will convert one, exactly as pybind11 needs a holder. The name is
+        // embind's own registry key, not something JS ever types, so it only has
+        // to be unique: the exposed class name plus a suffix.
+        inline std::string wx_smart_ptr_seg(const GenClass &k, const GenContext &c) {
+            const auto        need = shared_pointees(c);
+            const std::string kq   = qualified_of(k);
+            if (std::find(need.begin(), need.end(), kq) == need.end()) {
+                return {};
+            }
+            return "\n        .smart_ptr<std::shared_ptr<" + kq + ">>(\"" + exposed_of(k) +
+                   "_sp\")";
+        }
+
         inline bool wx_marshalable(const GenType &t, const GenContext &c) {
             // Bare raw pointer to a bound class: embind handles it via
             // allow_raw_pointers (non-owning), returning/accepting a JS handle to
@@ -176,6 +192,16 @@ namespace rosetta_wx {
             }
             if (t.kind == "unknown") {
                 return false;
+            }
+            // std::shared_ptr<T>: embind marshals one natively once T is
+            // registered with a matching `.smart_ptr<std::shared_ptr<T>>` (see
+            // wx_smart_ptr_seg) — the JS side gets an ordinary handle to T that
+            // keeps the C++ object alive. The question to ask is about the
+            // POINTEE: `object` here is the literal identifier "shared_ptr",
+            // which is bound nowhere. Must precede the "object" branch below,
+            // which a shared_ptr's kind also satisfies.
+            if (t.is_shared_ptr) {
+                return wx_is_bound(shared_pointee(t), c);
             }
             // A by-value class is marshalable only when it is itself registered
             // (a bound class_). An unregistered/incomplete object — std::array,
@@ -301,7 +327,7 @@ namespace rosetta_wx {
                 }
             }
             for (const auto &p : m.params) {
-                if (is_adapted(p.type)) {
+                if (is_adapted(p.type) || is_out_param(p)) {
                     continue;
                 }
                 if (p.type.is_callback) {
@@ -326,37 +352,47 @@ namespace rosetta_wx {
         // The adapter's (param decls, pre-call statements, call args). Non-seq
         // params keep their exact spellings (param_cpp) when available.
         struct WxSeqSig {
-            std::string decls;
-            std::string pre;
-            std::string args;
+            std::string           decls;
+            std::string           pre;
+            std::string           args;
+            std::vector<OutParam> outs; // manifest "out_params" — joined to the return
         };
         inline WxSeqSig wx_seq_sig(const std::vector<GenParam>    &params,
                                    const std::vector<std::string> &param_cpp) {
             WxSeqSig   o;
             const bool exact = param_cpp.size() == params.size();
+            // Declarations and arguments are collected separately: an
+            // out-parameter contributes an ARGUMENT (its local) but no
+            // DECLARATION.
+            std::vector<std::string> decls, args;
             for (std::size_t j = 0; j < params.size(); ++j) {
                 const std::string an = "arg" + std::to_string(j);
-                if (j) {
-                    o.decls += ", ";
-                    o.args += ", ";
+                const GenType    &t  = params[j].type;
+                if (is_out_param(params[j])) {
+                    const std::string on = "out" + std::to_string(j);
+                    o.pre += "            " + out_local_cpp(t) + " " + on + "{};\n";
+                    args.push_back(on);
+                    o.outs.push_back({on, out_expr(t, on)});
+                    continue;
                 }
-                const GenType &t = params[j].type;
                 if (is_adapted(t)) {
                     const std::string sn = adapt_local(t, j);
-                    o.decls += adapt_boundary_cpp(t) + " " + an;
+                    decls.push_back(adapt_boundary_cpp(t) + " " + an);
                     o.pre += adapt_decl_stmts(t, an, sn, "            ");
-                    o.args += sn;
+                    args.push_back(sn);
                 } else if (exact) {
-                    o.decls += qualify_objects(qualify_std(param_cpp[j]), t) + " " + an;
-                    o.args += an;
+                    decls.push_back(qualify_objects(qualify_std(param_cpp[j]), t) + " " + an);
+                    args.push_back(an);
                 } else if (t.kind == "object") {
-                    o.decls += wx_cpp_type(t) + " &" + an;
-                    o.args += an;
+                    decls.push_back(wx_cpp_type(t) + " &" + an);
+                    args.push_back(an);
                 } else {
-                    o.decls += wx_cpp_type(t) + " " + an;
-                    o.args += an;
+                    decls.push_back(wx_cpp_type(t) + " " + an);
+                    args.push_back(an);
                 }
             }
+            o.decls = join(decls, ", ");
+            o.args  = join(args, ", ");
             return o;
         }
 
@@ -364,7 +400,13 @@ namespace rosetta_wx {
         inline std::string wx_seq_body(const GenMethod &m, const WxSeqSig &sig,
                                        const std::string &call) {
             std::string body = sig.pre;
-            if (is_adapted(m.ret)) {
+            if (!sig.outs.empty()) {
+                // embind marshals no tuple, so the out-parameters come back as
+                // an emscripten::val ARRAY — the same JS shape node hands out,
+                // reached a different way.
+                body += out_return_stmts(m, sig.outs, call, "            ",
+                                         OutStyle::val_array);
+            } else if (is_adapted(m.ret)) {
                 body += "            auto &&r = " + call + ";\n";
                 body += "            return " + adapt_from_expr(m.ret, "r") + ";\n";
             } else if (m.ret.kind == "void") {
@@ -375,16 +417,35 @@ namespace rosetta_wx {
             return body;
         }
 
+        // Does this method hand out a REFERENCE to a bound class? embind's
+        // toWireType copies a class return — including an lvalue-ref one — so
+        // such a method is emitted as a lambda returning the ADDRESS, under
+        // allow_raw_pointers: a non-owning handle to the real object, the same
+        // borrowed-handle shape the member-object getters use. (As there, and
+        // unlike pybind's reference_internal, nothing pins the parent: the
+        // handle dangles if the owner dies first.)
+        inline bool wx_alias_return(const GenMethod &m, const GenContext &c) {
+            return m.ret_is_ref && m.ret.kind == "object" && !m.ret.is_shared_ptr &&
+                   !m.is_static && !m.is_extension && wx_is_bound(m.ret, c);
+        }
+
         inline bool wx_method_ok(const GenMethod &m, const GenContext &c) {
             // An overload set is fine here: the emitter always spells an
             // explicit static_cast to the exact signature, so the surviving
             // (first-declared) entry binds unambiguously.
+            // An overload needs its exact signature spelled for the cast; a
+            // type with no name of its own cannot be. See sig_spellable().
+            if (m.is_overloaded && !sig_spellable(m)) {
+                return false;
+            }
             if (m.ret.kind != "void" && !wx_marshalable(m.ret, c)) {
                 return false;
             }
             // embind's toWireType COPIES a class return (also for an lvalue-ref
-            // return), so a non-copyable class return would not compile.
-            if (m.ret.kind == "object" && !m.ret.copy_constructible) {
+            // return), so a non-copyable class return would not compile —
+            // unless it is handed out as a borrowed handle instead
+            // (wx_alias_return).
+            if (m.ret.kind == "object" && !m.ret.copy_constructible && !wx_alias_return(m, c)) {
                 return false;
             }
             for (const auto &p : m.params) {
@@ -397,8 +458,10 @@ namespace rosetta_wx {
                 }
                 // Mutable ref to a NON-class type (std::string&, index_t&): an
                 // out-parameter — embind's converted argument is a temporary,
-                // which cannot bind to a non-const reference.
-                if (p.type.kind != "object" && p.is_mutable_ref) {
+                // which cannot bind to a non-const reference. Unless the
+                // manifest declared it an output, in which case the adapter
+                // above owns it and this method never reaches here.
+                if (p.type.kind != "object" && p.is_mutable_ref && !is_out_param(p)) {
                     return false;
                 }
             }
@@ -465,6 +528,9 @@ namespace rosetta_wx {
                     wx_collect_vectors(s, out); // a vector inside a callback still needs registering
                 }
                 return;
+            }
+            if (t.is_path) {
+                return; // the boundary is a std::string — nothing to register
             }
             if (is_adapted(t) && adapt_ok(t)) {
                 // A foreign sequence marshals through std::vector<element> —
@@ -588,6 +654,17 @@ namespace rosetta_wx {
         }
 
         inline std::string wx_class(const GenClass &k, const GenContext &c) {
+            // A class whose destructor is not public cannot be wrapped: every
+            // runtime backend destroys what it holds. Skip it with a note —
+            // the alternative is a compile error inside the framework headers.
+            if (!k.is_destructible) {
+                std::fprintf(stderr,
+                             "rosetta::%s: class '%s' has a non-public destructor "
+                             "(ref-counted?) — skipped\n",
+                             "wasm-expanded", k.name.c_str());
+                return {};
+            }
+
             std::vector<std::string> segs;
             // Qualified spelling for emitted C++, exposed name for the JS side —
             // see the "expose" rename notes in generate.h.
@@ -767,6 +844,27 @@ namespace rosetta_wx {
                                         "unbound class)");
                     continue; // unmarshalable signature (e.g. std::function param)
                 }
+                // A reference to a bound class: hand out the ADDRESS under
+                // allow_raw_pointers — a borrowed handle to the real object,
+                // the same shape the member-object getters use, where embind's
+                // own conversion would copy.
+                if (wx_alias_return(m, c)) {
+                    std::string args, params;
+                    const bool  exact = m.param_cpp.size() == m.params.size();
+                    for (std::size_t j = 0; j < m.params.size(); ++j) {
+                        const std::string an = "arg" + std::to_string(j);
+                        params += ", " + (exact ? qualify_objects(qualify_std(m.param_cpp[j]),
+                                                                  m.params[j].type)
+                                                : wx_cpp_type(m.params[j].type)) +
+                                  " " + an;
+                        args += (args.empty() ? "" : ", ") + an;
+                    }
+                    segs.push_back(".function(\"" + m.name + "\", +[](" + kn + " &self" + params +
+                                   ") { return &self." + m.name + "(" + args +
+                                   "); }, emscripten::allow_raw_pointers())");
+                    coverage::note_bound("wasm-expanded", k, m);
+                    continue;
+                }
                 // Extension method: bind the free function directly — embind
                 // treats a non-member whose first parameter is the class type
                 // (by ref) as an instance method.
@@ -833,7 +931,8 @@ namespace rosetta_wx {
             }
 
             std::string s =
-                "    emscripten::class_<" + kn + base_arg + ">(\"" + exposed_of(k) + "\")";
+                "    emscripten::class_<" + kn + base_arg + ">(\"" + exposed_of(k) + "\")" +
+                wx_smart_ptr_seg(k, c);
             if (segs.empty()) {
                 return s + ";\n";
             }
@@ -863,7 +962,7 @@ namespace rosetta_wx {
                 if (seq_touches(probe)) {
                     if (wx_seq_eligible(probe, c)) {
                         const WxSeqSig    sig  = wx_seq_sig(f.params, {});
-                        const std::string call = f.qualified + "(" + sig.args + ")";
+                        const std::string call = fn_call_expr(f) + "(" + sig.args + ")";
                         body += "    emscripten::function(\"" + f.name + "\", +[](" +
                                 sig.decls + ") {\n" + wx_seq_body(probe, sig, call) +
                                 "        });\n";
@@ -883,7 +982,7 @@ namespace rosetta_wx {
                 if (ok) {
                     const std::string policy =
                         raw_ptr ? ", emscripten::allow_raw_pointers()" : "";
-                    body += "    emscripten::function(\"" + f.name + "\", &" + f.qualified +
+                    body += "    emscripten::function(\"" + f.name + "\", " + fn_addr(f) +
                             policy + ");\n";
                 }
             }
@@ -893,13 +992,16 @@ namespace rosetta_wx {
             out += "#include <emscripten/bind.h>\n";
             out += "#include <algorithm>\n";
             out += "#include <array>\n";
+            out += "#include <filesystem>\n";
             out += "#include <functional>\n";
+            out += "#include <memory>\n";
             out += "#include <stdexcept>\n";
             out += "#include <string>\n";
             out += "#include <type_traits>\n";
             out += "#include <vector>\n";
             // pybind-free: just the user's (stock) headers below.
             auto add = [&](const std::string &h) { append_include(out, h); };
+            out += init_includes(c);
             for (const auto &k : c.classes) {
                 add(k.header);
                 for (const auto &m : k.methods) {
@@ -917,6 +1019,7 @@ namespace rosetta_wx {
             out += using_namespaces_of(c); // `using namespace` for namespaced user types
             out += WASMX_CALLBACK_HELPER;  // rosetta_wx::make_fn / to_val / from_val
             out += "\nEMSCRIPTEN_BINDINGS(" + c.lib + ") {\n";
+            out += init_block(c);
             out += body;
             out += "}\n";
             return out;

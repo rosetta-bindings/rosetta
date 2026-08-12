@@ -210,7 +210,10 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     if (!m.compile_definitions.empty()) {
         out << "    opt.compile_definitions = {\n";
         for (const auto &def : m.compile_definitions) {
-            out << "        \"" << def << "\",\n";
+            // Raw string literal: a define's VALUE is routinely a quoted string
+            // (GEOGRAM_VERSION="1.10.1"), which a plain "..." would end early —
+            // the driver then failed to compile on a perfectly valid manifest.
+            out << "        R\"ROSETTA(" << def << ")ROSETTA\",\n";
         }
         out << "    };\n";
     }
@@ -243,6 +246,16 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     if (!m.functions.empty()) {
         out << "    opt.functions       = {\n";
         for (const auto &f : m.functions) {
+            // With a "signature", the entry names ONE overload: `^^name` would be
+            // ill-formed for the set, so the driver goes through the signature
+            // path — a plain function TYPE as template argument, plus the same
+            // text for the cast every backend needs to form the pointer.
+            if (!f.signature.empty()) {
+                out << "        rosetta::make_function_sig<" << f.signature << ">(\"" << f.name
+                    << "\", \"" << f.header << "\", \"" << f.doc << "\", \"" << f.expose
+                    << "\", \"" << f.signature << "\"),\n";
+                continue;
+            }
             out << "        rosetta::make_function<^^" << f.name << ">(\"" << f.name << "\", \""
                 << f.header << "\", \"" << f.doc << "\", \"" << f.expose << "\"),\n";
         }
@@ -285,6 +298,44 @@ static std::string render_project_gen_cpp(const Manifest &m) {
             }
             out << "};\n";
         }
+    }
+    // "out_params": the parameters the manifest declares as outputs, applied
+    // to the IR by generate() after the walk.
+    if (!m.out_params.empty()) {
+        out << "    opt.out_params      = {\n";
+        for (const auto &[key, indices] : m.out_params) {
+            out << "        {\"" << key << "\", {";
+            for (std::size_t i = 0; i < indices.size(); ++i) {
+                out << (i ? ", " : "") << indices[i];
+            }
+            out << "}},\n";
+        }
+        out << "    };\n";
+    }
+    // "module_init": the statements the module runs when it loads, and the
+    // headers that declare them. Emitted as data — the driver never parses
+    // them; each backend drops them at the top of its module entry point.
+    if (!m.module_init.statements.empty()) {
+        out << "    opt.init_headers    = {";
+        for (std::size_t i = 0; i < m.module_init.headers.size(); ++i) {
+            out << (i ? ", " : "") << "\"" << m.module_init.headers[i] << "\"";
+        }
+        out << "};\n";
+        out << "    opt.init_statements = {\n";
+        for (const auto &st : m.module_init.statements) {
+            out << "        R\"ROSETTA(" << st << ")ROSETTA\",\n";
+        }
+        out << "    };\n";
+    }
+    // "generated_headers": already-resolved text (template + substitutions were
+    // applied when the manifest was read), baked in as a raw string literal so
+    // the driver depends on no file it would have to find again at run time.
+    if (!m.generated_headers.empty()) {
+        out << "    opt.generated_headers = {\n";
+        for (const auto &g : m.generated_headers) {
+            out << "        {\"" << g.path << "\", R\"ROSETTA(" << g.content << ")ROSETTA\"},\n";
+        }
+        out << "    };\n";
     }
     out << "\n";
     out << "    rosetta::generate<";

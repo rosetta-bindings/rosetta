@@ -546,11 +546,11 @@ using .{{LIB}}
                 if (!jx_method_ok(probe, c)) {
                     continue;
                 }
-                body += "    mod.method(\"" + f.name + "\", &" + f.qualified + ");\n";
+                body += "    mod.method(\"" + f.name + "\", " + fn_addr(f) + ");\n";
                 if (jx_wants_arrayref_overload(f.params)) {
                     const JxAdapterParams ap = jx_arrayref_params(f.params, {});
                     body += "    mod.method(\"" + f.name + "\", [](" + ap.decls +
-                            ") { return " + f.qualified + "(" + ap.args + "); });\n";
+                            ") { return " + fn_call_expr(f) + "(" + ap.args + "); });\n";
                 }
             }
 
@@ -561,6 +561,7 @@ using .{{LIB}}
             // std::vector<T> lazily on first use — including vectors of bound
             // classes — which the thin backend cannot compile (fork libc++).
             auto add = [&](const std::string &h) { append_include(out, h); };
+            out += init_includes(c);
             for (const auto &k : c.classes) {
                 add(k.header);
                 for (const auto &m : k.methods) {
@@ -597,6 +598,7 @@ using .{{LIB}}
             out += "\n// CxxWrap.jl loads this entry point (default symbol "
                    "`define_julia_module`)\n// from Julia via `@wrapmodule(() -> libpath)`.\n";
             out += "JLCXX_MODULE define_julia_module(jlcxx::Module &mod) {\n";
+            out += init_block(c);
             out += body;
             out += "}\n";
             return out;

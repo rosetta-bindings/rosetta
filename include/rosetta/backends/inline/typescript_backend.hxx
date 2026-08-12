@@ -30,6 +30,13 @@ namespace rosetta {
             if (t.kind == "void") {
                 return "void";
             }
+            // A shared_ptr is, to a script, the object it points at — the
+            // reference count is a C++-side detail. Declaring "shared_ptr" (the
+            // literal identifier the IR carries in `object`) would name a type
+            // the .d.ts never defines.
+            if (t.is_shared_ptr && !t.element.empty()) {
+                return ts_type(t.element.front(), c);
+            }
             if (t.kind == "object" || t.kind == "enum") {
                 if (t.object.empty()) {
                     return "any";
@@ -56,15 +63,41 @@ namespace rosetta {
             return "any"; // unknown (e.g. std::function, unsupported types)
         }
 
+        // Out-parameters (manifest "out_params") are not arguments: the caller
+        // receives them, so they leave the parameter list and join the return.
         inline std::string ts_params(const std::vector<GenParam> &ps, const GenContext &c) {
-            std::string s;
-            for (std::size_t i = 0; i < ps.size(); ++i) {
-                if (i) {
-                    s += ", ";
+            std::vector<std::string> parts;
+            for (const auto &p : ps) {
+                if (is_out_param(p)) {
+                    continue;
                 }
-                s += ps[i].name + ": " + ts_type(ps[i].type, c);
+                parts.push_back(p.name + ": " + ts_type(p.type, c));
             }
-            return s;
+            return join(parts, ", ");
+        }
+
+        // The declared return: the type itself normally, and a TUPLE when the
+        // signature has out-parameters — `[boolean, number[], number]` for
+        // `bool get_doubles(const string&, vector<double>&, index_t&)`, matching
+        // the array node and wasm hand back and the multiple values Lua does.
+        inline std::string ts_return(const GenType &ret, const std::vector<GenParam> &ps,
+                                     const GenContext &c) {
+            std::vector<std::string> parts;
+            if (ret.kind != "void") {
+                parts.push_back(ts_type(ret, c));
+            }
+            for (const auto &p : ps) {
+                if (is_out_param(p)) {
+                    parts.push_back(ts_type(p.type, c));
+                }
+            }
+            if (parts.empty()) {
+                return "void";
+            }
+            if (parts.size() == 1 && !ret.kind.empty() && ret.kind != "void") {
+                return parts[0]; // no out-parameters: unchanged
+            }
+            return "[" + join(parts, ", ") + "]";
         }
 
         inline void TypeScriptBackend::emit(const GenContext &c) const {
@@ -156,7 +189,7 @@ namespace rosetta {
                         out += "        /** " + m.doc + " */\n";
                     }
                     out += "        " + std::string(m.is_static ? "static " : "") + m.name + "(" +
-                           ts_params(m.params, c) + "): " + ts_type(m.ret, c) + ";\n";
+                           ts_params(m.params, c) + "): " + ts_return(m.ret, m.params, c) + ";\n";
                 }
 
                 out += "    }\n";
@@ -167,7 +200,7 @@ namespace rosetta {
                     out += "    /** " + f.doc + " */\n";
                 }
                 out += "    export function " + f.name + "(" + ts_params(f.params, c) +
-                       "): " + ts_type(f.ret, c) + ";\n";
+                       "): " + ts_return(f.ret, f.params, c) + ";\n";
             }
 
             out += "}\n";

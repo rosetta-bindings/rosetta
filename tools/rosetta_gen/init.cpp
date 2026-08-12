@@ -565,8 +565,9 @@ static ScanResult scan_directory(const fs::path &root) {
     }
     r.classes = std::move(classes);
 
-    // Overloaded free functions cannot be bound (^^name is ill-formed for an
-    // overload set) — drop every overloaded name, with a note.
+    // The scan cannot pick an overload for you: it is a token scan, not a C++
+    // parse, so it has no signature to write. Drop every overloaded name with a
+    // note naming the manifest field that CAN say which one is meant.
     std::vector<ScannedDecl> fns;
     for (const auto &f : r.functions) {
         std::size_t count = 0;
@@ -578,11 +579,11 @@ static ScanResult scan_directory(const fs::path &root) {
             seen = seen || g.name == f.name;
         }
         if (count > 1) {
-            if (std::find(r.notes.begin(), r.notes.end(),
-                          f.name + " is overloaded — skipped (overload sets cannot be bound)") ==
-                r.notes.end()) {
-                r.notes.push_back(f.name +
-                                  " is overloaded — skipped (overload sets cannot be bound)");
+            const std::string note =
+                f.name + " is overloaded — skipped (add it by hand with a \"signature\", "
+                         "e.g. \"void(Mesh&, bool)\", to bind one overload)";
+            if (std::find(r.notes.begin(), r.notes.end(), note) == r.notes.end()) {
+                r.notes.push_back(note);
             }
         } else if (!seen) {
             fns.push_back(f);

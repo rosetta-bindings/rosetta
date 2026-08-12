@@ -357,6 +357,37 @@ endif()
         // rosetta themselves).
         inline std::string using_namespaces_of(const GenContext &c); // defined below
 
+        // --- Module init (manifest "module_init") -------------------------------
+        // The statements a backend runs at the top of its module entry point,
+        // one per line at `indent`, each terminated (the manifest writes
+        // expressions, not statements — a trailing ';' is accepted and not
+        // doubled). Empty when the manifest declared none, so a backend can
+        // prepend the result unconditionally.
+        inline std::string init_block(const GenContext &c, const std::string &indent = "    ") {
+            if (c.init_statements.empty()) {
+                return {};
+            }
+            std::string s = indent + "// Module init (manifest \"module_init\").\n";
+            for (const std::string &st : c.init_statements) {
+                const std::string trimmed = st.find_last_not_of(" \t") == std::string::npos
+                                                ? st
+                                                : st.substr(0, st.find_last_not_of(" \t") + 1);
+                s += indent + trimmed + (trimmed.ends_with(";") ? "" : ";") + "\n";
+            }
+            return s;
+        }
+
+        // `#include` lines for the headers those statements need. Same quoted
+        // form as the bound classes' headers, so one include path serves both.
+        inline std::string init_includes(const GenContext &c) {
+            std::string s;
+            for (const std::string &h : c.init_headers) {
+                s += "#include \"" + h + "\"\n";
+            }
+            return s;
+        }
+
+
         inline std::string includes_of(const GenContext &c) {
             std::string s   = "#include <rosetta/annotations.h>\n";
             auto        add = [&](const std::string &h) { append_include(s, h); };
@@ -369,6 +400,7 @@ endif()
             for (const auto &f : c.functions) {
                 add(f.header);
             }
+            s += init_includes(c); // manifest "module_init" (see init_block)
             // `using namespace` for namespaced user types, emitted right after the
             // class headers (so T is complete) and *before* everything below that
             // spells T unqualified — the annotation specializations here and the
@@ -1034,6 +1066,17 @@ endif()
                 g.kind = "boolean";
             } else if constexpr (std::is_same_v<U, std::string>) {
                 g.kind = "string";
+            } else if constexpr (std::is_same_v<U, std::filesystem::path>) {
+                // A path IS a string to every host language — so unlike the
+                // is_pointer / is_sequence flags this one sets `kind`, and every
+                // backend's string gate passes it unchanged. The flag carries
+                // the C++ half: the emitted code speaks std::string at the
+                // boundary and converts on both sides (see path_decl_stmts /
+                // path_from_expr). Without it a path is just an unregistered
+                // class, which is how `CSGCompiler::compile_file` came to be
+                // unbindable everywhere.
+                g.kind    = "string";
+                g.is_path = true;
             } else if constexpr (std::is_arithmetic_v<U>) {
                 g.kind    = "number";
                 g.integer = std::is_integral_v<U>;
@@ -1200,6 +1243,91 @@ endif()
         template <std::meta::info Fn> inline std::vector<GenParam> params_of() {
             constexpr auto n = std::define_static_array(std::meta::parameters_of(Fn)).size();
             return params_impl<Fn>(std::make_index_sequence<n>{});
+        }
+
+        // Same GenParam shape, built from a TYPE pack instead of from a
+        // function's reflection. This is the overload-selection path: an
+        // overloaded name has no reflection to walk (`^^name` is ill-formed for
+        // an overload set), but its signature — a plain function type — decomposes
+        // here. Kept beside params_impl so the two stay in step; the ref /
+        // mutable-ref rules are literally the same expressions.
+        template <typename... A> inline std::vector<GenParam> params_from_types() {
+            std::vector<GenParam> out;
+            out.reserve(sizeof...(A));
+            std::size_t i = 0;
+            (out.push_back(GenParam{
+                 "arg" + std::to_string(i++), type_descriptor<std::remove_cvref_t<A>>(),
+                 std::is_lvalue_reference_v<A>,
+                 std::is_lvalue_reference_v<A> &&
+                     !std::is_const_v<std::remove_reference_t<A>>}),
+             ...);
+            return out;
+        }
+
+        // Decompose a function type into the IR's return / parameter descriptors.
+        // Undefined primary: a "signature" that is not a function type is a
+        // manifest error the compiler reports at the point of the generated
+        // driver, where the user's own spelling is visible.
+        template <typename Sig> struct fn_sig_of;
+        template <typename R, typename... A> struct fn_sig_of<R(A...)> {
+            static GenType               ret() { return type_descriptor<std::remove_cvref_t<R>>(); }
+            static std::vector<GenParam> params() { return params_from_types<A...>(); }
+        };
+
+        // "void(GEO::Mesh &, bool)" -> "void(*)(GEO::Mesh &, bool)": the pointer
+        // form the disambiguating static_cast needs. The insertion point is the
+        // first `(` outside any template argument list — `std::vector<int>(int)`
+        // must not split at the `<`-nested parens a function-pointer template
+        // argument could carry.
+        inline std::string fn_ptr_spelling(const std::string &sig) {
+            int depth = 0;
+            for (std::size_t i = 0; i < sig.size(); ++i) {
+                if (sig[i] == '<') {
+                    ++depth;
+                } else if (sig[i] == '>') {
+                    --depth;
+                } else if (sig[i] == '(' && depth == 0) {
+                    return sig.substr(0, i) + "(*)" + sig.substr(i);
+                }
+            }
+            return sig; // not a function type — the driver will not have compiled
+        }
+
+        // The address-of expression a backend emits for a free function:
+        // `&api::add` normally, and a cast to the selected signature when the
+        // manifest picked one overload of a set (GenFunction::sig_cpp). The cast
+        // is required in every position a function pointer is formed — `m.def`,
+        // `emscripten::function`, `set_function`, and the `<&fn>` template
+        // arguments the expanded node / C# / Java backends spell.
+        inline std::string fn_addr(const GenFunction &f) {
+            if (f.sig_cpp.empty()) {
+                return "&" + f.qualified;
+            }
+            return "static_cast<" + fn_ptr_spelling(f.sig_cpp) + ">(&" + f.qualified + ")";
+        }
+
+        // The callee an emitted adapter lambda spells: the plain name normally
+        // (letting C++ overload resolution match the lambda's own arguments), and
+        // the cast function pointer when the manifest selected one overload — a
+        // pointer is directly callable, and it pins the choice to the signature
+        // the manifest named instead of re-resolving on the ADAPTED argument
+        // types, which are not always the declared ones.
+        inline std::string fn_call_expr(const GenFunction &f) {
+            return f.sig_cpp.empty() ? f.qualified : fn_addr(f);
+        }
+
+        // An overloaded free function is invisible to a backend that splices its
+        // reflection (`^^qualified`): there is no reflection for one member of an
+        // overload set. Such a backend skips the entry and says so, once.
+        inline bool fn_needs_reflection_skip(const GenFunction &f, const char *lang) {
+            if (f.sig_cpp.empty()) {
+                return false;
+            }
+            std::fprintf(stderr,
+                         "rosetta::%s: free function '%s' selects one overload by signature, "
+                         "which this backend cannot spell (it splices ^^%s) — skipped\n",
+                         lang, f.qualified.c_str(), f.qualified.c_str());
+            return true;
         }
 
         // Fully qualified name of T: enclosing namespaces AND classes
@@ -1688,6 +1816,7 @@ endif()
             }
             gc.is_default_constructible = std::is_default_constructible_v<T>;
             gc.is_abstract              = std::is_abstract_v<T>;
+            gc.is_destructible          = std::is_destructible_v<T>;
             gc.copy_or_move_assignable =
                 std::is_copy_assignable_v<T> || std::is_move_assignable_v<T>;
             gc.copy_or_move_constructible =
@@ -1868,29 +1997,278 @@ endif()
                    expr + "(i, j); } } return o; }()";
         }
 
-        // --- The two shapes, as one --------------------------------------------
+        // --- std::filesystem::path ---------------------------------------------
+        // The third adapted shape, and the simplest: the boundary is a plain
+        // std::string, and both conversions are one expression. It rides the
+        // adapter rather than getting its own path through each backend because
+        // the conversion has to happen in EMITTED C++ — a `const path&`
+        // parameter cannot be declared at a boundary that speaks strings.
+        inline std::string path_boundary_cpp() { return "std::string"; }
+        inline std::string path_decl_stmts(const std::string &an, const std::string &pn,
+                                           const std::string &ind) {
+            return ind + "std::filesystem::path " + pn + "(" + an + ");\n";
+        }
+        // `.string()` rather than `.native()`: on Windows native() is a
+        // std::wstring, which no backend's string boundary accepts.
+        inline std::string path_from_expr(const std::string &expr) {
+            return "(" + expr + ").string()";
+        }
+
+        // --- The three shapes, as one ------------------------------------------
         // Everything below this point in the backends asks "does this type go
         // through the copy adapter, and what does its boundary look like?"
-        // rather than which of the two traits registered it.
-        inline bool is_adapted(const GenType &t) { return t.is_sequence || t.is_matrix; }
-        inline bool adapt_ok(const GenType &t) { return t.is_sequence ? seq_ok(t) : mat_ok(t); }
+        // rather than which trait (or the path branch) put it there.
+        inline bool is_adapted(const GenType &t) {
+            return t.is_sequence || t.is_matrix || t.is_path;
+        }
+        inline bool adapt_ok(const GenType &t) {
+            if (t.is_path) {
+                return true; // nothing inside a path can make it unmarshalable
+            }
+            return t.is_sequence ? seq_ok(t) : mat_ok(t);
+        }
         inline std::string adapt_boundary_cpp(const GenType &t) {
+            if (t.is_path) {
+                return path_boundary_cpp();
+            }
             return t.is_sequence ? seq_boundary_cpp(t) : mat_boundary_cpp(t);
         }
         inline std::string adapt_decl_stmts(const GenType &t, const std::string &an,
                                             const std::string &sn, const std::string &ind) {
+            if (t.is_path) {
+                return path_decl_stmts(an, sn, ind);
+            }
             return t.is_sequence ? seq_decl_stmts(t, an, sn, ind) : mat_decl_stmts(t, an, sn, ind);
         }
         inline std::string adapt_from_expr(const GenType &t, const std::string &expr) {
+            if (t.is_path) {
+                return path_from_expr(expr);
+            }
             return t.is_sequence ? seq_from_expr(t, expr) : mat_from_expr(t, expr);
         }
-        // The adapter's local for parameter `j` — `seq0` / `mat0`, so the
-        // generated code says which shape it is converting.
+        // The adapter's local for parameter `j` — `seq0` / `mat0` / `pth0`, so
+        // the generated code says which shape it is converting.
         inline std::string adapt_local(const GenType &t, std::size_t j) {
-            return (t.is_sequence ? "seq" : "mat") + std::to_string(j);
+            const char *stem = t.is_path ? "pth" : (t.is_sequence ? "seq" : "mat");
+            return stem + std::to_string(j);
+        }
+
+        // Can this member's EXACT signature be spelled in emitted C++? A type
+        // with no name of its own — a lambda's closure type, an unnamed struct,
+        // a local type — comes out of display_string_of as "(anonymous type)" /
+        // "(lambda at …)", which is documentation, not C++. GEO::MeshFacets has
+        // one: `adjacent()` returns a `transformed_range` whose second template
+        // argument is a lambda type.
+        //
+        // It only matters for a member that needs the DISAMBIGUATING CAST (one
+        // whose class overloads the name) — everything else is spelled with a
+        // bare `&T::name`, which needs no type at all. So the gates ask both
+        // questions together, and such a method is skipped rather than emitted
+        // as a cast that cannot compile.
+        inline bool spelling_nameable(const std::string &t) {
+            return t.find("(anonymous") == std::string::npos &&
+                   t.find("(lambda") == std::string::npos &&
+                   t.find("(unnamed") == std::string::npos;
+        }
+        inline bool sig_spellable(const GenMethod &m) {
+            if (!spelling_nameable(m.ret_cpp)) {
+                return false;
+            }
+            for (const auto &p : m.param_cpp) {
+                if (!spelling_nameable(p)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // --- std::shared_ptr ----------------------------------------------------
+        // The class a type ultimately denotes for BINDING purposes: the pointee
+        // for a shared_ptr, the type itself otherwise. A backend's "is this a
+        // bound class?" gate asks about the pointee — `object` on a shared_ptr
+        // descriptor is the literal identifier "shared_ptr", which is bound
+        // nowhere — while the C++ spelling it emits stays the shared_ptr.
+        inline const GenType &shared_pointee(const GenType &t) {
+            return (t.is_shared_ptr && !t.element.empty()) ? t.element.front() : t;
+        }
+
+        // Accumulate the qualified names of every class this type hands across
+        // the boundary inside a shared_ptr — recursing into container elements
+        // and callback signatures, where one can hide.
+        inline void collect_shared_pointees(const GenType &t, std::vector<std::string> &out) {
+            if (t.is_shared_ptr && !t.element.empty() && !t.element[0].object_qualified.empty()) {
+                const std::string &q = t.element[0].object_qualified;
+                if (std::find(out.begin(), out.end(), q) == out.end()) {
+                    out.push_back(q);
+                }
+            }
+            for (const auto &e : t.element) {
+                collect_shared_pointees(e, out);
+            }
+            for (const auto &e : t.callback_sig) {
+                collect_shared_pointees(e, out);
+            }
+        }
+
+        // The same, over a whole module: every pointee that appears in a field,
+        // a method return or parameter, a constructor parameter or a free
+        // function. Backends that must register something PER POINTEE start
+        // here — pybind11's `py::class_<T, std::shared_ptr<T>>` holder and
+        // embind's `.smart_ptr<std::shared_ptr<T>>` are the same question asked
+        // by two frameworks.
+        inline std::vector<std::string> shared_pointees(const GenContext &c) {
+            std::vector<std::string> need;
+            for (const auto &k : c.classes) {
+                for (const auto &f : k.fields) {
+                    collect_shared_pointees(f.type, need);
+                }
+                for (const auto &m : k.methods) {
+                    collect_shared_pointees(m.ret, need);
+                    for (const auto &p : m.params) {
+                        collect_shared_pointees(p.type, need);
+                    }
+                }
+                for (const auto &ct : k.ctors) {
+                    for (const auto &p : ct) {
+                        collect_shared_pointees(p.type, need);
+                    }
+                }
+            }
+            for (const auto &f : c.functions) {
+                collect_shared_pointees(f.ret, need);
+                for (const auto &p : f.params) {
+                    collect_shared_pointees(p.type, need);
+                }
+            }
+            return need;
+        }
+
+        // Join with a separator — the adapters build their declaration and
+        // argument lists as vectors now that an out-parameter contributes to one
+        // but not the other.
+        inline std::string join(const std::vector<std::string> &parts, const char *sep) {
+            std::string s;
+            for (std::size_t i = 0; i < parts.size(); ++i) {
+                s += (i ? sep : "") + parts[i];
+            }
+            return s;
+        }
+
+        // --- Out-parameters ------------------------------------------------------
+        // A mutable reference to a NON-class type is C++'s way of returning a
+        // second value: `bool get_doubles(const string&, vector<double>& out,
+        // index_t& dim)`. No host language has that shape, and every backend
+        // used to skip such a member outright — its converted argument is a
+        // temporary, which cannot bind to a non-const reference. The adapter
+        // that already exists for foreign containers is exactly the place to
+        // fix it: declare a LOCAL, pass that, and hand the value back with the
+        // return value afterwards, as a tuple (multiple returns in Lua, a tuple
+        // in Python, an array in JS).
+        //
+        // A mutable reference to a bound CLASS is deliberately not one of
+        // these: it is already bound by reference — the object crosses as a
+        // handle and the callee writes through it, which is the more faithful
+        // reading and needs no adapter.
+        inline bool is_out_param(const GenParam &p) {
+            if (!p.is_out || !p.is_mutable_ref) {
+                return false; // never inferred — see GenParam::is_out
+            }
+            if (is_adapted(p.type)) {
+                return adapt_ok(p.type);
+            }
+            const std::string &k = p.type.kind;
+            return k == "number" || k == "boolean" || k == "string" || k == "enum";
+        }
+
+        inline bool has_out_params(const GenMethod &m) {
+            for (const auto &p : m.params) {
+                if (is_out_param(p)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // The C++ type of the local the adapter declares for an out-parameter:
+        // the callee's own type, since it is what the reference binds to. For a
+        // foreign container that is the container (GEO::vector<double>), not the
+        // boundary vector.
+        inline std::string out_local_cpp(const GenType &t) {
+            if (t.is_sequence) {
+                return t.seq_cpp;
+            }
+            if (t.is_matrix) {
+                return t.mat_cpp;
+            }
+            if (t.is_path) {
+                return "std::filesystem::path";
+            }
+            if (t.kind == "string") {
+                return "std::string";
+            }
+            if (t.kind == "boolean") {
+                return "bool";
+            }
+            if (t.kind == "object" || t.kind == "enum") {
+                return t.object_qualified.empty() ? t.object : t.object_qualified;
+            }
+            return t.spelling.empty() ? "double" : t.spelling;
+        }
+
+        // What that local looks like once it crosses.
+        inline std::string out_boundary_cpp(const GenType &t) {
+            return is_adapted(t) ? adapt_boundary_cpp(t) : out_local_cpp(t);
+        }
+        inline std::string out_expr(const GenType &t, const std::string &local) {
+            return is_adapted(t) ? adapt_from_expr(t, local) : local;
+        }
+
+        // One out-parameter, resolved: the local the call receives and the
+        // expression that yields its boundary value afterwards.
+        struct OutParam {
+            std::string local;
+            std::string expr;
+        };
+
+        // The adapter's tail once the call is built: run it, then return the
+        // out values — alone when the function returns void, and after the
+        // return value when it does not. `make_tuple` is the shape pybind11,
+        // nanobind and sol2 all already marshal (a Python tuple, and Lua's
+        // multiple returns); `val_array` is for embind, which marshals no tuple
+        // and gets an emscripten::val array instead.
+        enum class OutStyle { tuple, val_array };
+
+        inline std::string out_return_stmts(const GenMethod &m, const std::vector<OutParam> &outs,
+                                            const std::string &call, const std::string &ind,
+                                            OutStyle style = OutStyle::tuple) {
+            std::vector<std::string> vals;
+            std::string              s;
+            if (m.ret.kind == "void") {
+                s += ind + call + ";\n";
+            } else {
+                s += ind + "auto &&r = " + call + ";\n";
+                vals.push_back(is_adapted(m.ret) ? adapt_from_expr(m.ret, "r") : std::string("r"));
+            }
+            for (const OutParam &o : outs) {
+                vals.push_back(o.expr);
+            }
+            if (style == OutStyle::val_array) {
+                s += ind + "emscripten::val out = emscripten::val::array();\n";
+                for (std::size_t i = 0; i < vals.size(); ++i) {
+                    s += ind + "out.set(" + std::to_string(i) + ", rosetta_wx::to_val(" + vals[i] +
+                         "));\n";
+                }
+                return s + ind + "return out;\n";
+            }
+            s += ind + "return std::make_tuple(";
+            for (std::size_t i = 0; i < vals.size(); ++i) {
+                s += (i ? ", " : "") + vals[i];
+            }
+            return s + ");\n";
         }
 
         // Does this signature touch an adapted container at all / only
+
         // marshalable ones? (touches && !adaptable ⇒ leave the method to the
         // backend's ordinary gates — for most that means skipping it.)
         inline bool seq_touches(const GenMethod &m) {
@@ -1898,7 +2276,9 @@ endif()
                 return true;
             }
             for (const auto &p : m.params) {
-                if (is_adapted(p.type)) {
+                // An out-parameter needs the same adapter (a local to pass, and
+                // its value folded into the return), so it takes the same road.
+                if (is_adapted(p.type) || is_out_param(p)) {
                     return true;
                 }
             }
@@ -2135,6 +2515,31 @@ namespace rosetta {
         return gf;
     }
 
+    // Erase ONE overload of an overloaded free function, selected by the manifest
+    // through its signature. No reflection of the function is involved — there
+    // could not be one — so the exposed name comes from `expose` or from the tail
+    // of `qualified`, and the shape from decomposing the function type `Sig`.
+    template <typename Sig>
+    inline GenFunction make_function_sig(const char *qualified, const char *header,
+                                         const char *doc, const char *expose,
+                                         const char *sig_cpp) {
+        GenFunction gf;
+        gf.qualified = qualified;
+        if (expose && *expose) {
+            gf.name = expose;
+        } else {
+            const std::string q   = gf.qualified;
+            const auto        pos = q.rfind("::");
+            gf.name               = pos == std::string::npos ? q : q.substr(pos + 2);
+        }
+        gf.header  = header;
+        gf.ret     = gen_detail::fn_sig_of<Sig>::ret();
+        gf.params  = gen_detail::fn_sig_of<Sig>::params();
+        gf.doc     = doc;
+        gf.sig_cpp = sig_cpp;
+        return gf;
+    }
+
     template <typename... Ts> inline void generate(const GenerateOptions &opt) {
         // Erase the type pack into plain data once; backends do no reflection.
         // Enum pack elements go to `enums`, everything else to `classes`.
@@ -2153,6 +2558,59 @@ namespace rosetta {
         // Mark the manifest's "final" classes: no trampoline even with public
         // virtuals (see GenClass::is_final). Matched like extensions —
         // qualified or unqualified spelling.
+        // The free functions are marked up below (out_params), so the IR the
+        // backends see is a local copy rather than the caller's options.
+        std::vector<GenFunction> functions = opt.functions;
+
+        // Manifest "out_params": mark the parameters the manifest says are
+        // outputs. Matched by "Class::method" against the qualified or
+        // unqualified class spelling, and by "ns::fn" against a free function's
+        // qualified or exposed name. A key that matches nothing is reported —
+        // the same treatment "final" gets, and for the same reason: a silently
+        // ignored key looks exactly like a feature that does not work.
+        for (const auto &[key, indices] : opt.out_params) {
+            bool             found = false;
+            const auto       dot   = key.rfind("::");
+            const std::string owner = dot == std::string::npos ? std::string() : key.substr(0, dot);
+            const std::string mname = dot == std::string::npos ? key : key.substr(dot + 2);
+            auto mark = [&](std::vector<GenParam> &params) {
+                for (std::size_t i : indices) {
+                    if (i < params.size()) {
+                        params[i].is_out = true;
+                    } else {
+                        std::fprintf(stderr,
+                                     "rosetta::generate: \"out_params\" for '%s' names "
+                                     "parameter %zu, which it does not have — ignored\n",
+                                     key.c_str(), i);
+                    }
+                }
+                found = true;
+            };
+            for (auto &k : classes) {
+                const std::string kq =
+                    k.name_space.empty() ? k.name : k.name_space + "::" + k.name;
+                if (owner != kq && owner != k.name) {
+                    continue;
+                }
+                for (auto &m : k.methods) {
+                    if (m.name == mname) {
+                        mark(m.params);
+                    }
+                }
+            }
+            for (auto &f : functions) {
+                if (f.qualified == key || f.name == mname) {
+                    mark(f.params);
+                }
+            }
+            if (!found) {
+                std::fprintf(stderr,
+                             "rosetta::generate: \"out_params\" names '%s', which is not a "
+                             "bound method or function — ignored\n",
+                             key.c_str());
+            }
+        }
+
         for (const std::string &fc : opt.final_classes) {
             bool found = false;
             for (auto &k : classes) {
@@ -2224,15 +2682,41 @@ namespace rosetta {
             target->doc = gen_detail::class_markdown(*target);
         }
 
+        // Headers the bound library's own build system would have generated
+        // (manifest "generated_headers"): write them into <out_dir>/include and
+        // put that directory FIRST on the include path, ahead of the library's
+        // source tree — a stale copy of the same header sitting in the sources
+        // must not win the lookup. Written before any backend runs, since every
+        // one of them compiles against it.
+        std::vector<std::filesystem::path> include_dirs;
+        if (!opt.generated_headers.empty()) {
+            const std::filesystem::path dir = opt.out_dir / "include";
+            for (const GeneratedHeader &h : opt.generated_headers) {
+                const std::filesystem::path file = dir / h.path;
+                std::error_code             ec;
+                std::filesystem::create_directories(file.parent_path(), ec);
+                std::ofstream out(file);
+                if (!out) {
+                    std::fprintf(stderr,
+                                 "rosetta::generate: cannot write generated header '%s'\n",
+                                 file.string().c_str());
+                    continue;
+                }
+                out << h.content;
+            }
+            include_dirs.push_back(std::filesystem::absolute(dir));
+        }
+        include_dirs.insert(include_dirs.end(), opt.user_include.begin(), opt.user_include.end());
+
         // Join the (possibly several) user include dirs into one string that
         // drops straight into each backend's target_include_directories(... PRIVATE)
         // list: subsequent paths align under the first via the template's indent.
         std::string user_include;
-        for (std::size_t i = 0; i < opt.user_include.size(); ++i) {
+        for (std::size_t i = 0; i < include_dirs.size(); ++i) {
             if (i) {
                 user_include += "\n    ";
             }
-            user_include += opt.user_include[i].string();
+            user_include += include_dirs[i].string();
         }
 
         // User .cpp sources as plain strings for the GenContext (backends compile
@@ -2260,16 +2744,17 @@ namespace rosetta {
                              t.lang.c_str());
                 continue;
             }
-            it->second->emit(GenContext{opt.out_dir, t.name, classes, enums, opt.functions,
+            it->second->emit(GenContext{opt.out_dir, t.name, classes, enums, functions,
                                         user_include, opt.rosetta_include.string(),
                                         opt.cpp26_root, opt.cpp26_cxx, opt.cpp26_cc,
                                         opt.cpp26_lib, opt.qt_dir, user_libs, user_sources,
                                         opt.compile_definitions, t.link_options,
                                         opt.build_type, opt.optimization,
                                         opt.cxx_standard, opt.version,
-                                        gen_detail::collect_interop(classes, opt.functions),
+                                        gen_detail::collect_interop(classes, functions),
                                         t.artifact_dir, t.python, t.requires_python,
-                                        t.napi_version, t.node_engine});
+                                        t.napi_version, t.node_engine,
+                                        opt.init_headers, opt.init_statements});
         }
 
         // The coverage report, once every target has emitted and had its say.

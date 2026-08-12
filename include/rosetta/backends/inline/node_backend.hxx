@@ -226,7 +226,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
         }
 
         inline std::string node_bindings(const GenContext &c) {
-            std::string binds;
+            std::string binds = init_block(c);
             for (const auto &e : c.enums) {
                 binds += "    exports.Set(\"" + exposed_of(e) + "\", rosetta::bind_napi_enum<" +
                          qualified_of(e) + ">(env));\n";
@@ -243,6 +243,9 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 }
             }
             for (const auto &f : c.functions) {
+                if (fn_needs_reflection_skip(f, "node")) {
+                    continue;
+                }
                 binds += "    exports.Set(\"" + f.name + "\", rosetta::bind_napi_function<^^" +
                          f.qualified + ">(env, \"" + f.name + "\"));\n";
             }

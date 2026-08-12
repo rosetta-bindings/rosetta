@@ -16,6 +16,10 @@
 #include <experimental/meta>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+// std::filesystem::path <-> str / os.PathLike. pybind11 keeps this one out of
+// <stl.h> (it costs a <filesystem> include), so a path parameter would bind as
+// an unregistered class and throw at call time without it.
+#include <pybind11/stl/filesystem.h>
 #include <pybind11/functional.h>
 #include <rosetta/walk.h>
 #include <string>

@@ -244,7 +244,7 @@ ROSETTA_CS_EXPORT void rosetta_csharp_free(char *p) { std::free(p); }
             for (const auto &f : c.functions) {
                 if (jsonable_function(f)) {
                     s += "    rosetta::cs::functions()[\"" + f.name +
-                         "\"] = &rosetta::cs::call_function<&" + f.qualified + ">;\n";
+                         "\"] = &rosetta::cs::call_function<" + fn_addr(f) + ">;\n";
                 }
             }
             return s;
@@ -259,6 +259,7 @@ ROSETTA_CS_EXPORT void rosetta_csharp_free(char *p) { std::free(p); }
             // User headers (deduped) — the only thing the shim needs besides the
             // runtime; no rosetta/annotations.h (these headers are stock C++).
             auto add = [&](const std::string &h) { append_include(out, h); };
+            out += init_includes(c);
             for (const auto &k : c.classes) {
                 add(k.header);
             }

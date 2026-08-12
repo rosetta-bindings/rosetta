@@ -68,7 +68,7 @@ An argument naming an existing **directory** is the source tree to scan; the oth
 - `user_sources` — every source file found, **except** any defining `main()` (it would clash with the binding modules' entry points — reported as a note);
 - `rosetta_include` — guessed by walking up from the `rosetta_gen` binary (it usually runs from inside a rosetta checkout); a `FIXME` comment otherwise.
 
-The scan is a comment/string-aware token scan, **not a real C++ parse**: template classes, overloaded free functions (an overload set cannot be bound) and anonymous namespaces are skipped, each with a printed note. VCS dirs, build trees and vendored code (`build/`, `extern/`, `third_party/`, `node_modules/`, …) are not descended into. **Review the result before building.**
+The scan is a comment/string-aware token scan, **not a real C++ parse**: template classes, overloaded free functions and anonymous namespaces are skipped, each with a printed note. An overloaded free function is skipped because the scan has no signature to write, not because it cannot be bound — add it by hand with a [`"signature"`](MANIFEST.md#binding-one-overload-signature). VCS dirs, build trees and vendored code (`build/`, `extern/`, `third_party/`, `node_modules/`, …) are not descended into. **Review the result before building.**
 
 > For a whole *project* skeleton (bootstrap `CMakeLists.txt` that fetches rosetta into `extern/`, `.gitignore`, `README.md`) rather than just the manifest, use [`tools/rosetta_init.py`](../tools/rosetta_init.py) — see the [minimal example](MANIFEST.md#minimal-example).
 

@@ -180,6 +180,17 @@ namespace rosetta {
         // so an emitter can resolve it against the bound-class list.
         bool is_shared_ptr = false;
 
+        // True when the (cvref-stripped) type is a std::filesystem::path. `kind`
+        // IS set to "string" — unlike the flags above, because a path *is* a
+        // string to every host language, and every backend already marshals a
+        // string. What the flag adds is the C++ side of that boundary: a path is
+        // not a std::string, so the emitted code speaks std::string at the edge
+        // and converts (`path{s}` in, `.string()` out). It rides the same copy
+        // adapter as the foreign containers — see is_adapted() — which is why
+        // the expanded backends needed no per-backend work for it. `element`
+        // stays empty: there is nothing inside a path to describe.
+        bool is_path = false;
+
         // True when the (cvref-stripped) type is a trait-registered foreign
         // sequence container (rosetta::is_sequence<T>, e.g. GEO::vector<double>
         // — see rosetta/sequence.h). Like is_pointer, `kind` stays "unknown" so
@@ -288,12 +299,25 @@ namespace rosetta {
         bool is_ref = false;
 
         // True for a NON-const lvalue reference. For class kinds that's the
-        // mutable-receiver / out-parameter feature; for everything else
-        // (std::string&, index_t&, enum&) it's an out-parameter the node/wasm
-        // runtimes cannot express — their converted argument is a temporary,
-        // which cannot bind to a non-const reference — so those backends skip
-        // the member.
+        // mutable-receiver feature — the object crosses as a handle and the
+        // callee writes through it. For everything else (std::string&,
+        // index_t&, GEO::vector<double>&) the runtimes cannot bind their
+        // converted argument, which is a temporary, so such a member is skipped
+        // unless the manifest marks the parameter `out` (below).
         bool is_mutable_ref = false;
+
+        // Marked by the manifest's "out_params" as a value the function
+        // RETURNS through a reference. Never inferred: `void assign_points(
+        // vector<double>&, index_t, bool)` takes its vector as an input it may
+        // steal from, and `bool get_doubles(const string&, vector<double>&,
+        // index_t&)` fills its vector as an output — the two are
+        // indistinguishable in C++, and guessing wrong silently drops either an
+        // argument or a result. The manifest knows; the walk cannot.
+        //
+        // A marked parameter disappears from the exposed signature and its
+        // value joins the return: a tuple in Python, extra return values in
+        // Lua, an array element in JS.
+        bool is_out = false;
     };
 
     struct GenMethod {
@@ -384,6 +408,20 @@ namespace rosetta {
         GenType               ret;
         std::vector<GenParam> params;
         std::string           doc; // from the manifest, if any
+
+        // Non-empty when the manifest picked ONE overload of an overloaded free
+        // function by spelling its signature ("signature": "void(Mesh&, bool)").
+        // The C++ function type exactly as the manifest gave it, which is what a
+        // backend needs for the disambiguating cast — `&GEO::mesh_union` names an
+        // overload SET and is ambiguous wherever a function pointer is expected.
+        // Use gen_detail::fn_addr(), which spells `&qualified` when this is empty
+        // and `static_cast<Ret(*)(Params)>(&qualified)` when it is not.
+        //
+        // It also flags what a backend CANNOT do: an emitter that splices the
+        // function's reflection (`^^qualified`, the thin python / node / julia /
+        // C# / Java / REST backends) has no way to name one member of an overload
+        // set — `^^name` is ill-formed for it — so those skip such an entry.
+        std::string sig_cpp;
     };
 
     /**
@@ -460,6 +498,16 @@ namespace rosetta {
         // allocate the abstract type and fail to compile).
         bool is_abstract = false;
 
+        // Whether T's destructor is PUBLIC. A ref-counted class hides it
+        // (GEO::Logger derives from Counted and protects ~Logger), and every
+        // runtime backend destroys what it wraps somewhere — pybind's holder,
+        // node's `delete ptr_`, sol2's usertype — so binding one is a hard
+        // COMPILE error deep in the framework's headers, not a runtime
+        // surprise. Emitters skip such a class outright, with a note: the
+        // alternative would be a per-backend non-owning holder
+        // (py::nodelete and its equivalents), which is a feature of its own.
+        bool is_destructible = true;
+
         // Whether T can be assigned to (copy OR move). The node runtime's
         // parameterized-constructor path assigns the freshly built object into
         // the Wrap's inner storage; for a non-assignable class (GEO::Mesh) only
@@ -530,6 +578,18 @@ namespace rosetta {
         std::vector<GenEnumerator> values;     // enumerators in declaration order
     };
 
+    /**
+     * @brief One header written into the generated tree before anything
+     * compiles (manifest "generated_headers"). `path` is relative — it is what
+     * the bound sources #include ("geogram/version.h"), so the directory it
+     * lands in goes FIRST on the include path, ahead of the library's own
+     * source tree.
+     */
+    struct GeneratedHeader {
+        std::string path;    // relative include path, e.g. "geogram/version.h"
+        std::string content; // the finished text, substitutions already applied
+    };
+
     struct GenerateOptions {
         std::filesystem::path    out_dir;         // root of the generated tree
         std::vector<std::filesystem::path> user_include; // dir(s) containing the class headers
@@ -537,6 +597,28 @@ namespace rosetta {
         std::vector<TargetSpec>  targets;         // backends + per-backend module name
         std::vector<GenFunction> functions;       // free functions to expose
         std::vector<GenExtension> extensions;     // free functions exposed as class methods
+
+        // Manifest "out_params": which parameters of which methods are
+        // OUTPUTS. Keyed "Class::method" (or "ns::fn" for a free function),
+        // each holding 0-based parameter indices. Applied to the IR after the
+        // walk, since it is knowledge the C++ does not carry — see
+        // GenParam::is_out.
+        std::map<std::string, std::vector<std::size_t>> out_params;
+
+        // Manifest "module_init" — see GenContext::init_headers /
+        // init_statements, which these fill verbatim.
+        std::vector<std::string> init_headers;
+        std::vector<std::string> init_statements;
+
+        // Manifest "generated_headers": headers that do not exist on disk and
+        // must be written before the bindings compile. The canonical case is a
+        // header the bound library's OWN build system generates from a template
+        // — geogram's <geogram/version.h>, configured from version.h.in — which
+        // is simply absent when rosetta compiles that library's sources without
+        // running its CMake. `content` is already resolved (rosetta_gen reads
+        // the template and applies the substitutions), so generate() only has
+        // to write it and put its directory first on the include path.
+        std::vector<GeneratedHeader> generated_headers;
 
         // Class names (as spelled in the manifest, qualified or not) to mark
         // is_final — no trampoline, host-language overriding off. See
@@ -686,6 +768,21 @@ namespace rosetta {
         std::string requires_python;
         std::string napi_version;
         std::string node_engine;
+
+        // Manifest "module_init": C++ statements to run when the module LOADS,
+        // and the headers that declare them. Emitted at the top of the module
+        // entry point — PYBIND11_MODULE / NB_MODULE / Init / EMSCRIPTEN_BINDINGS
+        // / luaopen — before any binding is registered.
+        //
+        // This is the escape hatch for a library's LIFECYCLE, which is not a
+        // binding at all: geogram wants GEO::initialize() plus a run of
+        // CmdLine::import_arg_group() calls plus a C-function-pointer
+        // registration (nlPrintfFuncs) before anything else works, and none of
+        // that is expressible as "bind this name". Without it, every such
+        // library needs a hand-written init function in the manifest's
+        // `functions` that scripts must remember to call first.
+        std::vector<std::string> init_headers;
+        std::vector<std::string> init_statements;
     };
 
     /**
@@ -751,6 +848,26 @@ namespace rosetta {
     template <std::meta::info F>
     GenFunction make_function(const char *qualified, const char *header, const char *doc,
                               const char *expose = nullptr);
+
+    /**
+     * @brief Same, for ONE overload of an overloaded free function — selected by
+     * its signature (manifest `"signature": "void(GEO::Mesh&, bool)"`) instead of
+     * by its reflection.
+     *
+     * `^^name` is ill-formed when `name` is an overload set, so the reflection
+     * path `make_function<^^F>` cannot express "this one". The signature can:
+     * `Sig` is the function TYPE (`void(GEO::Mesh &, bool)`), a plain type
+     * argument no overload set is involved in, and the return type / parameters
+     * come from decomposing it rather than from reflecting a function. The
+     * exposed name is `expose`, or the tail of `qualified` after the last `::`
+     * (there is no `identifier_of` to ask).
+     *
+     * `sig_cpp` is that same signature as text, kept for the disambiguating cast
+     * backends must emit — see GenFunction::sig_cpp.
+     */
+    template <typename Sig>
+    GenFunction make_function_sig(const char *qualified, const char *header, const char *doc,
+                                  const char *expose, const char *sig_cpp);
 
 } // namespace rosetta
 

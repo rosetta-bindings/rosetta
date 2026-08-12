@@ -530,6 +530,9 @@ those. Members using any other type are omitted from both sides.
                 s += "    rosetta::bind_csharp<" + qualified_of(k) + ">(\"" + exposed_of(k) + "\");\n";
             }
             for (const auto &f : c.functions) {
+                if (fn_needs_reflection_skip(f, "csharp")) {
+                    continue;
+                }
                 s += "    rosetta::bind_csharp_function<^^" + f.qualified + ">(\"" + f.name +
                      "\");\n";
             }
