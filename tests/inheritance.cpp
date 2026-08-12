@@ -8,6 +8,8 @@
 //   - single inheritance: base fields/methods appear on the derived binding
 //   - shadowing: a redeclared name collapses to ONE emission, derived wins
 //   - diamond (virtual): a shared base is emitted exactly once
+//   - a NON-PUBLIC redeclaration (protected override, private field) hides the
+//     base's public one and neither is emitted
 //
 // Verification goes through rosetta::to_json / from_json (value-based, no
 // codegen) for fields, and rosetta::to_markdown for inherited methods.
@@ -70,6 +72,38 @@ struct Square : Drawable {
     double side = 1.0;
 
     double surface_area() const override { return side * side; } // overrides
+};
+
+// ---- non-public redeclaration of a public base name ------------------------
+// A protected override hides the base's public declaration from every caller
+// outside the class, the emitted binding included: `&Muted::speak` names an
+// inaccessible member, so neither declaration can be bound. Same story for a
+// private field shadowing a public base one.
+struct Speaker {
+    virtual std::string speak() const { return "base"; }
+    std::string         volume() const { return "loud"; }
+    virtual ~Speaker() = default;
+};
+
+class Muted : public Speaker {
+  public:
+    std::string name() const { return "muted"; }
+
+  protected:
+    std::string speak() const override { return "shh"; } // hides Speaker::speak
+};
+
+struct OpenBox {
+    int value = 1;
+    int spare = 2;
+};
+
+class ClosedBox : public OpenBox {
+  public:
+    int lid = 3;
+
+  private:
+    int value = 4; // hides OpenBox::value
 };
 
 // Minimal visitor that records, per method name, how many times walk<T>()
@@ -185,6 +219,34 @@ TEST(Inheritance, OverriddenVirtualEmittedOnceAsDerived) {
     // ... and the surviving reflection must be Square's override, not the
     // base's pure-virtual declaration.
     EXPECT_EQ(counter.owners["surface_area"], "Square");
+}
+
+TEST(Inheritance, ProtectedOverrideHidesBaseMethod) {
+    MethodCounter counter;
+    rosetta::walk<Muted>(counter);
+
+    // Neither declaration of speak() is reachable from outside Muted, so the
+    // walk emits none — binding one would emit an `&Muted::speak` that does
+    // not compile.
+    EXPECT_EQ(counter.calls["speak"], 0);
+    // Everything else is untouched: Muted's own method and the unrelated
+    // inherited one still bind.
+    EXPECT_EQ(counter.calls["name"], 1);
+    ASSERT_EQ(counter.calls["volume"], 1);
+    EXPECT_EQ(counter.owners["volume"], "Speaker");
+}
+
+TEST(Inheritance, PrivateFieldHidesBaseField) {
+    ClosedBox b;
+    b.lid = 9;
+
+    const nlohmann::json j = rosetta::to_json(b);
+
+    EXPECT_FALSE(j.contains("value")); // hidden by ClosedBox's private one
+    ASSERT_TRUE(j.contains("spare"));  // sibling base field is unaffected
+    ASSERT_TRUE(j.contains("lid"));
+    EXPECT_EQ(j["spare"], 2);
+    EXPECT_EQ(j["lid"], 9);
 }
 
 TEST(Inheritance, ConcreteOverrideSerializesInheritedField) {

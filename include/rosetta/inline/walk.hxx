@@ -102,6 +102,15 @@ namespace rosetta {
         // does not offer. Each one is recorded in `drops` so the coverage report
         // can name it rather than leaving it to be discovered by its absence.
         //
+        // A NON-PUBLIC derived declaration hides just as hard. `class D : public B`
+        // that re-declares B's public `f` under `protected:` (a protected override
+        // of a public virtual is the usual way this shows up) leaves every outside
+        // caller — the emitted binding included — unable to name `&D::f` at all.
+        // So the members are enumerated through an unchecked access context: a
+        // private / protected declaration is never bound, but its name is still
+        // recorded as hiding the base's, which is what keeps the emitted
+        // `&D::f` from being a line that cannot compile.
+        //
         // Two DIFFERENT bases declaring the same name is left alone: both sets
         // are emitted. Such a call is ambiguous in C++ without qualification, but
         // the binding has no ambiguity to resolve — each entry is spliced from
@@ -132,12 +141,20 @@ namespace rosetta {
             };
 
             // Own data members (declaration order), then own methods. Fields
-            // cannot overload, so they keep the plain by-name dedup.
-            for (auto f : std::meta::nonstatic_data_members_of(canon, ctx)) {
+            // cannot overload, so they keep the plain by-name dedup. A
+            // non-public one takes its name out of circulation without being
+            // emitted, for the same reason a non-public method does.
+            for (auto f :
+                 std::meta::nonstatic_data_members_of(canon, std::meta::access_context::unchecked())) {
+                if (!std::meta::has_identifier(f)) {
+                    continue; // unnamed bit-field: nothing to bind or to hide
+                }
                 auto id = std::meta::identifier_of(f);
                 if (!contains(st.seen_fields, id)) {
                     st.seen_fields.push_back(id);
-                    st.fields.push_back(f);
+                    if (std::meta::is_public(f)) {
+                        st.fields.push_back(f);
+                    }
                 }
             }
 
@@ -145,7 +162,20 @@ namespace rosetta {
             // merged into `hidden_methods` AFTER the loop: a class's own
             // overloads must not hide each other.
             std::vector<std::string_view> own_names;
-            for (auto m : std::meta::members_of(canon, ctx)) {
+            for (auto m : std::meta::members_of(canon, std::meta::access_context::unchecked())) {
+                if (!std::meta::is_public(m)) {
+                    // Not bindable — but it hides the base declaration of its
+                    // name from outside the class, the emitted `&D::name`
+                    // included. Record the name; the base's own entry is
+                    // reported as hidden_by_derived when the recursion gets
+                    // there, so the coverage report still accounts for it.
+                    if (std::meta::is_function(m) && std::meta::has_identifier(m) &&
+                        !std::meta::is_constructor(m) && !std::meta::is_destructor(m) &&
+                        !std::meta::is_special_member_function(m)) {
+                        own_names.push_back(std::meta::identifier_of(m));
+                    }
+                    continue;
+                }
                 if (std::meta::is_function_template(m)) {
                     // A member template has no fixed parameter pack to splice;
                     // only an explicit instantiation could be bound.
