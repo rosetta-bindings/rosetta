@@ -107,6 +107,73 @@ A post-build step copies the module next to the sources, so from this directory:
 python3 -c "import {{LIB}}"
 ```)MD";
 
+        // The one base class nanobind can be told about, or "" when there is
+        // none. Shared by both nanobind backends (this header is included
+        // before nanobind_expanded_backend.h).
+        //
+        // Registering the relationship is what makes a derived instance
+        // acceptable where a base is expected: without it `nb::class_<Derived>`
+        // is an unrelated Python type, and passing one to a method taking
+        // `Base *` fails with "incompatible function arguments".
+        //
+        // Two filters apply, both of them nanobind's:
+        //   - a base that is not itself bound is dropped — nanobind resolves it
+        //     by looking the type up in the module.
+        //   - at most ONE base survives. nb::class_<T, Ts...> pulls a single
+        //     `Base` out of Ts and static_asserts that nothing else is left
+        //     over ("invoked with extra arguments that could not be handled"):
+        //     nanobind has no multiple inheritance, where pybind11 and sol2 do.
+        //     A second bound base is reported and dropped rather than emitted
+        //     into code that cannot compile.
+        inline std::string nb_bound_base(const GenClass &k, const GenContext &c,
+                                         const char *backend) {
+            auto index_of = [&](const std::string &q) -> std::size_t {
+                for (std::size_t i = 0; i < c.classes.size(); ++i) {
+                    // A class with a non-public destructor is in the IR but
+                    // never emitted (see the is_destructible guard on the class
+                    // emitters), so it is no more registered than an unlisted
+                    // type — naming it as a base would break the import.
+                    if (qualified_of(c.classes[i]) == q && c.classes[i].is_destructible) {
+                        return i;
+                    }
+                }
+                return c.classes.size(); // not bound
+            };
+            const std::size_t self = index_of(qualified_of(k));
+
+            std::string first;
+            std::string dropped;
+            for (const auto &b : k.bases) {
+                const std::size_t at = index_of(b);
+                if (at == c.classes.size()) {
+                    continue; // base not bound — nothing to point nanobind at
+                }
+                if (first.empty()) {
+                    first = b;
+                    // nanobind binds in emission order and needs the base type
+                    // already registered when the derived class declares it.
+                    // Emission follows manifest order, so this is the user's to
+                    // fix: flag it here rather than at import time.
+                    if (at > self) {
+                        std::fprintf(stderr,
+                                     "rosetta::%s: class '%s' is bound before its base '%s' — "
+                                     "list the base first in the manifest, or the module will "
+                                     "fail to import\n",
+                                     backend, k.name.c_str(), b.c_str());
+                    }
+                } else {
+                    dropped += (dropped.empty() ? "" : ", ") + b;
+                }
+            }
+            if (!dropped.empty()) {
+                std::fprintf(stderr,
+                             "rosetta::%s: class '%s' has several bound bases — kept '%s', "
+                             "dropped %s (nanobind has no multiple inheritance)\n",
+                             backend, k.name.c_str(), first.c_str(), dropped.c_str());
+            }
+            return first;
+        }
+
         inline std::string nanobind_bindings(const GenContext &c) {
             std::string binds = init_block(c);
             for (const auto &e : c.enums) {
@@ -114,8 +181,11 @@ python3 -c "import {{LIB}}"
                          exposed_of(e) + "\");\n";
             }
             for (const auto &k : c.classes) {
-                binds += "    rosetta::bind_nanobind<" + qualified_of(k) + ">(m, \"" + exposed_of(k) +
-                         "\");\n";
+                // Trailing template argument: the bound base, forwarded to
+                // nb::class_ by bind_nanobind<T, Bases...>.
+                const std::string base = nb_bound_base(k, c, "nanobind");
+                binds += "    rosetta::bind_nanobind<" + qualified_of(k) +
+                         (base.empty() ? "" : ", " + base) + ">(m, \"" + exposed_of(k) + "\");\n";
             }
             for (const auto &f : c.functions) {
                 binds += "    m.def(\"" + f.name + "\", " + fn_addr(f) +

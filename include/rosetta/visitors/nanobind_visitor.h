@@ -56,7 +56,11 @@ namespace nb = nanobind;
 
 namespace rosetta {
 
-    template <typename T> void bind_nanobind(nb::module_ &, const char *);
+    // `Bases` is the bound base class, when the backend found one — nanobind
+    // accepts at most a single one (see gen_detail::nb_bound_base), so the pack
+    // is empty or one deep. It is a pack only so the no-base call stays
+    // `bind_nanobind<T>(...)`.
+    template <typename T, typename... Bases> void bind_nanobind(nb::module_ &, const char *);
 
     // Register an enum type as an nb::enum_ (enumerators accessed as Name.Value).
     template <typename T> void bind_nanobind_enum(nb::module_ &, const char *);

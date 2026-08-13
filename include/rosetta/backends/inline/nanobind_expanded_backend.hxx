@@ -365,7 +365,12 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
                 coverage::note_bound("nanobind-expanded", k, m);
             }
 
-            std::string s = "    nb::class_<" + qualified_of(k) + ">(m, \"" + exposed_of(k) + "\")";
+            // Trailing template argument: the bound base, so a derived instance
+            // is accepted where the base is expected (nb_bound_base explains
+            // why there is at most one).
+            const std::string base = nb_bound_base(k, c, "nanobind-expanded");
+            std::string       s    = "    nb::class_<" + qualified_of(k) +
+                            (base.empty() ? "" : ", " + base) + ">(m, \"" + exposed_of(k) + "\")";
             for (const auto &seg : segs) {
                 s += "\n        " + seg;
             }

@@ -78,6 +78,15 @@ target_compile_options(inheritance PRIVATE -fannotation-attributes)
 target_link_libraries(inheritance PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
 gtest_discover_tests(inheritance)
 
+# The other half of inheritance: GenClass::bases reaching py::class_<T, Base>
+# and nb::class_<T, Base>, so a derived instance converts to its base at the
+# boundary. Includes nanobind's single-base rule. Verifies the emitted source.
+add_executable(base_classes base_classes.cpp)
+target_include_directories(base_classes PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(base_classes PRIVATE -fannotation-attributes)
+target_link_libraries(base_classes PRIVATE GTest::gtest_main)
+gtest_discover_tests(base_classes)
+
 # Python backend trampoline emission for virtual methods (consumes virtual_spec).
 # Verifies the generated auto_pybind.cpp source, not a live pybind build.
 add_executable(python_trampoline python_trampoline.cpp)

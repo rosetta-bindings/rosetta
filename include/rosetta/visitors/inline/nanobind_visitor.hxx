@@ -50,11 +50,13 @@ namespace rosetta {
                nb_params_bindable<Fn>(std::make_index_sequence<arity>{});
     }
 
-    // Mirrors PybindVisitor, against the nanobind API. Bound to nb::class_<T>
-    // directly (no trampoline parameterisation yet).
-    template <typename T> struct NanobindVisitor {
-        nb::class_<T> &cls;
-        bool           saw_default_ctor = false;
+    // Mirrors PybindVisitor, against the nanobind API. Bound to the nb::class_
+    // directly (no trampoline parameterisation yet). `Cls` is that class_ type:
+    // it carries the base class when bind_nanobind was given one, so the
+    // visitor cannot simply name nb::class_<T>.
+    template <typename T, typename Cls = nb::class_<T>> struct NanobindVisitor {
+        Cls &cls;
+        bool saw_default_ctor = false;
 
         template <std::meta::info Ctor, auto... Anns> void constructor() {
             constexpr auto params = std::define_static_array(std::meta::parameters_of(Ctor));
@@ -122,9 +124,10 @@ namespace rosetta {
         }
     };
 
-    template <typename T> inline void bind_nanobind(nb::module_ &m, const char *py_name) {
-        nb::class_<T>      cls(m, py_name);
-        NanobindVisitor<T> v{cls};
+    template <typename T, typename... Bases>
+    inline void bind_nanobind(nb::module_ &m, const char *py_name) {
+        nb::class_<T, Bases...> cls(m, py_name);
+        NanobindVisitor<T, nb::class_<T, Bases...>> v{cls};
         walk<T>(v);
         // The implicitly-declared default ctor may not be enumerated by
         // reflection; register one so `T()` keeps working. The constructibility
