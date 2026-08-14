@@ -4,24 +4,24 @@ A variant of [`../geom-lib`](../geom-lib) whose generated bindings **build with 
 stock toolchain** — no clang-p2996, no reflection, (almost) no rosetta headers on
 the machine that compiles the binding. It ships eleven such targets:
 
-- **`python-expanded`** → a pybind11 module that builds with a stock **C++17** compiler.
-- **`nanobind-expanded`** → a [nanobind](https://github.com/wjakob/nanobind) module
+- **`python`** → a pybind11 module that builds with a stock **C++17** compiler.
+- **`nanobind`** → a [nanobind](https://github.com/wjakob/nanobind) module
   (leaner/faster pybind11 successor) — stock **C++17**, smallest binary of the set.
-- **`node-expanded`** → an N-API addon that builds with a stock **C++20** compiler
+- **`node`** → an N-API addon that builds with a stock **C++20** compiler
   (uses the header-only, reflection-free `node_runtime.h`).
-- **`wasm-expanded`** → an emscripten/embind module that builds with a **stock emsdk**
+- **`wasm`** → an emscripten/embind module that builds with a **stock emsdk**
   (no reflection-aware fork — the limitation noted for the plain `wasm` target).
 - **`qt-expanded`** → a Qt Widgets inspector window (stock **C++17** + Qt 6) via the
   header-only, reflection-free `qt_widgets_runtime.h`; no moc on the generated code.
 - **`qml-expanded`** → a QtQuick inspector (stock **C++17** + Qt 6) that fills the
   generic `ReflectedObject` bridge; moc runs only on that bridge, never per type.
-- **`csharp-expanded`** → a native shared library (stock **C++20**) exposing a flat
+- **`csharp`** → a native shared library (stock **C++20**) exposing a flat
   C ABI, plus idiomatic handle-backed C# wrappers that reach it through P/Invoke
   (values marshalled as JSON via `System.Text.Json`); ships a `.csproj`. The native
   shim registers every field/method/constructor by *member pointer*, so the runtime
   deduces the marshalled types — no reflection. Out-of-line `range`/`readonly`/`doc`
   flow straight in (e.g. `Triangle.a` rejects an out-of-range value at run time).
-- **`java-expanded`** → the same C-ABI shim (stock **C++20**) plus handle-backed
+- **`java`** → the same C-ABI shim (stock **C++20**) plus handle-backed
   Java wrappers reaching it through the FFM API (`java.lang.foreign`).
 - **`lua-expanded`** → a [sol2](https://github.com/ThePhD/sol2) module (stock
   **C++17** + Lua 5.1–5.4 / LuaJIT; sol2 fetched automatically) built as a plain
@@ -30,7 +30,7 @@ the machine that compiles the binding. It ships eleven such targets:
   the exact one), a Lua function converts natively into a `std::function`
   callback parameter, and the out-of-line `range` on `Triangle.a/b/c` validates
   at run time.
-- **`julia-expanded`** → a CxxWrap / jlcxx module (stock **C++20** + Julia with
+- **`julia`** → a CxxWrap / jlcxx module (stock **C++20** + Julia with
   the CxxWrap package) loaded via a generated `jlgeom.jl` wrapper. Because it
   builds against the stock libc++ — not the fork's — `<jlcxx/stl.hpp>` compiles
   and **`std::vector` crosses the boundary** (members, parameters, returns,
@@ -85,26 +85,26 @@ cmake -S gen -B gen/build && cmake --build gen/build -j
 
 ### 3a. Python / pybind11 — stock C++17
 ```sh
-cmake -S bindings/python-expanded -B bindings/python-expanded/build
-cmake --build bindings/python-expanded/build -j
+cmake -S bindings/python -B bindings/python/build
+cmake --build bindings/python/build -j
 ```
 
 ### 3b. Python / nanobind — stock C++17 (needs the pip `nanobind` package)
 ```sh
-cmake -S bindings/nanobind-expanded -B bindings/nanobind-expanded/build
-cmake --build bindings/nanobind-expanded/build -j
+cmake -S bindings/nanobind -B bindings/nanobind/build
+cmake --build bindings/nanobind/build -j
 ```
 
 ### 3c. Node / N-API — stock C++20
 ```sh
-( cd bindings/node-expanded && npm install && npm run build )
+( cd bindings/node && npm install && npm run build )
 ```
 
 ### 3d. WASM / embind — stock emsdk (no fork)
 ```sh
-emcmake cmake -S bindings/wasm-expanded -B bindings/wasm-expanded/build
-cmake --build bindings/wasm-expanded/build -j
-#   -> bindings/wasm-expanded/build/geom.js + geom.wasm, loadable in node/web
+emcmake cmake -S bindings/wasm -B bindings/wasm/build
+cmake --build bindings/wasm/build -j
+#   -> bindings/wasm/build/geom.js + geom.wasm, loadable in node/web
 ```
 
 ### 3e. Qt Widgets / QML — stock C++17 + Qt 6
@@ -124,12 +124,12 @@ so moc runs on that bridge only, never on per-type reflection.
 ### 3f. C# — native library (stock C++20) + .NET assembly
 ```sh
 # reflection-free shim — builds with a stock compiler, no clang-p2996
-cmake -S bindings/csharp-expanded -B bindings/csharp-expanded/build
-cmake --build bindings/csharp-expanded/build -j
-#   -> bindings/csharp-expanded/build/libcsgeom.{dylib,so}
+cmake -S bindings/csharp -B bindings/csharp/build
+cmake --build bindings/csharp/build -j
+#   -> bindings/csharp/build/libcsgeom.{dylib,so}
 
 # the C# wrappers (only needs dotnet)
-dotnet build bindings/csharp-expanded/csgeom.csproj
+dotnet build bindings/csharp/csgeom.csproj
 ```
 
 ```csharp
@@ -141,7 +141,7 @@ System.Console.WriteLine(t.kind);   // enum, marshalled as its integer value
 ```
 
 At run time the .NET loader must find `libcsgeom.*` (e.g.
-`DYLD_LIBRARY_PATH=bindings/csharp-expanded/build` on macOS, `LD_LIBRARY_PATH=…` on Linux).
+`DYLD_LIBRARY_PATH=bindings/csharp/build` on macOS, `LD_LIBRARY_PATH=…` on Linux).
 
 ### 3g. Dear ImGui — inspector app (stock C++20, deps auto-fetched)
 ```sh
@@ -154,9 +154,9 @@ ROSETTA_IMGUI_FRAMES=5 ./bindings/imgui-expanded/build/geom_imgui  # smoke test
 ### 3h. Julia — jlcxx module (stock C++20 + CxxWrap.jl)
 ```sh
 # needs Julia with CxxWrap installed:  julia -e 'using Pkg; Pkg.add("CxxWrap")'
-cmake -S bindings/julia-expanded -B bindings/julia-expanded/build
-cmake --build bindings/julia-expanded/build -j
-#   -> bindings/julia-expanded/libjlgeom.dylib + jlgeom.jl (the loader module)
+cmake -S bindings/julia -B bindings/julia/build
+cmake --build bindings/julia/build -j
+#   -> bindings/julia/libjlgeom.dylib + jlgeom.jl (the loader module)
 julia example_julia.jl
 ```
 
@@ -185,24 +185,24 @@ t.a = -5                              -- error: out-of-line range, enforced nati
 Each binding has a matching, self-contained script:
 
 ```sh
-python3 example_pybind11.py   # python-expanded    (pygeom)
-python3 example_nanobind.py   # nanobind-expanded  (nbgeom)
+python3 example_pybind11.py   # python    (pygeom)
+python3 example_nanobind.py   # nanobind  (nbgeom)
 
-node    example_node.js       # node-expanded      (jsgeom — std::vector <-> JS Array)
+node    example_node.js       # node      (jsgeom — std::vector <-> JS Array)
 
-node    example_wasm.js       # wasm-expanded      (geom — embind, async load + .delete())
-python3 -m http.server 8000   # wasm-expanded running in a browser
+node    example_wasm.js       # wasm      (geom — embind, async load + .delete())
+python3 -m http.server 8000   # wasm running in a browser
 
-DYLD_LIBRARY_PATH=bindings/csharp-expanded/build dotnet run --project run # csharp-expanded
+DYLD_LIBRARY_PATH=bindings/csharp/build dotnet run --project run # csharp
 
 # lua-expanded (luageom — tables, callbacks, range). Use the SAME Lua version
 # the module was built against (Homebrew's plain `lua` is 5.5 — unsupported):
 /opt/homebrew/opt/lua@5.4/bin/lua example_lua.lua
 
-julia   example_julia.jl      # julia-expanded     (jlgeom — std::vector fully bound)
+julia   example_julia.jl      # julia     (jlgeom — std::vector fully bound)
 ```
 
-[`example_csharp.cs`](example_csharp.cs) covers the **csharp-expanded** target
+[`example_csharp.cs`](example_csharp.cs) covers the **csharp** target
 (csgeom). C# needs the wrapper compiled in rather than imported, so the example's
 header carries a short `dotnet run` recipe; it exercises the scalar / enum /
 vector / range surface (object-graph methods stay on the node target — see the

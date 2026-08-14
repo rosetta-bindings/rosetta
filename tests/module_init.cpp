@@ -70,10 +70,8 @@ namespace {
     }
 
     // The backends whose render() returns the module source.
-    const std::vector<const char *> kRenderable{"python-expanded", "nanobind-expanded",
-                                                "node-expanded",   "wasm-expanded",
-                                                "lua-expanded",    "python",
-                                                "nanobind",        "node"};
+    const std::vector<const char *> kRenderable{"python", "nanobind", "node",
+                                                "wasm",   "lua-expanded"};
 
 } // namespace
 
@@ -92,7 +90,7 @@ TEST(ModuleInit, EveryEntryPointRunsTheStatements) {
 // A manifest writes expressions; some authors end them with a semicolon anyway.
 // Exactly one must come out.
 TEST(ModuleInit, StatementsAreTerminatedExactlyOnce) {
-    const std::string s = render("python-expanded", ctx_with_init());
+    const std::string s = render("python", ctx_with_init());
     EXPECT_TRUE(has(s, "mix::import_arg_group(\"standard\");\n"));
     EXPECT_FALSE(has(s, ";;"));
 }
@@ -101,7 +99,7 @@ TEST(ModuleInit, StatementsAreTerminatedExactlyOnce) {
 // before a bound loader is reachable, and a script can call one the moment the
 // module object exists.
 TEST(ModuleInit, StatementsPrecedeTheBindings) {
-    const std::string s = render("python-expanded", ctx_with_init());
+    const std::string s = render("python", ctx_with_init());
     const auto        init = s.find("mix::initialize");
     const auto        bind = s.find("py::class_<mix::Widget");
     ASSERT_NE(init, std::string::npos);
@@ -129,7 +127,7 @@ TEST(ModuleInit, GeneratedHeaderIsWrittenAndComesFirstOnTheIncludePath) {
     opt.out_dir           = dir / "out";
     opt.user_include      = {user};
     opt.rosetta_include   = "/rosetta/include";
-    opt.targets           = {{"python-expanded", "mixtest"}};
+    opt.targets           = {{"python", "mixtest"}};
     opt.generated_headers = {{"mix/version.h", "#define MIX_VERSION \"1.2.3\"\n"}};
     rosetta::generate<mix::Widget>(opt);
 
@@ -144,7 +142,7 @@ TEST(ModuleInit, GeneratedHeaderIsWrittenAndComesFirstOnTheIncludePath) {
     // And its directory precedes the user's own include dir in the emitted
     // CMakeLists — a stale copy of the same header in the library's sources
     // must not win the lookup.
-    std::ifstream     cm(opt.out_dir / "python-expanded" / "CMakeLists.txt");
+    std::ifstream     cm(opt.out_dir / "python" / "CMakeLists.txt");
     std::stringstream cs;
     cs << cm.rdbuf();
     const std::string cmake = cs.str();

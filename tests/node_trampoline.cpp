@@ -71,8 +71,11 @@ TEST(NodeTrampoline, ParameterForwardedToOverride) {
 
 TEST(NodeTrampoline, BindsWithTrampolineType) {
     const std::string s = node_source_for_shape();
-    EXPECT_NE(s.find("rosetta::bind_napi<Shape, rosetta_node::Js_Shape>(env, \"Shape\")"),
+    // The wrapper HOLDS the trampoline, so a JS subclass's overrides are what
+    // C++ virtual dispatch reaches.
+    EXPECT_NE(s.find("using This = rosetta::Wrap<Shape, rosetta_node::Js_Shape>;"),
               std::string::npos);
+    EXPECT_NE(s.find("exports.Set(\"Shape\", ctor);"), std::string::npos);
 }
 
 TEST(NodeTrampoline, PlainClassHasNoTrampoline) {
@@ -80,5 +83,7 @@ TEST(NodeTrampoline, PlainClassHasNoTrampoline) {
     const std::string s = rosetta::backend_registry().at("node")->render(c);
     EXPECT_EQ(s.find("Js_Plain"), std::string::npos);
     EXPECT_EQ(s.find("namespace rosetta_node"), std::string::npos);
-    EXPECT_NE(s.find("rosetta::bind_napi<Plain>(env, \"Plain\")"), std::string::npos);
+    // No virtuals ⇒ the wrapper holds the class itself, not a Js_ trampoline.
+    EXPECT_NE(s.find("using This = rosetta::Wrap<Plain, Plain>;"), std::string::npos);
+    EXPECT_NE(s.find("exports.Set(\"Plain\", ctor);"), std::string::npos);
 }

@@ -68,25 +68,25 @@ static std::string render(const char *lang, const char *expose) {
 }
 
 TEST(Expose, PythonBindsTheExposedNameToTheQualifiedFunction) {
-    const std::string s = render("python-expanded", "length");
+    const std::string s = render("python", "length");
     EXPECT_NE(s.find("m.def(\"length\", &expns::norm"), std::string::npos);
     EXPECT_EQ(s.find("m.def(\"norm\""), std::string::npos);
 }
 
 TEST(Expose, NodeBindsTheExposedName) {
-    const std::string s = render("node-expanded", "length");
+    const std::string s = render("node", "length");
     EXPECT_NE(s.find("exports.Set(\"length\""), std::string::npos);
     EXPECT_NE(s.find("&expns::norm"), std::string::npos);
     EXPECT_EQ(s.find("exports.Set(\"norm\""), std::string::npos);
 }
 
 TEST(Expose, NanobindBindsTheExposedName) {
-    const std::string s = render("nanobind-expanded", "length");
+    const std::string s = render("nanobind", "length");
     EXPECT_NE(s.find("m.def(\"length\", &expns::norm"), std::string::npos);
 }
 
 TEST(Expose, WasmBindsTheExposedName) {
-    const std::string s = render("wasm-expanded", "length");
+    const std::string s = render("wasm", "length");
     EXPECT_NE(s.find("emscripten::function(\"length\", &expns::norm"), std::string::npos);
 }
 
@@ -102,9 +102,9 @@ TEST(Expose, MarkdownDocumentsTheExposedName) {
 }
 
 TEST(Expose, WithoutOverrideEveryBackendKeepsTheIdentifier) {
-    EXPECT_NE(render("python-expanded", "").find("m.def(\"norm\", &expns::norm"),
+    EXPECT_NE(render("python", "").find("m.def(\"norm\", &expns::norm"),
               std::string::npos);
-    EXPECT_NE(render("node-expanded", "").find("exports.Set(\"norm\""), std::string::npos);
+    EXPECT_NE(render("node", "").find("exports.Set(\"norm\""), std::string::npos);
     EXPECT_NE(render("lua-expanded", "").find("m.set_function(\"norm\", &expns::norm"),
               std::string::npos);
 }
@@ -136,11 +136,11 @@ static rosetta::GenContext ctx_with_extension(const char *exposed_name) {
 
 TEST(Expose, RenamedExtensionBindsUnderTheNewNameAndCallsTheFreeFunction) {
     const auto c = ctx_with_extension("stretch");
-    const std::string py = rosetta::backend_registry().at("python-expanded")->render(c);
+    const std::string py = rosetta::backend_registry().at("python")->render(c);
     EXPECT_NE(py.find("c.def(\"stretch\", &expns::scaled"), std::string::npos);
     EXPECT_EQ(py.find("&expns::Vec::stretch"), std::string::npos); // never a member pointer
 
-    const std::string wasm = rosetta::backend_registry().at("wasm-expanded")->render(c);
+    const std::string wasm = rosetta::backend_registry().at("wasm")->render(c);
     EXPECT_NE(wasm.find(".function(\"stretch\", &expns::scaled)"), std::string::npos);
 }
 
@@ -196,18 +196,13 @@ TEST(Expose, EveryRenderingBackendUsesTheExposedName) {
     };
     const Case cases[] = {
         {"python", "\"Widget\"", "\"Thing\""},
-        {"python-expanded", "\"Widget\"", "\"Thing\""},
-        {"nanobind", "\"Widget\"", "\"Thing\""},
-        {"nanobind-expanded", "nb::class_<rnns::Thing>(m, \"Widget\")", "(m, \"Thing\")"},
+        {"nanobind", "nb::class_<rnns::Thing>(m, \"Widget\")", "(m, \"Thing\")"},
         {"node", "\"Widget\"", "\"Thing\""},
-        {"node-expanded", "\"Widget\"", "\"Thing\""},
-        {"wasm-expanded", "emscripten::class_<rnns::Thing>(\"Widget\")", "(\"Thing\")"},
+        {"wasm", "emscripten::class_<rnns::Thing>(\"Widget\")", "(\"Thing\")"},
         {"lua-expanded", "m.new_usertype<rnns::Thing>(\"Widget\"", "(\"Thing\""},
-        {"julia-expanded", "mod.add_type<rnns::Thing>(\"Widget\"", "(\"Thing\""},
-        {"csharp", "rosetta::bind_csharp<rnns::Thing>(\"Widget\")", "(\"Thing\")"},
-        {"csharp-expanded", "registry()[\"Widget\"]", "registry()[\"Thing\"]"},
-        {"java", "rosetta::bind_java<rnns::Thing>(\"Widget\")", "(\"Thing\")"},
-        {"java-expanded", "registry()[\"Widget\"]", "registry()[\"Thing\"]"},
+        {"julia", "mod.add_type<rnns::Thing>(\"Widget\"", "(\"Thing\""},
+        {"csharp", "registry()[\"Widget\"]", "registry()[\"Thing\"]"},
+        {"java", "registry()[\"Widget\"]", "registry()[\"Thing\"]"},
         {"markdown", "Widget", "# Thing"},
         {"html", "Widget", "<h2>Thing</h2>"},
         {"paraview", "name=\"Widget\"", "name=\"Thing\""},
@@ -222,7 +217,7 @@ TEST(Expose, EveryRenderingBackendUsesTheExposedName) {
 TEST(Expose, RenamedEnumKeepsTheQualifiedCppSpelling) {
     // The label is the exposed name; the C++ template argument / enumerator
     // spelling stays qualified, which is what disambiguates two bound enums.
-    const std::string py = renamed("python-expanded");
+    const std::string py = renamed("python");
     EXPECT_NE(py.find("py::enum_<rnns::Kind>(m, \"Flavor\")"), std::string::npos);
     EXPECT_NE(py.find(".value(\"A\", rnns::Kind::A)"), std::string::npos);
 

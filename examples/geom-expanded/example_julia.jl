@@ -1,8 +1,8 @@
-# julia-expanded (CxxWrap / jlcxx) demo — module "jlgeom".
+# julia (CxxWrap / jlcxx) demo — module "jlgeom".
 #
 # Build first (needs Julia with the CxxWrap package installed):
-#   cmake -S bindings/julia-expanded -B bindings/julia-expanded/build
-#   cmake --build bindings/julia-expanded/build -j
+#   cmake -S bindings/julia -B bindings/julia/build
+#   cmake --build bindings/julia/build -j
 # then run:
 #   julia example_julia.jl
 #
@@ -13,7 +13,7 @@
 # are module-level, and a plain Vector works wherever C++ wants a std::vector
 # (a zero-copy ArrayRef overload is generated beside the exact one).
 
-include(joinpath(@__DIR__, "bindings", "julia-expanded", "jlgeom.jl"))
+include(joinpath(@__DIR__, "bindings", "julia", "jlgeom.jl"))
 using .jlgeom
 
 # A Surface straight from plain Julia Vectors (positions, triangle indices).

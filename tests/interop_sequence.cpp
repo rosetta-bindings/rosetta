@@ -136,7 +136,7 @@ TEST(InteropSequence, IrCarriesBothMarksWithTheStatedSpelling) {
 TEST(InteropSequence, CasterlessBackendsBindThroughTheFlatAdapter) {
     const auto c = rosetta::gen_detail::make_context<itp::Solver>("itest");
 
-    for (const char *lang : {"node-expanded", "wasm-expanded", "lua-expanded"}) {
+    for (const char *lang : {"node", "wasm", "lua-expanded"}) {
         const std::string out = rosetta::backend_registry().at(lang)->render(c);
         EXPECT_NE(out.find("\"solution\""), std::string::npos)
             << lang << " skipped the returning method the escape hatch is for";
@@ -160,8 +160,8 @@ TEST(InteropSequence, PythonFamilyKeepsTheCasterNotTheAdapter) {
         const char *lang;
         const char *header;
     };
-    for (const Case cs : {Case{"python-expanded", "pybind11/eigen.h"},
-                          Case{"nanobind-expanded", "nanobind/eigen/dense.h"}}) {
+    for (const Case cs : {Case{"python", "pybind11/eigen.h"},
+                          Case{"nanobind", "nanobind/eigen/dense.h"}}) {
         const std::string out = rosetta::backend_registry().at(cs.lang)->render(c);
         EXPECT_NE(out.find(std::string("#include <") + cs.header + ">"), std::string::npos)
             << cs.lang << " did not emit the caster header";
@@ -183,14 +183,14 @@ TEST(InteropSequence, MatrixSplitsTheSameWay) {
     EXPECT_EQ(st.interop, "eigen");
     EXPECT_EQ(st.mat_cpp, "Eigen::MatrixXd");
 
-    for (const char *lang : {"node-expanded", "wasm-expanded", "lua-expanded"}) {
+    for (const char *lang : {"node", "wasm", "lua-expanded"}) {
         const std::string out = rosetta::backend_registry().at(lang)->render(c);
         EXPECT_NE(out.find("\"stiffness\""), std::string::npos)
             << lang << " skipped the matrix member";
         EXPECT_NE(out.find("std::vector<std::vector<double>>"), std::string::npos)
             << lang << " did not marshal the matrix as an array of rows";
     }
-    for (const char *lang : {"python-expanded", "nanobind-expanded"}) {
+    for (const char *lang : {"python", "nanobind"}) {
         const std::string out = rosetta::backend_registry().at(lang)->render(c);
         EXPECT_NE(out.find("\"stiffness\""), std::string::npos)
             << lang << " skipped the matrix member";

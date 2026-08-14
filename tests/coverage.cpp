@@ -94,7 +94,7 @@ namespace {
 // ---- shape -------------------------------------------------------------------
 
 TEST(Coverage, ReportIsWellFormedJsonWithASchemaVersion) {
-    const json rep = report_for("python-expanded");
+    const json rep = report_for("python");
     EXPECT_EQ(rep.at("rosetta_coverage"), 1);
     EXPECT_TRUE(rep.contains("reflection"));
     EXPECT_TRUE(rep.contains("targets"));
@@ -111,7 +111,7 @@ TEST(Coverage, AnEmptyLogStillProducesParseableJson) {
 // ---- the reflection stage: what no backend ever saw ---------------------------
 
 TEST(Coverage, OperatorsAreAttributedToTheReflectionStage) {
-    const json rep = report_for("python-expanded");
+    const json rep = report_for("python");
     bool       found = false;
     for (const auto &k : rep.at("reflection")) {
         if (k.at("class") != "CovThing") {
@@ -128,7 +128,7 @@ TEST(Coverage, OperatorsAreAttributedToTheReflectionStage) {
 // ---- the backend stage: bound AND skipped -------------------------------------
 
 TEST(Coverage, BoundMembersAreRecordedNotJustSkips) {
-    const json node = class_node(report_for("python-expanded"), "python-expanded", "CovThing");
+    const json node = class_node(report_for("python"), "python", "CovThing");
     ASSERT_FALSE(node.is_null());
     EXPECT_TRUE(lists_member(node.at("bound"), "get"))
         << "without the bound side, 'nothing bound' and 'never reached' look identical";
@@ -137,7 +137,7 @@ TEST(Coverage, BoundMembersAreRecordedNotJustSkips) {
 TEST(Coverage, AnUnmarshalableSignatureIsSkippedWithAReason) {
     // std::function has no N-API conversion; the report must say so rather than
     // leave the method's absence to be noticed.
-    const json node = class_node(report_for("node-expanded"), "node-expanded", "CovThing");
+    const json node = class_node(report_for("node"), "node", "CovThing");
     ASSERT_FALSE(node.is_null());
     const json skip = find_skip(node, "listen");
     ASSERT_FALSE(skip.is_null()) << "the skipped callback method is missing from the report";
@@ -148,7 +148,7 @@ TEST(Coverage, AnUnmarshalableSignatureIsSkippedWithAReason) {
 TEST(Coverage, PythonSkipReasonNamesTheOffendingType) {
     // `listen` is NOT the example here: pybind11 has a std::function caster, so
     // it binds. A by-value non-copyable parameter is what pybind cannot take.
-    const json node = class_node(report_for("python-expanded"), "python-expanded", "CovThing");
+    const json node = class_node(report_for("python"), "python", "CovThing");
     ASSERT_FALSE(node.is_null());
     EXPECT_TRUE(lists_member(node.at("bound"), "listen")) << "pybind11 marshals std::function";
 
@@ -162,7 +162,7 @@ TEST(Coverage, PythonSkipReasonNamesTheOffendingType) {
 // ---- overloads dropped by a name-keyed target ---------------------------------
 
 TEST(Coverage, ADroppedOverloadIsAttributedToTheTargetThatDroppedIt) {
-    const json node = class_node(report_for("node-expanded"), "node-expanded", "CovThing");
+    const json node = class_node(report_for("node"), "node", "CovThing");
     ASSERT_FALSE(node.is_null());
     const json skip = find_skip(node, "get");
     ASSERT_FALSE(skip.is_null()) << "the second get() overload must be reported";
@@ -173,7 +173,7 @@ TEST(Coverage, ADroppedOverloadIsAttributedToTheTargetThatDroppedIt) {
 }
 
 TEST(Coverage, ANativeOverloadTargetReportsNoOverloadSkips) {
-    const json node = class_node(report_for("python-expanded"), "python-expanded", "CovThing");
+    const json node = class_node(report_for("python"), "python", "CovThing");
     ASSERT_FALSE(node.is_null());
     for (const auto &e : node.at("skipped")) {
         EXPECT_NE(e.at("reason"), "overload_not_expressible")
@@ -182,7 +182,7 @@ TEST(Coverage, ANativeOverloadTargetReportsNoOverloadSkips) {
 }
 
 TEST(Coverage, CountsAgreeWithTheListedEntries) {
-    const json rep = report_for("node-expanded");
+    const json rep = report_for("node");
     for (const auto &t : rep.at("targets")) {
         std::size_t bound = 0;
         std::size_t skipped = 0;
@@ -198,7 +198,7 @@ TEST(Coverage, CountsAgreeWithTheListedEntries) {
 // ---- hygiene ------------------------------------------------------------------
 
 TEST(Coverage, ResetClearsTheLogBetweenRuns) {
-    report_for("python-expanded");
+    report_for("python");
     rosetta::coverage::reset();
     EXPECT_TRUE(rosetta::coverage::log().bound.empty());
     EXPECT_TRUE(rosetta::coverage::log().skips.empty());

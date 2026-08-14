@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: UNLICENSED
 
 // Expanded (reflection-free) Qt Widgets backend. Included by inline/generate.hxx
-// after python_expanded_backend.h (reuses py_lit) and the shared render helpers
+// after python_backend.h (reuses py_lit) and the shared render helpers
 // (find_annotation / write_file).
 
 #pragma once

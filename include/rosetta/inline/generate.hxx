@@ -2425,31 +2425,29 @@ endif()
 // Each defines its templates + a gen_detail::*Backend, using the shared
 // render helpers above. New backends register the same way (see
 // docs/EXTENDING_BACKEND.md) without touching generate().
+// The order of the binding backends is a real dependency, not alphabetical
+// taste: python_backend.h defines qualify_std() and the pybind11 trampoline
+// helpers that csharp / java / nanobind / node reuse, and csharp_backend.h
+// defines csx_double_lit() that java_backend.h reuses. The documentation and
+// GUI backends below depend on none of them.
+#include <rosetta/backends/python_backend.h>
 #include <rosetta/backends/csharp_backend.h>
-#include <rosetta/backends/html_backend.h>
 #include <rosetta/backends/java_backend.h>
-#include <rosetta/backends/json_backend.h>
 #include <rosetta/backends/julia_backend.h>
-#include <rosetta/backends/markdown_backend.h>
+#include <rosetta/backends/lua_expanded_backend.h>
 #include <rosetta/backends/nanobind_backend.h>
 #include <rosetta/backends/node_backend.h>
-#include <rosetta/backends/openapi_backend.h>
-#include <rosetta/backends/paraview_backend.h>
-#include <rosetta/backends/python_backend.h>
-#include <rosetta/backends/python_expanded_backend.h>
-#include <rosetta/backends/csharp_expanded_backend.h>
-#include <rosetta/backends/java_expanded_backend.h>
-#include <rosetta/backends/julia_expanded_backend.h>
-#include <rosetta/backends/lua_expanded_backend.h>
-#include <rosetta/backends/nanobind_expanded_backend.h>
-#include <rosetta/backends/node_expanded_backend.h>
+#include <rosetta/backends/wasm_backend.h>
 #include <rosetta/backends/qt_expanded_backend.h>
 #include <rosetta/backends/imgui_expanded_backend.h>
 #include <rosetta/backends/qml_expanded_backend.h>
+#include <rosetta/backends/html_backend.h>
+#include <rosetta/backends/json_backend.h>
+#include <rosetta/backends/markdown_backend.h>
+#include <rosetta/backends/openapi_backend.h>
+#include <rosetta/backends/paraview_backend.h>
 #include <rosetta/backends/rest_backend.h>
 #include <rosetta/backends/typescript_backend.h>
-#include <rosetta/backends/wasm_backend.h>
-#include <rosetta/backends/wasm_expanded_backend.h>
 
 namespace rosetta {
 
@@ -2458,31 +2456,38 @@ namespace rosetta {
     inline std::map<std::string, std::shared_ptr<Backend>> &backend_registry() {
         static std::map<std::string, std::shared_ptr<Backend>> reg = [] {
             std::map<std::string, std::shared_ptr<Backend>> m;
-            m["python"]          = std::make_shared<gen_detail::PythonBackend>();
-            m["python-expanded"] = std::make_shared<gen_detail::PythonExpandedBackend>();
-            m["nanobind"]          = std::make_shared<gen_detail::NanobindBackend>();
-            m["nanobind-expanded"] = std::make_shared<gen_detail::NanobindExpandedBackend>();
-            m["node"]            = std::make_shared<gen_detail::NodeBackend>();
-            m["node-expanded"]   = std::make_shared<gen_detail::NodeExpandedBackend>();
-            m["qt-expanded"]     = std::make_shared<gen_detail::QtExpandedBackend>();
-            m["imgui-expanded"]  = std::make_shared<gen_detail::ImGuiExpandedBackend>();
-            m["qml-expanded"]    = std::make_shared<gen_detail::QmlExpandedBackend>();
-            m["julia"]           = std::make_shared<gen_detail::JuliaBackend>();
-            m["julia-expanded"]  = std::make_shared<gen_detail::JuliaExpandedBackend>();
-            m["lua-expanded"]    = std::make_shared<gen_detail::LuaExpandedBackend>();
-            m["rest"]            = std::make_shared<gen_detail::RestBackend>();
-            m["wasm"]            = std::make_shared<gen_detail::WasmBackend>();
-            m["wasm-expanded"]   = std::make_shared<gen_detail::WasmExpandedBackend>();
-            m["typescript"]      = std::make_shared<gen_detail::TypeScriptBackend>();
-            m["markdown"]        = std::make_shared<gen_detail::MarkdownBackend>();
-            m["html"]            = std::make_shared<gen_detail::HtmlBackend>();
-            m["json"]            = std::make_shared<gen_detail::JsonBackend>();
-            m["openapi"]         = std::make_shared<gen_detail::OpenApiBackend>();
-            m["paraview"]        = std::make_shared<gen_detail::ParaViewBackend>();
-            m["csharp"]          = std::make_shared<gen_detail::CSharpBackend>();
-            m["csharp-expanded"] = std::make_shared<gen_detail::CSharpExpandedBackend>();
-            m["java"]            = std::make_shared<gen_detail::JavaBackend>();
-            m["java-expanded"]   = std::make_shared<gen_detail::JavaExpandedBackend>();
+            m["python"]         = std::make_shared<gen_detail::PythonBackend>();
+            m["nanobind"]       = std::make_shared<gen_detail::NanobindBackend>();
+            m["node"]           = std::make_shared<gen_detail::NodeBackend>();
+            m["wasm"]           = std::make_shared<gen_detail::WasmBackend>();
+            m["julia"]          = std::make_shared<gen_detail::JuliaBackend>();
+            m["csharp"]         = std::make_shared<gen_detail::CSharpBackend>();
+            m["java"]           = std::make_shared<gen_detail::JavaBackend>();
+            m["lua-expanded"]   = std::make_shared<gen_detail::LuaExpandedBackend>();
+            m["qt-expanded"]    = std::make_shared<gen_detail::QtExpandedBackend>();
+            m["imgui-expanded"] = std::make_shared<gen_detail::ImGuiExpandedBackend>();
+            m["qml-expanded"]   = std::make_shared<gen_detail::QmlExpandedBackend>();
+            m["rest"]           = std::make_shared<gen_detail::RestBackend>();
+            m["typescript"]     = std::make_shared<gen_detail::TypeScriptBackend>();
+            m["markdown"]       = std::make_shared<gen_detail::MarkdownBackend>();
+            m["html"]           = std::make_shared<gen_detail::HtmlBackend>();
+            m["json"]           = std::make_shared<gen_detail::JsonBackend>();
+            m["openapi"]        = std::make_shared<gen_detail::OpenApiBackend>();
+            m["paraview"]       = std::make_shared<gen_detail::ParaViewBackend>();
+
+            // DEPRECATED spellings. These seven languages used to ship TWO
+            // backends — a reflection-driven "thin" one whose generated code
+            // called back into rosetta's visitors at the target's compile time,
+            // and an "-expanded" one that wrote every call out so the bindings
+            // build with a stock compiler. Only the expanded half survives, so
+            // the suffix no longer distinguishes anything and the short name IS
+            // the expanded backend. The old keys stay as aliases — sharing the
+            // instance, not a second copy — so manifests written against them
+            // keep generating, and resolve to what they already resolved to.
+            for (const char *lang : {"python", "nanobind", "node", "wasm", "julia", "csharp",
+                                     "java"}) {
+                m[std::string(lang) + "-expanded"] = m[lang];
+            }
             return m;
         }();
         return reg;

@@ -97,24 +97,24 @@ static std::string source_for(const char *lang) {
     return rosetta::backend_registry().at(lang)->render(c);
 }
 
-// ---- python-expanded --------------------------------------------------------
+// ---- python --------------------------------------------------------
 
 TEST(MemberObject, PythonEmitsReferenceProperty) {
-    const std::string s = source_for("python-expanded");
+    const std::string s = source_for("python");
     EXPECT_NE(s.find("c.def_property_readonly(\"store\","), std::string::npos);
     EXPECT_NE(s.find("[](MoOwner &s) -> MoStore & { return s.store; }"), std::string::npos);
     EXPECT_NE(s.find("py::return_value_policy::reference_internal"), std::string::npos);
 }
 
 TEST(MemberObject, PythonStillBindsPlainFieldAndStoreMethods) {
-    const std::string s = source_for("python-expanded");
+    const std::string s = source_for("python");
     EXPECT_NE(s.find("c.def_readwrite(\"id\", &MoOwner::id"), std::string::npos);
     EXPECT_NE(s.find("c.def(\"nb\", &MoStore::nb"), std::string::npos);
     EXPECT_NE(s.find("c.def(\"grow\", &MoStore::grow"), std::string::npos);
 }
 
 TEST(MemberObject, PythonBindsEveryOverloadViaCastKeepsPlain) {
-    const std::string s = source_for("python-expanded");
+    const std::string s = source_for("python");
     // BOTH overloads bind: pybind11 collects repeated .def("f", …) into one
     // overload set and dispatches on the argument types. Each is spelled
     // through an explicit static_cast — the bare &MoOver::f is ambiguous.
@@ -128,7 +128,7 @@ TEST(MemberObject, PythonBindsEveryOverloadViaCastKeepsPlain) {
 TEST(MemberObject, NanobindBindsEveryOverload) {
     // nanobind used to skip an overload set outright (it spelled the bare
     // member pointer and could not have compiled one).
-    const std::string s = source_for("nanobind-expanded");
+    const std::string s = source_for("nanobind");
     EXPECT_NE(s.find(".def(\"f\", static_cast<int (MoOver::*)() const>(&MoOver::f)"),
               std::string::npos);
     EXPECT_NE(s.find(".def(\"f\", static_cast<int (MoOver::*)(int) const>(&MoOver::f)"),
@@ -138,23 +138,23 @@ TEST(MemberObject, NanobindBindsEveryOverload) {
 TEST(MemberObject, JuliaBindsEveryOverload) {
     // jlcxx registers each as a Julia method of the same name; Julia's own
     // multiple dispatch picks by argument type.
-    const std::string s = source_for("julia-expanded");
+    const std::string s = source_for("julia");
     EXPECT_NE(s.find("c.method(\"f\", static_cast<int (MoOver::*)() const>(&MoOver::f)"),
               std::string::npos);
     EXPECT_NE(s.find("c.method(\"f\", static_cast<int (MoOver::*)(int) const>(&MoOver::f)"),
               std::string::npos);
 }
 
-// ---- node-expanded ----------------------------------------------------------
+// ---- node ----------------------------------------------------------
 
 TEST(MemberObject, NodeEmitsAliasedAccessor) {
-    const std::string s = source_for("node-expanded");
+    const std::string s = source_for("node");
     EXPECT_NE(s.find("get_member_object<&MoOwner::store>"), std::string::npos);
     EXPECT_NE(s.find("set_field_readonly<&MoOwner::store, \"store\">"), std::string::npos);
 }
 
 TEST(MemberObject, NodeBindsOverloadSurvivorViaAdapterKeepsPlain) {
-    const std::string s = source_for("node-expanded");
+    const std::string s = source_for("node");
     // No bare member pointer for the set — the survivor binds through a free
     // adapter that calls by name (overload resolution happens in the adapter).
     EXPECT_EQ(s.find("&MoOver::f"), std::string::npos);
@@ -163,14 +163,14 @@ TEST(MemberObject, NodeBindsOverloadSurvivorViaAdapterKeepsPlain) {
     EXPECT_NE(s.find("call_method<&MoOver::g>"), std::string::npos);
 }
 
-// ---- wasm-expanded ----------------------------------------------------------
+// ---- wasm ----------------------------------------------------------
 
 TEST(MemberObject, WasmEmitsBorrowedHandleGetter) {
     // embind properties copy, so the member object binds as a getter METHOD
     // returning a raw (non-owning) pointer: mesh.vertices().nb(). Unlike
     // pybind's reference_internal nothing pins the parent — documented in the
     // emitted comment.
-    const std::string s = source_for("wasm-expanded");
+    const std::string s = source_for("wasm");
     EXPECT_NE(s.find(".function(\"store\", +[](MoOwner &s) { return &s.store; }, "
                      "emscripten::allow_raw_pointers())"),
               std::string::npos);
@@ -191,7 +191,7 @@ TEST(MemberObject, FinalSuppressesTrampolineAndUnlocksNodeAlias) {
     // Without final: trampolined store ⇒ no aliased accessor on node.
     {
         const auto c = rosetta::gen_detail::make_context<MoVirtOwner, MoVirtStore>("motest");
-        const std::string s = rosetta::backend_registry().at("node-expanded")->render(c);
+        const std::string s = rosetta::backend_registry().at("node")->render(c);
         EXPECT_NE(s.find("Js_MoVirtStore"), std::string::npos);
         EXPECT_EQ(s.find("get_member_object<&MoVirtOwner::store>"), std::string::npos);
     }
@@ -203,7 +203,7 @@ TEST(MemberObject, FinalSuppressesTrampolineAndUnlocksNodeAlias) {
                 k.is_final = true;
             }
         }
-        const std::string s = rosetta::backend_registry().at("node-expanded")->render(c);
+        const std::string s = rosetta::backend_registry().at("node")->render(c);
         EXPECT_EQ(s.find("Js_MoVirtStore"), std::string::npos);
         EXPECT_NE(s.find("get_member_object<&MoVirtOwner::store>"), std::string::npos);
         // The virtuals still bind as plain callable methods.
@@ -218,7 +218,7 @@ TEST(MemberObject, FinalSuppressesPythonTrampoline) {
             k.is_final = true;
         }
     }
-    const std::string s = rosetta::backend_registry().at("python-expanded")->render(c);
+    const std::string s = rosetta::backend_registry().at("python")->render(c);
     EXPECT_EQ(s.find("Py_MoVirtStore"), std::string::npos);
     EXPECT_NE(s.find("c.def(\"nb\", &MoVirtStore::nb"), std::string::npos);
 }
@@ -229,7 +229,7 @@ TEST(MemberObject, NameKeyedBackendsBindExactlyTheFirstOverload) {
     // embind and sol2 both key a method by name — a second registration is a
     // duplicate (embind throws at module init; sol2's assignment overwrites),
     // so exactly ONE entry of the set binds, and it is the first-declared one.
-    const std::string w = source_for("wasm-expanded");
+    const std::string w = source_for("wasm");
     EXPECT_NE(w.find(".function(\"f\", static_cast<int (MoOver::*)() const>(&MoOver::f)"),
               std::string::npos);
     EXPECT_EQ(w.find("static_cast<int (MoOver::*)(int) const>(&MoOver::f)"),
@@ -247,7 +247,7 @@ TEST(MemberObject, CsharpQualifiesTheOverloadedMemberPointer) {
     // The op table is keyed by name, so one entry binds — but it must be
     // spelled with the cast: `&MoOver::f` names the whole set and would not
     // compile. (This was already true before the walk emitted every overload.)
-    const std::string s = source_for("csharp-expanded");
+    const std::string s = source_for("csharp");
     EXPECT_NE(s.find("call_method<static_cast<int (MoOver::*)() const>(&MoOver::f)>"),
               std::string::npos);
     EXPECT_EQ(s.find("call_method<&MoOver::f>"), std::string::npos);

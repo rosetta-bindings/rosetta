@@ -1,6 +1,6 @@
-// wasm-expanded target  (target name: geom)
+// wasm target  (target name: geom)
 // ---------------------------------------------------------------------------
-// emscripten/embind module. Two differences from the node-expanded binding:
+// emscripten/embind module. Two differences from the node binding:
 //
 //  1. Loading is async — the module is compiled with -sMODULARIZE=1
 //     -sEXPORT_NAME=createModule, so `require()` hands back a factory that
@@ -13,13 +13,13 @@
 //
 // The same geom.js/geom.wasm pair runs in the browser too (-sENVIRONMENT=node,web).
 //
-//   Build:  emcmake cmake -S bindings/wasm-expanded -B bindings/wasm-expanded/build
-//           cmake --build bindings/wasm-expanded/build -j
+//   Build:  emcmake cmake -S bindings/wasm -B bindings/wasm/build
+//           cmake --build bindings/wasm/build -j
 //   Run:    node example_wasm.js
 
 const path = require("path");
 const createModule = require(
-    path.join(__dirname, "bindings", "wasm-expanded", "build", "geom.js")
+    path.join(__dirname, "bindings", "wasm", "build", "geom.js")
 );
 
 function toVector(VecType, values) {

@@ -10,21 +10,16 @@
 #   npx cmake-js compile    # configures + builds (sets CMAKE_JS_INC)
 #   node test_shapes.js
 #
-# Requires the clang-p2996 fork at $HOME/devs/c++/clang-p2996/build.
+# Requires node-addon-api and NOTHING else: the generated binding is fully
+# expanded, so a stock compiler builds it (rosetta's include dir is still on the
+# path for node_runtime.h, which is ordinary C++20). Only rosetta's own
+# generator needs the clang-p2996 fork.
 
 cmake_minimum_required(VERSION 3.28)
 
-set(CLANG_P2996_ROOT "$ENV{HOME}/devs/c++/clang-p2996/build"
-    CACHE PATH "Bloomberg clang-p2996 fork build directory")
-
-if(NOT CMAKE_CXX_COMPILER)
-    set(CMAKE_C_COMPILER   "${CLANG_P2996_ROOT}/bin/clang")
-    set(CMAKE_CXX_COMPILER "${CLANG_P2996_ROOT}/bin/clang++")
-endif()
-
 project(auto_napi_trampoline_example CXX)
 
-set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
@@ -50,19 +45,6 @@ target_include_directories(shapes PRIVATE
 target_link_libraries(shapes PRIVATE ${CMAKE_JS_LIB})
 
 target_compile_definitions(shapes PRIVATE NAPI_VERSION=8)
-
-target_compile_options(shapes PRIVATE
-    -freflection
-    -freflection-latest
-    -fexperimental-library
-    -fannotation-attributes)
-
-target_link_options(shapes PRIVATE
-    -nostdlib++
-    -L${CLANG_P2996_ROOT}/lib
-    -Wl,-rpath,${CLANG_P2996_ROOT}/lib
-    -lc++
-    -lc++abi)
 
 if(APPLE)
     target_link_options(shapes PRIVATE -Wl,-undefined,dynamic_lookup)

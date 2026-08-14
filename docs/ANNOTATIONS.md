@@ -77,7 +77,7 @@ public:
 
 ### Widget hints
 
-Hints pick the editor when more than one would fit the field's type. They are consumed by the three UI inspector backends (**Qt Widgets** thin + expanded, **QML** thin + expanded, **Dear ImGui**) and ignored everywhere else.
+Hints pick the editor when more than one would fit the field's type. They are consumed by the three UI inspector backends (**Qt Widgets**, **QML**, **Dear ImGui**) and ignored everywhere else.
 
 | Hint | Field type | Renders as |
 |---|---|---|
@@ -94,7 +94,7 @@ Hints pick the editor when more than one would fit the field's type. They are co
 
 ## Who consumes what
 
-- **Scripting backends** (python / nanobind / node / wasm / lua / julia, thin and expanded alike, plus C# / Java): `doc` → docstrings where the framework has them; `range` → validating setters; `readonly` → getter-only properties. `label`, `button` and `widget::*` are ignored — they are UI concepts.
+- **Scripting backends** (python / nanobind / node / wasm / lua-expanded / julia, plus C# / Java): `doc` → docstrings where the framework has them; `range` → validating setters; `readonly` → getter-only properties. `label`, `button` and `widget::*` are ignored — they are UI concepts.
 - **UI inspectors** (qt / qml / imgui): everything — `doc` as tooltips, `range` as slider bounds / commit validation, `readonly` as disabled editors, `combobox` as drop-downs, plus `label` / `button` / `widget::*`.
 - **Document backends** (markdown / html / openapi / typescript): `doc` and the constraints (`range`, `readonly`, `combobox`) are rendered into the reference text / schema.
 

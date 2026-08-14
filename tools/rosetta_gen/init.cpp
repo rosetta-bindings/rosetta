@@ -27,7 +27,7 @@ static std::string render_example_manifest() {
     "//": "Rosetta binding manifest. Edit the fields below to match your project.",
     "//paths": "All relative paths resolve from THIS file's directory.",
 
-    "//cpp26": "Optional C++26 / P2996 reflection toolchain (clang-p2996 build dir). Only the reflection-driven (thin) targets use these; the *-expanded targets ignore them. Omit to fall back to the built-in defaults ($ENV{HOME}/devs/c++/clang-p2996/build).",
+    "//cpp26": "Optional C++26 / P2996 reflection toolchain (clang-p2996 build dir). The generator itself always needs it; of the targets, only \"rest\" does. Omit to fall back to the built-in defaults ($ENV{HOME}/devs/c++/clang-p2996/build).",
     "cpp26_root": "$ENV{HOME}/devs/c++/clang-p2996/build",
     "cpp26_cxx": "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang++",
     "cpp26_cc": "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang",
@@ -59,11 +59,11 @@ static std::string render_example_manifest() {
     "build_type": "Release",
     "optimization": "-O2",
 
-    "//targets": "A target is a bare string (\"python\", uses module_name) or {\"lang\": ..., \"name\": ...}. *-expanded backends fully expand the bindings so they build with a stock compiler.",
+    "//targets": "A target is a bare string (\"python\", uses module_name) or {\"lang\": ..., \"name\": ...}. The bindings are fully expanded, so they build with a stock compiler.",
     "targets": [
         {"lang": "python",        "name": "mylib"},
         {"lang": "node",          "name": "mylib"},
-        {"lang": "wasm-expanded", "name": "mylib"},
+        {"lang": "wasm", "name": "mylib"},
         {"lang": "typescript",    "name": "mylib"},
         "rest",
         "openapi",
@@ -758,7 +758,7 @@ static std::string render_scanned_manifest(const fs::path &manifest_path,
             us.push_back(inc == "." ? "./" + s : inc + "/" + s);
         }
     }
-    j["//targets"] = "Pick the backends you need (python, node, wasm-expanded, typescript, "
+    j["//targets"] = "Pick the backends you need (python, node, wasm, typescript, "
                      "rest, openapi, markdown, ...).";
     j["targets"] = nlohmann::ordered_json::array({"python", "typescript"});
     auto &cls = j["classes"] = nlohmann::ordered_json::array();

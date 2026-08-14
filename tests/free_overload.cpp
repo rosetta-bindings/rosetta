@@ -19,7 +19,7 @@
 //   * the exposed name falls back to the tail of the qualified spelling, since
 //     there is no identifier_of to ask, and "expose" still wins;
 //   * every backend that FORMS A POINTER emits the cast — including the ones
-//     that spell it as a template argument (node-expanded's napi_free_entry);
+//     that spell it as a template argument (node's napi_free_entry);
 //   * a backend that splices the function's reflection skips the entry, since
 //     there is no reflection for one member of an overload set;
 //   * a function with no signature keeps the byte-identical old output.
@@ -139,19 +139,14 @@ TEST(FreeOverload, PointerSpellingSkipsTemplateArguments) {
 
 // ---- the backends that form a pointer ---------------------------------------
 
-TEST(FreeOverload, PythonExpandedEmitsTheCast) {
-    const std::string s = render("python-expanded", ctx_with_functions());
+TEST(FreeOverload, PythonEmitsTheCast) {
+    const std::string s = render("python", ctx_with_functions());
     EXPECT_TRUE(has(s, "m.def(\"scale\", static_cast<void(*)(int, int)>(&fov::scale)"));
     EXPECT_TRUE(has(s, "m.def(\"plain\", &fov::plain")); // unchanged
 }
 
-TEST(FreeOverload, ThinPythonEmitsTheCast) {
-    const std::string s = render("python", ctx_with_functions());
-    EXPECT_TRUE(has(s, "m.def(\"scale\", static_cast<void(*)(int, int)>(&fov::scale)"));
-}
-
-TEST(FreeOverload, WasmExpandedEmitsTheCast) {
-    const std::string s = render("wasm-expanded", ctx_with_functions());
+TEST(FreeOverload, WasmEmitsTheCast) {
+    const std::string s = render("wasm", ctx_with_functions());
     EXPECT_TRUE(has(s, "emscripten::function(\"scale\", static_cast<void(*)(int, int)>(&fov::scale)"));
 }
 
@@ -160,34 +155,37 @@ TEST(FreeOverload, LuaExpandedEmitsTheCast) {
     EXPECT_TRUE(has(s, "m.set_function(\"scale\", static_cast<void(*)(int, int)>(&fov::scale)"));
 }
 
-// The interesting one: node-expanded spells the pointer as a TEMPLATE ARGUMENT
+// The interesting one: node spells the pointer as a TEMPLATE ARGUMENT
 // (`napi_free_entry<&fn>`), where `&fov::scale` is just as ambiguous as it is in
 // a function argument — a cast is a valid non-type template argument, `&`-of an
 // overload set is not.
-TEST(FreeOverload, NodeExpandedCastsInsideTheTemplateArgument) {
-    const std::string s = render("node-expanded", ctx_with_functions());
+TEST(FreeOverload, NodeCastsInsideTheTemplateArgument) {
+    const std::string s = render("node", ctx_with_functions());
     EXPECT_TRUE(has(
         s, "rosetta::napi_free_entry<static_cast<void(*)(int, int)>(&fov::scale)>"));
     EXPECT_TRUE(has(s, "rosetta::napi_free_entry<&fov::plain>"));
 }
 
-// ---- the backends that splice a reflection ----------------------------------
-
-TEST(FreeOverload, ReflectionSplicingBackendsSkipTheSelectedOverload) {
-    for (const char *lang : {"node", "csharp", "java"}) {
+// C#, Java and Julia used to SPLICE the function's reflection (`^^fov::scale`),
+// which has no spelling for one member of an overload set, so they skipped such
+// an entry outright. Their reflection-driven halves are gone: all three now form
+// the pointer like everyone else, and bind the selected overload.
+TEST(FreeOverload, RegistryBackendsEmitTheCast) {
+    for (const char *lang : {"csharp", "java"}) {
         const std::string s = render(lang, ctx_with_functions());
-        EXPECT_FALSE(has(s, "^^fov::scale")) << lang; // would not compile
-        EXPECT_FALSE(has(s, "\"scale\"")) << lang;    // and is not bound under any spelling
-        EXPECT_TRUE(has(s, "^^fov::plain")) << lang;  // the ordinary path is untouched
+        EXPECT_TRUE(has(s, "static_cast<void(*)(int, int)>(&fov::scale)")) << lang;
+        EXPECT_FALSE(has(s, "^^fov::scale")) << lang;
     }
 }
 
-// julia / rest build their bindings inside emit() rather than render(), so the
-// same guard has to be read off the generated file.
-TEST(FreeOverload, EmitOnlyBackendsSkipItToo) {
+// ---- the one backend that still splices a reflection ------------------------
+
+// rest builds its bindings inside emit() rather than render(), so the guard has
+// to be read off the generated file.
+TEST(FreeOverload, TheReflectionSplicingBackendSkipsIt) {
     namespace fs = std::filesystem;
     for (const auto &[lang, file] : std::vector<std::pair<const char *, const char *>>{
-             {"julia", "auto_jlcxx.cpp"}, {"rest", "auto_rest.cpp"}}) {
+             {"rest", "auto_rest.cpp"}}) {
         const fs::path dir =
             fs::temp_directory_path() / (std::string("rosetta_free_overload_") + lang);
         fs::remove_all(dir);

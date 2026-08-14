@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Throwaway console host for the csharp-expanded example: it compiles the
-    generated wrapper (bindings/csharp-expanded/csgeom.cs) together with
+    Throwaway console host for the csharp example: it compiles the
+    generated wrapper (bindings/csharp/csgeom.cs) together with
     example_csharp.cs into a runnable program. Generate the binding first
     (see ../README.md step 1-2), then `../run.sh` — or build directly:
         dotnet run \-\-project . -p:TargetFramework=net<your-sdk-major>.0
@@ -24,7 +24,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="../bindings/csharp-expanded/csgeom.cs" />
+    <Compile Include="../bindings/csharp/csgeom.cs" />
     <Compile Include="../example_csharp.cs" />
   </ItemGroup>
 

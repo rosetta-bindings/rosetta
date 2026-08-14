@@ -64,8 +64,7 @@ namespace {
 
 // Every backend that builds a loadable artifact honours the directory.
 TEST(OutDir, ArtifactIsCopiedToTheNamedDirectory) {
-    for (const char *lang : {"python-expanded", "nanobind-expanded", "node-expanded",
-                             "lua-expanded", "python", "nanobind", "node"}) {
+    for (const char *lang : {"python", "nanobind", "node", "lua-expanded"}) {
         const std::string cm = cmake_of(lang, "/tmp/rosetta-artifacts");
         ASSERT_FALSE(cm.empty()) << lang << " emitted no CMakeLists.txt";
         EXPECT_NE(cm.find("# Artifact output directory (manifest \"out_dir\")."),
@@ -81,7 +80,7 @@ TEST(OutDir, ArtifactIsCopiedToTheNamedDirectory) {
 // wasm ships a PAIR — the .js loader is the CMake target file, the .wasm is its
 // sibling and has to be named on its own or the copy is useless.
 TEST(OutDir, WasmCopiesBothHalvesOfTheModule) {
-    const std::string cm = cmake_of("wasm-expanded", "/tmp/rosetta-artifacts");
+    const std::string cm = cmake_of("wasm", "/tmp/rosetta-artifacts");
     ASSERT_FALSE(cm.empty());
     EXPECT_NE(cm.find("$<TARGET_FILE:odtest> \"/tmp/rosetta-artifacts\""), std::string::npos);
     EXPECT_NE(cm.find("$<TARGET_FILE_DIR:odtest>/odtest.wasm \"/tmp/rosetta-artifacts\""),
@@ -92,8 +91,8 @@ TEST(OutDir, WasmCopiesBothHalvesOfTheModule) {
 // Unset (the default) emits nothing at all — no stray copy step, no empty
 // make_directory, and the existing next-to-the-sources copy is untouched.
 TEST(OutDir, UnsetEmitsNothing) {
-    for (const char *lang : {"python-expanded", "nanobind-expanded", "node-expanded",
-                             "wasm-expanded", "lua-expanded"}) {
+    for (const char *lang : {"python", "nanobind", "node",
+                             "wasm", "lua-expanded"}) {
         const std::string cm = cmake_of(lang, "");
         ASSERT_FALSE(cm.empty()) << lang;
         EXPECT_EQ(cm.find("Artifact output directory"), std::string::npos) << lang;

@@ -132,7 +132,7 @@ TEST(OutParams, ConstReferenceIsNeverAnOutput) {
 // ---- the emitted adapters ---------------------------------------------------
 
 TEST(OutParams, PythonReturnsATuple) {
-    const std::string s = render("python-expanded", marked_context());
+    const std::string s = render("python", marked_context());
     // The out-parameters are locals, not boundary arguments...
     EXPECT_TRUE(has(s, "opx::fvec<double> out1{};"));
     EXPECT_TRUE(has(s, "unsigned int out2{};"));
@@ -144,19 +144,19 @@ TEST(OutParams, PythonReturnsATuple) {
 }
 
 TEST(OutParams, VoidReturnYieldsOnlyTheOutputs) {
-    const std::string s = render("python-expanded", marked_context());
+    const std::string s = render("python", marked_context());
     EXPECT_TRUE(has(s, "return std::make_tuple(out0);"));
 }
 
 TEST(OutParams, AnUnmarkedMutableSequenceStaysAnInput) {
-    const std::string s = render("python-expanded", marked_context());
+    const std::string s = render("python", marked_context());
     // `assign` keeps the ordinary adapter: a boundary vector in, nothing out.
     EXPECT_TRUE(has(s, "c.def(\"assign\", [](opx::Attrs &self, std::vector<double> arg0"));
     EXPECT_FALSE(has(s, "out0{};\n        opx::fvec<double> "));
 }
 
 TEST(OutParams, NodeReturnsATupleForJs) {
-    const std::string s = render("node-expanded", marked_context());
+    const std::string s = render("node", marked_context());
     EXPECT_TRUE(has(s, "std::tuple<bool, std::vector<double>, unsigned int>"));
     EXPECT_TRUE(has(s, "return std::make_tuple(r, "));
 }
@@ -169,7 +169,7 @@ TEST(OutParams, LuaReturnsATupleSolUnpacks) {
 // embind marshals no tuple, so wasm builds a val array instead — the same JS
 // shape node hands out, reached a different way.
 TEST(OutParams, WasmBuildsAValArray) {
-    const std::string s = render("wasm-expanded", marked_context());
+    const std::string s = render("wasm", marked_context());
     EXPECT_TRUE(has(s, "emscripten::val out = emscripten::val::array();"));
     EXPECT_TRUE(has(s, "out.set(0, rosetta_wx::to_val(r));"));
     EXPECT_TRUE(has(s, "return out;"));

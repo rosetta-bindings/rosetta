@@ -200,16 +200,38 @@ Manifest load(const fs::path &manifest_path) {
     const std::string module_name =
         j.contains("module_name") ? j.at("module_name").get<std::string>() : m.generator_name;
 
+    // Seven languages used to ship two backends each, a reflection-driven one
+    // and an "-expanded" one; only the expanded half survives and the short
+    // name now means it. The registry still answers to the old spelling, but
+    // everything downstream of here keys off the lang STRING — the output
+    // directory (bindings/<lang>), the per-language build recipe, the wheel
+    // check — so an un-canonicalised alias would generate into bindings/node
+    // and then look for bindings/node-expanded to build. Fold it here, once.
+    const auto canonical_lang = [](std::string lang) {
+        static const char *kCollapsed[] = {"python", "nanobind", "node", "wasm",
+                                           "julia",  "csharp",   "java"};
+        for (const char *base : kCollapsed) {
+            if (lang == std::string(base) + "-expanded") {
+                std::fprintf(stderr,
+                             "rosetta_gen: target \"%s\" is deprecated — it is now spelled "
+                             "\"%s\" (the thin backend it contrasted with is gone)\n",
+                             lang.c_str(), base);
+                return std::string(base);
+            }
+        }
+        return lang;
+    };
+
     // A target is either a bare string ("node") — using module_name — or an
     // object { "lang": ..., "name": ..., "link_options": [...] } overriding
     // the module name and optionally adding per-target linker flags.
     for (const auto &t : j.at("targets")) {
         TargetEntry e;
         if (t.is_string()) {
-            e.lang = t.get<std::string>();
+            e.lang = canonical_lang(t.get<std::string>());
             e.name = module_name;
         } else {
-            e.lang = t.at("lang").get<std::string>();
+            e.lang = canonical_lang(t.at("lang").get<std::string>());
             e.name = t.contains("name") ? t.at("name").get<std::string>() : module_name;
             // Optional per-target linker flags (see TargetEntry::link_options).
             if (t.contains("link_options")) {
@@ -779,8 +801,9 @@ Manifest load(const fs::path &manifest_path) {
     // `cpp26_root` is optional: the path to the C++26 / P2996 reflection
     // toolchain root (the clang-p2996 build dir, holding bin/clang++ and lib/).
     // Stored verbatim so a value like "$ENV{HOME}/..." or an absolute path is
-    // baked straight into the generated CMakeLists. Only the reflection-driven
-    // (thin) targets use it; the stock *-expanded targets ignore it.
+    // baked straight into the generated CMakeLists. Only `rest`, the one
+    // backend whose generated code still splices reflections, needs it; every
+    // other target builds with a stock compiler.
     if (j.contains("cpp26_root")) {
         m.cpp26_root = j.at("cpp26_root").get<std::string>();
     }
@@ -868,8 +891,8 @@ Manifest load(const fs::path &manifest_path) {
     }
 
     // `version` is optional: the distribution version stamped into the
-    // packaging artifacts — the pyproject.toml the python-expanded /
-    // nanobind-expanded backends emit for wheel builds. Nothing else consumes
+    // packaging artifacts — the pyproject.toml the python / nanobind
+    // backends emit for wheel builds. Nothing else consumes
     // it, so a manifest that never packages can leave it out (the backends
     // then default to 0.1.0). A number is accepted and stringified so
     // "version": 2 doesn't have to be quoted. Validated loosely against

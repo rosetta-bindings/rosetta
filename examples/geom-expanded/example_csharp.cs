@@ -1,4 +1,4 @@
-// csharp-expanded target  (target name: csgeom)
+// csharp target  (target name: csgeom)
 // ---------------------------------------------------------------------------
 // Idiomatic C# wrappers over a native shared library, reached through P/Invoke.
 // Each object is a handle into the native instance store; property and method
@@ -15,7 +15,7 @@
 // To do it by hand instead, see README.md step 3f, then:
 //
 //   # macOS (use LD_LIBRARY_PATH on Linux); -p:DemoTF matches your SDK
-//   DYLD_LIBRARY_PATH=bindings/csharp-expanded/build \
+//   DYLD_LIBRARY_PATH=bindings/csharp/build \
 //       dotnet run --project run -p:DemoTF=net8.0
 //
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@
 // *objects* (Model.getSurfaces(), Surface.getPoints(), the free transform(Point))
 // don't cross that boundary, so they are intentionally not exposed here. For the
 // full object graph (vector<Surface>, vector<Point>, transform) use the
-// node-expanded target — see example_node.js.
+// node target — see example_node.js.
 
 using csgeom;
 using System;

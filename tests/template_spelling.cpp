@@ -166,8 +166,8 @@ TEST(TemplateSpelling, ExpandedBackendsEmitTheQualifiedTemplateId) {
     const std::string expected =
         "tsp::interp::implicit::Horizon<std::vector<tsp::math::Point2D, "
         "std::allocator<tsp::math::Point2D>>>";
-    for (const char *lang : {"python-expanded", "nanobind-expanded", "wasm-expanded",
-                             "lua-expanded", "julia-expanded"}) {
+    for (const char *lang : {"python", "nanobind", "wasm",
+                             "lua-expanded", "julia"}) {
         const std::string s = rosetta::backend_registry().at(lang)->render(c);
         EXPECT_NE(s.find(expected), std::string::npos) << lang << " lost the qualification";
         EXPECT_EQ(s.find("Horizon<vector<"), std::string::npos)

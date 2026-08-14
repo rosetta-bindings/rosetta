@@ -7,7 +7,7 @@
 // Both are about the same shape of C++ — `std::shared_ptr<Doc> load(const
 // std::filesystem::path&)` — and both used to fail in a way that looked like
 // nothing: a path was an unregistered class, so every member naming one was
-// skipped; a shared_ptr return reached node-expanded as an ordinary "object"
+// skipped; a shared_ptr return reached node as an ordinary "object"
 // whose `object` is the literal identifier "shared_ptr", which is registered
 // nowhere.
 //
@@ -18,7 +18,7 @@
 //     in, `.string()` out;
 //   * embind registers `.smart_ptr<std::shared_ptr<T>>` for exactly the classes
 //     the module hands out that way, and for no others;
-//   * node-expanded binds a shared_ptr RETURN (the JS object adopts the pointer)
+//   * node binds a shared_ptr RETURN (the JS object adopts the pointer)
 //     but never a shared_ptr PARAMETER, and never for a trampolined pointee;
 //   * sol2 takes the shared_ptr natively once the pointee is bound;
 //   * typescript declares the pointee, not "shared_ptr", and `string` for a path.
@@ -160,25 +160,25 @@ TEST(PathShared, ModuleWidePointeeCollection) {
 // caster, so the member binds natively and Python may pass a str or any
 // os.PathLike. Stringifying would have been a regression in what callers accept.
 TEST(PathShared, PythonFamilyBindsThePathNatively) {
-    for (const char *lang : {"python-expanded", "nanobind-expanded"}) {
+    for (const char *lang : {"python", "nanobind"}) {
         const std::string s = render(lang, full_context());
         EXPECT_TRUE(has(s, "\"load_file\", &psx::Loader::load_file")) << lang;
         EXPECT_FALSE(has(s, "pth0")) << lang; // no adapter, no boundary string
     }
-    EXPECT_TRUE(has(render("python-expanded", full_context()),
+    EXPECT_TRUE(has(render("python", full_context()),
                     "#include <pybind11/stl/filesystem.h>"));
-    EXPECT_TRUE(has(render("nanobind-expanded", full_context()),
+    EXPECT_TRUE(has(render("nanobind", full_context()),
                     "#include <nanobind/stl/filesystem.h>"));
 }
 
 TEST(PathShared, NodeExpandedConvertsAtTheBoundary) {
-    const std::string s = render("node-expanded", full_context());
+    const std::string s = render("node", full_context());
     EXPECT_TRUE(has(s, "std::filesystem::path pth0(arg0);"));
     EXPECT_TRUE(has(s, "#include <filesystem>"));
 }
 
 TEST(PathShared, WasmExpandedConvertsAtTheBoundary) {
-    const std::string s = render("wasm-expanded", full_context());
+    const std::string s = render("wasm", full_context());
     EXPECT_TRUE(has(s, "std::filesystem::path pth0(arg0);"));
 }
 
@@ -190,7 +190,7 @@ TEST(PathShared, LuaExpandedConvertsAtTheBoundary) {
 // ---- the generated sources: shared_ptr --------------------------------------
 
 TEST(PathShared, EmbindRegistersSmartPtrForPointeesOnly) {
-    const std::string s = render("wasm-expanded", full_context());
+    const std::string s = render("wasm", full_context());
     EXPECT_TRUE(has(s, ".smart_ptr<std::shared_ptr<psx::Doc>>(\"Doc_sp\")"));
     EXPECT_TRUE(has(s, ".smart_ptr<std::shared_ptr<psx::Node>>(\"Node_sp\")"));
     // Loader is never handed out inside a shared_ptr: no registration.
@@ -199,7 +199,7 @@ TEST(PathShared, EmbindRegistersSmartPtrForPointeesOnly) {
 }
 
 TEST(PathShared, NodeAdoptsASharedPtrReturn) {
-    const std::string s = render("node-expanded", full_context());
+    const std::string s = render("node", full_context());
     EXPECT_TRUE(has(s, "load_string")); // Doc has no virtuals: adoptable
     EXPECT_FALSE(has(s, "load_node"));  // Node has virtuals: its wrapper is a trampoline
     EXPECT_FALSE(has(s, "\"count\""));  // a shared_ptr PARAMETER stays out
@@ -212,7 +212,7 @@ TEST(PathShared, LuaTakesTheSharedPtrNatively) {
 }
 
 TEST(PathShared, PythonKeepsItsHolder) {
-    const std::string s = render("python-expanded", full_context());
+    const std::string s = render("python", full_context());
     EXPECT_TRUE(has(s, "py::class_<psx::Doc, std::shared_ptr<psx::Doc>>"));
 }
 

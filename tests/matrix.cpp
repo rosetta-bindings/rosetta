@@ -106,8 +106,8 @@ TEST(Matrix, IrMarksTheMatrixAndComposesTheSpelling) {
 TEST(Matrix, RuntimeBackendsBindThroughTheRowArrayBoundary) {
     const auto c = rosetta::gen_detail::make_context<mat::Field>("mtest");
 
-    for (const char *lang : {"python-expanded", "nanobind-expanded", "node-expanded",
-                             "wasm-expanded", "lua-expanded"}) {
+    for (const char *lang : {"python", "nanobind", "node",
+                             "wasm", "lua-expanded"}) {
         const std::string out = rosetta::backend_registry().at(lang)->render(c);
         EXPECT_NE(out.find("\"data\""), std::string::npos) << lang << " skipped the matrix return";
         EXPECT_NE(out.find("\"setData\""), std::string::npos)
@@ -126,7 +126,7 @@ TEST(Matrix, RuntimeBackendsBindThroughTheRowArrayBoundary) {
 TEST(Matrix, AdapterConvertsBothDirections) {
     const auto        c = rosetta::gen_detail::make_context<mat::Field>("mtest");
     const std::string out =
-        rosetta::backend_registry().at("python-expanded")->render(c);
+        rosetta::backend_registry().at("python")->render(c);
 
     EXPECT_NE(out.find(".resize(mat0_r, mat0_c);"), std::string::npos) << out;
     EXPECT_NE(out.find("mat0(i, j) = arg0[i][j];"), std::string::npos) << out;
@@ -139,7 +139,7 @@ TEST(Matrix, AdapterConvertsBothDirections) {
 TEST(Matrix, FieldsBindAsCopyingProperties) {
     const auto        c = rosetta::gen_detail::make_context<mat::Field>("mtest");
     const std::string out =
-        rosetta::backend_registry().at("python-expanded")->render(c);
+        rosetta::backend_registry().at("python")->render(c);
 
     EXPECT_NE(out.find("def_property(\"weights\""), std::string::npos) << out;
 }

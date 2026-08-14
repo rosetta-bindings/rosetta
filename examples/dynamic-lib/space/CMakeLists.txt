@@ -6,7 +6,7 @@
 #   cmake -S . -B build && cmake --build build
 #   -> bin/libspace.{dylib,so}
 #
-# WebAssembly (same emsdk as the wasm-expanded binding) -> a STATIC archive:
+# WebAssembly (same emsdk as the wasm binding) -> a STATIC archive:
 # wasm cannot link a native .dylib/.so and has no dynamic-linking rpath, so the
 # bodies must be archived and statically linked into the module instead.
 #   emcmake cmake -S . -B build-wasm && cmake --build build-wasm
@@ -18,7 +18,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Under Emscripten a shared library is not linkable into a wasm module; build a
-# static archive so the wasm-expanded binding can pull the bodies in directly.
+# static archive so the wasm binding can pull the bodies in directly.
 if(EMSCRIPTEN)
     add_library(space STATIC
         src/Vector3.cpp

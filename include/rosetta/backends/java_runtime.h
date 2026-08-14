@@ -17,12 +17,11 @@
 // nlohmann — the contract is identical to the C# backend (enums cross as their
 // underlying integer).
 //
-// The *thin* backend fills the registry by running a reflection walk (see
-// <rosetta/visitors/java_visitor.h>) and storing splice-based handlers, so it
-// builds with the C++26 / P2996 toolchain. An "java-expanded" backend (not
-// shipped here) would fill the same registry from member-pointer dispatch and
-// build with a stock compiler — mirror csharp_runtime.h's fn_traits section to
-// add it.
+// The registry is filled from member-pointer dispatch by the Java backend's
+// generated auto_java.cpp, so it builds with a stock compiler — see
+// csharp_runtime.h's fn_traits section for the same mechanism. (A second,
+// reflection-driven backend used to fill it with splice-based handlers and
+// needed the C++26 / P2996 toolchain; it was removed.)
 
 #pragma once
 
@@ -256,7 +255,7 @@ namespace rosetta {
 
         // ---- Reflection-free member-pointer dispatch (for the expanded backend) ----
         //
-        // The generated auto_java.cpp (java-expanded) assigns these template
+        // The generated auto_java.cpp (java) assigns these template
         // instantiations (plain function pointers) into a TypeOps, e.g.
         //   ops.get["x"]       = &get_field<&Point::x>;
         //   ops.call["length"] = &call_method<&Point::length>;

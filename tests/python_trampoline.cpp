@@ -77,7 +77,7 @@ TEST(PyTrampoline, ParameterForwardedToMacro) {
 
 TEST(PyTrampoline, BindsWithTrampolineType) {
     const std::string s = python_source_for_animal();
-    EXPECT_NE(s.find("rosetta::bind_pybind<Animal, rosetta_py::Py_Animal>(m, \"Animal\")"),
+    EXPECT_NE(s.find("py::class_<Animal, rosetta_py::Py_Animal> c(m, \"Animal\")"),
               std::string::npos);
 }
 
@@ -86,5 +86,5 @@ TEST(PyTrampoline, PlainClassHasNoTrampoline) {
     const std::string s = rosetta::backend_registry().at("python")->render(c);
     EXPECT_EQ(s.find("Py_Plain"), std::string::npos);
     EXPECT_EQ(s.find("namespace rosetta_py"), std::string::npos);
-    EXPECT_NE(s.find("rosetta::bind_pybind<Plain>(m, \"Plain\")"), std::string::npos);
+    EXPECT_NE(s.find("py::class_<Plain> c(m, \"Plain\")"), std::string::npos);
 }

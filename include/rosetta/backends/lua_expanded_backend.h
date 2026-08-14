@@ -28,7 +28,7 @@
 // out of line (manifest "annotations": "...") rather than inline `[[=...]]`.
 //
 // Part of the generate pipeline (included by inline/generate.hxx after the
-// shared render helpers and after python_expanded_backend.h, whose
+// shared render helpers and after python_backend.h, whose
 // qualify_std() it reuses). The emit()/render() implementations live in
 // inline/lua_expanded_backend.hxx.
 

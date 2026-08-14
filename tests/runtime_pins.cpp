@@ -70,7 +70,7 @@ namespace {
 // either way — asking the interpreter for its own sys.executable is what turns
 // a PATH name into the absolute path find_package needs.
 TEST(RuntimePins, PythonInterpreterIsPinned) {
-    for (const char *lang : {"python-expanded", "nanobind-expanded", "python", "nanobind"}) {
+    for (const char *lang : {"python", "nanobind"}) {
         const std::string bare =
             emitted(lang, "CMakeLists.txt", [](rosetta::GenContext &c) { c.python = "3.11"; });
         EXPECT_NE(bare.find("COMMAND python3.11 -c \"import sys; print(sys.executable)\""),
@@ -95,10 +95,10 @@ TEST(RuntimePins, PythonInterpreterIsPinned) {
 TEST(RuntimePins, RequiresPythonFeedsTheFloorAndTheWheelMetadata) {
     const auto pin = [](rosetta::GenContext &c) { c.requires_python = ">=3.10"; };
 
-    const std::string cm = emitted("nanobind-expanded", "CMakeLists.txt", pin);
+    const std::string cm = emitted("nanobind", "CMakeLists.txt", pin);
     EXPECT_NE(cm.find("find_package(Python 3.10 COMPONENTS"), std::string::npos) << cm;
 
-    for (const char *lang : {"python-expanded", "nanobind-expanded"}) {
+    for (const char *lang : {"python", "nanobind"}) {
         EXPECT_NE(emitted(lang, "pyproject.toml", pin).find("requires-python = \">=3.10\""),
                   std::string::npos)
             << lang;
@@ -106,14 +106,14 @@ TEST(RuntimePins, RequiresPythonFeedsTheFloorAndTheWheelMetadata) {
                   std::string::npos)
             << lang << " changed the default";
     }
-    EXPECT_NE(emitted("nanobind-expanded", "CMakeLists.txt", none).find("find_package(Python 3.8 "),
+    EXPECT_NE(emitted("nanobind", "CMakeLists.txt", none).find("find_package(Python 3.8 "),
               std::string::npos);
 }
 
 // N-API version reaches the compile definition; the engines entry reaches
 // package.json as valid JSON, and is absent (no dangling comma) when unset.
 TEST(RuntimePins, NodeVersionKnobs) {
-    for (const char *lang : {"node-expanded", "node"}) {
+    for (const char *lang : {"node"}) {
         const std::string cm = emitted(lang, "CMakeLists.txt", [](rosetta::GenContext &c) {
             c.napi_version = "9";
         });

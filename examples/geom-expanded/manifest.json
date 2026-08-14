@@ -1,8 +1,8 @@
 {
     "//1": "Out-of-line-annotations variant of geom-lib. The headers in geom/ are",
     "//2": "plain C++17 (no inline [[=rosetta::...]]); all metadata lives in the",
-    "//3": ".ann.json side-cars below. The *-expanded targets fully expand the",
-    "//4": "bindings, so the generated modules build with a stock compiler.",
+    "//3": ".ann.json side-cars below. What this example demonstrates is the",
+    "//4": "side-cars — every target expands its bindings anyway.",
 
     "user_include": "./geom",
     "rosetta_include": "../../include",
@@ -11,16 +11,16 @@
     "version": "0.2.0",
 
     "targets": [
-        { "lang": "python-expanded",   "name": "pygeom" },
-        { "lang": "nanobind-expanded", "name": "nbgeom" },
-        { "lang": "node-expanded",     "name": "jsgeom" },
-        { "lang": "wasm-expanded",   "name": "geom" },
+        { "lang": "python",   "name": "pygeom" },
+        { "lang": "nanobind", "name": "nbgeom" },
+        { "lang": "node",     "name": "jsgeom" },
+        { "lang": "wasm",   "name": "geom" },
         { "lang": "qt-expanded",     "name": "geom" },
         { "lang": "qml-expanded",    "name": "geom" },
-        { "lang": "csharp-expanded", "name": "csgeom" },
-        { "lang": "java-expanded",   "name": "jvgeom" },
+        { "lang": "csharp", "name": "csgeom" },
+        { "lang": "java",   "name": "jvgeom" },
         { "lang": "lua-expanded",    "name": "luageom" },
-        { "lang": "julia-expanded",  "name": "jlgeom" },
+        { "lang": "julia",  "name": "jlgeom" },
         { "lang": "imgui-expanded",  "name": "geom" }
     ],
 

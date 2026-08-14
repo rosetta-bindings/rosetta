@@ -24,8 +24,8 @@
 //   * a backend WITHOUT a caster for the library (node, wasm, lua, …) keeps
 //     skipping the member, which is a fix: a skipped method is honest, a bound
 //     one that always throws is not;
-//   * a backend WITH one (python-expanded via <pybind11/eigen.h>,
-//     nanobind-expanded via <nanobind/eigen/dense.h>) emits that include and
+//   * a backend WITH one (python via <pybind11/eigen.h>,
+//     nanobind via <nanobind/eigen/dense.h>) emits that include and
 //     binds the exact C++ spelling unchanged — no adapter, no copy. On the
 //     script side the type is a numpy array, in both directions, matrices
 //     included.

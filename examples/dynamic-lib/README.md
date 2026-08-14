@@ -135,7 +135,7 @@ cmake -S space -B space/build && cmake --build space/build -j     # -> space/bin
 ( cd rosetta && ../../bin/rosetta_gen manifest.json gen )
 cmake -S rosetta/gen -B rosetta/gen/build && cmake --build rosetta/gen/build -j
 
-# 3. run it -> rosetta/bindings/{python,node,wasm-expanded}
+# 3. run it -> rosetta/bindings/{python,node,wasm}
 ( cd rosetta && ./generator bindings )
 
 # 4a. python (reflection binding; CMake selects clang-p2996), linked to libspace
@@ -164,7 +164,7 @@ doc(Vector3.x) = The x-coordinate (first Cartesian axis)   # out-of-line annotat
 
 ## WebAssembly
 
-`wasm-expanded` is generated with the same `user_lib` wiring, but a native
+`wasm` is generated with the same `user_lib` wiring, but a native
 `.dylib`/`.so` **cannot** be linked into WebAssembly. So `space` is built a
 second time as a *wasm static archive* with the **same emsdk** — its
 `CMakeLists.txt` emits a `STATIC` library under `EMSCRIPTEN`, producing
@@ -184,8 +184,8 @@ already points at the right place (`space/bin`) — nothing to repoint.
 # build space as a wasm static archive (libspace.a) with the same emsdk
 emcmake cmake -S space -B space/build-wasm && cmake --build space/build-wasm
 # then the embind module — links libspace.a statically into space.wasm
-emcmake cmake -S rosetta/bindings/wasm-expanded -B rosetta/bindings/wasm-expanded/build
-cmake --build rosetta/bindings/wasm-expanded/build
+emcmake cmake -S rosetta/bindings/wasm -B rosetta/bindings/wasm/build
+cmake --build rosetta/bindings/wasm/build
 
 cd rosetta && node example_wasm.js
 ```
