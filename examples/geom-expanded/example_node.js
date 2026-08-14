@@ -1,17 +1,17 @@
-// node-expanded target  (target name: jsgeom)
+// node target  (target name: jsgeom)
 // ---------------------------------------------------------------------------
 // Plain N-API bindings. The node_runtime.h marshaller converts std::vector
 // <-> JS Array transparently, so you pass and receive ordinary JS arrays —
 // no wrapper vector types, no manual memory management.
 //
-//   Build:  ( cd bindings/node-expanded && npm install && npm run build )
+//   Build:  ( cd bindings/node && npm install && npm run build )
 //   Run:    node example_node.js
 
 const path = require("path");
 
 // CMakeLists' POST_BUILD step copies the built addon next to its source dir.
 const geom = require(
-    path.join(__dirname, "bindings", "node-expanded", "jsgeom.node")
+    path.join(__dirname, "bindings", "node", "jsgeom.node")
 );
 
 // A Surface is built from a flat positions array (x,y,z, x,y,z, ...) and a

@@ -8,7 +8,7 @@
 // ordinary class (kind "object"), which every backend bound and which then
 // threw at CALL time because no caster for it was ever registered. Opting in
 // marks those types instead: kind stays "unknown", so a backend with no caster
-// skips the member, while python- / nanobind-expanded emit their caster header
+// skips the member, while python- / nanobind emit their caster header
 // and bind the exact spelling unchanged.
 //
 // Recognition is by ENCLOSING NAMESPACE, which is what lets this suite run
@@ -104,7 +104,7 @@ TEST(InteropEigen, IrMarksTheForeignTypeAndLeavesKindUnknown) {
     EXPECT_EQ(c.interop.front(), "eigen");
 }
 
-// python-expanded and nanobind-expanded emit their caster header and bind the
+// python and nanobind emit their caster header and bind the
 // members; the type is spelled with its namespace, since the emitted
 // `using namespace` block only opens the BOUND namespaces.
 TEST(InteropEigen, PythonFamilyBindsThroughTheCaster) {
@@ -114,8 +114,8 @@ TEST(InteropEigen, PythonFamilyBindsThroughTheCaster) {
         const char *lang;
         const char *header;
     };
-    for (const Case cs : {Case{"python-expanded", "pybind11/eigen.h"},
-                          Case{"nanobind-expanded", "nanobind/eigen/dense.h"}}) {
+    for (const Case cs : {Case{"python", "pybind11/eigen.h"},
+                          Case{"nanobind", "nanobind/eigen/dense.h"}}) {
         const std::string out = rosetta::backend_registry().at(cs.lang)->render(c);
         EXPECT_NE(out.find(std::string("#include <") + cs.header + ">"), std::string::npos)
             << cs.lang << " did not emit the caster header";
@@ -132,11 +132,11 @@ TEST(InteropEigen, PythonFamilyBindsThroughTheCaster) {
 // qualified — display_string_of prints the template name bare
 // ("Matrix<double, -1, 1>") and the emitted `using namespace` block opens only
 // the BOUND namespaces, so the bare token would not resolve.
-// (python-expanded only: nanobind-expanded skips overload sets outright.)
+// (python only: nanobind skips overload sets outright.)
 TEST(InteropEigen, OverloadCastSpellsTheTypeQualified) {
     const auto        c = rosetta::gen_detail::make_context<itp::Solver>("itest");
     const std::string out =
-        rosetta::backend_registry().at("python-expanded")->render(c);
+        rosetta::backend_registry().at("python")->render(c);
 
     EXPECT_NE(out.find("(const Eigen::Matrix<double, -1, 1> &)"), std::string::npos)
         << "the overload cast lost the Eigen:: qualification";
@@ -149,7 +149,7 @@ TEST(InteropEigen, OverloadCastSpellsTheTypeQualified) {
 TEST(InteropEigen, BackendsWithoutACasterSkipTheMembers) {
     const auto c = rosetta::gen_detail::make_context<itp::Solver>("itest");
 
-    for (const char *lang : {"node-expanded", "wasm-expanded", "lua-expanded"}) {
+    for (const char *lang : {"node", "wasm", "lua-expanded"}) {
         const std::string out = rosetta::backend_registry().at(lang)->render(c);
         EXPECT_EQ(out.find("\"solution\""), std::string::npos)
             << lang << " bound an Eigen-returning method it cannot marshal";

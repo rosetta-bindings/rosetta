@@ -221,7 +221,7 @@ namespace rosetta {
         // `kind` stays "unknown", so a backend with no caster for the library
         // keeps skipping the member — deliberately, since binding it would
         // produce a call that always throws. A backend that CAN marshal it
-        // (python-expanded / nanobind-expanded, once the caster header is
+        // (python / nanobind, once the caster header is
         // included) checks this flag and binds the type as it stands: no
         // adapter and no copy, because the caster owns the conversion.
         // `object` / `object_qualified` are still filled, so the exact
@@ -489,7 +489,7 @@ namespace rosetta {
         // Whether T is default-constructible. The implicitly-declared default
         // ctor is often *not* enumerated as a member, so `ctors` may be empty
         // even when `T()` is valid; backends that emit an explicit binding for
-        // it (e.g. python-expanded's py::init<>()) consult this instead.
+        // it (e.g. python's py::init<>()) consult this instead.
         bool is_default_constructible = false;
 
         // Whether T is abstract (has an unoverridden pure virtual). An abstract
@@ -714,7 +714,7 @@ namespace rosetta {
 
         // Optional distribution version (manifest "version"), a PEP 440 /
         // semver string ("1.2.0", "0.3.0rc1"). Only the packaging artifacts
-        // consume it — the pyproject.toml the python-expanded / nanobind-
+        // consume it — the pyproject.toml the python / nanobind-
         // expanded backends emit for wheel builds. Empty ⇒ the backends fall
         // back to DEFAULT_DIST_VERSION ("0.1.0"), so a manifest that never
         // packages needs no change.

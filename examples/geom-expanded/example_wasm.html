@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <!--
-  Browser test for the wasm-expanded binding (target "geom").
+  Browser test for the wasm binding (target "geom").
 
   The module is built with -sMODULARIZE=1 -sEXPORT_NAME=createModule
   -sENVIRONMENT=node,web, so loading geom.js defines a global `createModule()`
   factory returning a Promise that resolves to the module instance.
 
   Build first:
-    emcmake cmake -S bindings/wasm-expanded -B bindings/wasm-expanded/build
-    cmake --build bindings/wasm-expanded/build -j
+    emcmake cmake -S bindings/wasm -B bindings/wasm/build
+    cmake --build bindings/wasm/build -j
 
   Then serve over HTTP (browsers can't fetch .wasm from file://) and open:
     python3 -m http.server 8000
@@ -21,7 +21,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>rosetta · wasm-expanded (geom)</title>
+<title>rosetta · wasm (geom)</title>
 <style>
   :root { color-scheme: light dark; }
   body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 1.5rem;
@@ -41,7 +41,7 @@
 </style>
 </head>
 <body>
-  <h1>rosetta — <code>wasm-expanded</code> binding (module <code>geom</code>)</h1>
+  <h1>rosetta — <code>wasm</code> binding (module <code>geom</code>)</h1>
   <p class="sub">A reflection-free embind module, built with a stock emsdk, loaded
      and exercised in the browser.</p>
 
@@ -53,7 +53,7 @@
   </div>
 
   <!-- Loads geom.js (the MODULARIZE factory) from the build directory. -->
-  <script src="bindings/wasm-expanded/build/geom.js"></script>
+  <script src="bindings/wasm/build/geom.js"></script>
   <script>
     const statusEl = document.getElementById("status");
     const logEl = document.getElementById("log");
@@ -62,7 +62,7 @@
     function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = cls; }
 
     // Resolve geom.wasm next to geom.js regardless of the page's location.
-    createModule({ locateFile: (p) => "bindings/wasm-expanded/build/" + p })
+    createModule({ locateFile: (p) => "bindings/wasm/build/" + p })
       .then((geom) => {
         try {
           run(geom);

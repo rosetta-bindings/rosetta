@@ -24,7 +24,7 @@
     "targets": [
         { "lang": "python", "name": "space" },
         { "lang": "node",   "name": "space" },
-        { "lang": "wasm-expanded",   "name": "space" }
+        { "lang": "wasm",   "name": "space" }
     ],
 
     "classes": [

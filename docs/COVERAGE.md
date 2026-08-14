@@ -29,14 +29,14 @@ name" is not something every runtime can express.
 
 | Target | Policy | Why |
 |---|---|---|
-| python-expanded (pybind11) | **all overloads** | repeated `.def("at", …)` builds one overload set; pybind dispatches on argument types |
-| nanobind-expanded | **all overloads** | same model as pybind11 *(previously skipped overload sets entirely)* |
-| julia-expanded (jlcxx) | **all overloads** | each becomes a Julia method; Julia's multiple dispatch picks |
+| python (pybind11) | **all overloads** | repeated `.def("at", …)` builds one overload set; pybind dispatches on argument types |
+| nanobind | **all overloads** | same model as pybind11 *(previously skipped overload sets entirely)* |
+| julia (jlcxx) | **all overloads** | each becomes a Julia method; Julia's multiple dispatch picks |
 | qt-expanded | **all overloads** | builds an independent widget row per method — nothing is keyed by name |
-| wasm-expanded (embind) | first only | a second `.function("at", …)` throws `BindingError` at module init |
-| node-expanded (N-API) | first only | property descriptors are keyed by name; JS has no type dispatch |
+| wasm (embind) | first only | a second `.function("at", …)` throws `BindingError` at module init |
+| node (N-API) | first only | property descriptors are keyed by name; JS has no type dispatch |
 | lua-expanded (sol2) | first only | `c["at"] = …` is an assignment — a second one overwrites *(previously skipped the whole set)* |
-| csharp / java-expanded | first only | the op table is a name-keyed map, and marshalling goes through JSON |
+| csharp / java | first only | the op table is a name-keyed map, and marshalling goes through JSON |
 | typescript | first only | the `.d.ts` describes the N-API module, so it must not promise what node did not bind |
 | rest | first only | a route is a URL path; two overloads would register the same path |
 | qml-expanded | first only | `registerInvoker` is keyed by name and QML calls with an untyped `QVariantList` |
@@ -101,7 +101,7 @@ one you can diff.
       ] }
   ],
   "targets": [
-    { "target": "wasm-expanded",
+    { "target": "wasm",
       "bound": 3, "skipped": 1,
       "classes": [
         { "class": "Shape",
@@ -174,5 +174,5 @@ Keep the reason function next to the predicate it explains: a reason that drifts
 out of step with the decision is worse than no reason at all.
 
 Backends instrumented today: python-, nanobind-, node-, wasm-, lua-,
-julia-, csharp- and java-expanded, plus typescript. The others still bind
+julia-, csharp- and java, plus typescript. The others still bind
 correctly — they simply do not yet contribute rows to the report.

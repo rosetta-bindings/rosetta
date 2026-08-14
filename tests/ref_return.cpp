@@ -101,7 +101,7 @@ TEST(RefReturn, IrRecordsTheReferenceAndItsConstness) {
 TEST(RefReturn, PybindBindsMutableReferencesWithoutCopying) {
     const auto        c = rosetta::gen_detail::make_context<fl::Builder, fl::Knob>("rtest");
     const std::string out =
-        rosetta::backend_registry().at("python-expanded")->render(c);
+        rosetta::backend_registry().at("python")->render(c);
 
     EXPECT_NE(line_for(out, "addPoint").find("return_value_policy::reference_internal"),
               std::string::npos)
@@ -118,7 +118,7 @@ TEST(RefReturn, PybindBindsMutableReferencesWithoutCopying) {
 TEST(RefReturn, NanobindBindsMutableReferencesWithoutCopying) {
     const auto        c = rosetta::gen_detail::make_context<fl::Builder, fl::Knob>("rtest");
     const std::string out =
-        rosetta::backend_registry().at("nanobind-expanded")->render(c);
+        rosetta::backend_registry().at("nanobind")->render(c);
 
     EXPECT_NE(line_for(out, "addPoint").find("rv_policy::reference_internal"), std::string::npos)
         << line_for(out, "addPoint");

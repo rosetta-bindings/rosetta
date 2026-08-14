@@ -40,11 +40,9 @@ struct BuildOptions {
 };
 
 // Do this backend's generated projects carry a make_wheel.py? Only the two
-// expanded Python backends emit one — the *thin* `python` / `nanobind` targets
-// re-run the reflection walk at build time and so need a C++26 toolchain on
-// whatever machine builds them, which is the opposite of a portable wheel.
+// Python backends emit one.
 static bool is_wheel_backend(const std::string &lang) {
-    return lang == "python-expanded" || lang == "nanobind-expanded";
+    return lang == "python" || lang == "nanobind";
 }
 
 // The interpreter to run make_wheel.py with. Probed rather than assumed, in a
@@ -204,8 +202,8 @@ static int run_build(const BuildOptions &opt) {
                    !contains(opt.skip, t.lang);
         })) {
         std::fprintf(stderr,
-                     "rosetta_gen: --wheel has no effect — no python-expanded / "
-                     "nanobind-expanded target is being built\n");
+                     "rosetta_gen: --wheel has no effect — no python / nanobind "
+                     "target is being built\n");
     }
 
     std::vector<std::string> done; // a lang may appear once per manifest only, but be safe
@@ -232,7 +230,7 @@ static int run_build(const BuildOptions &opt) {
         if (lang == "html" || lang == "markdown" || lang == "typescript" ||
             lang == "paraview" || lang == "openapi" || lang == "json-schema") {
             record(lang, "OK (nothing to compile)");
-        } else if (lang == "node" || lang == "node-expanded") {
+        } else if (lang == "node") {
             if (!have_tool("npm")) {
                 record(lang, "SKIPPED (npm not found)");
                 continue;
@@ -242,7 +240,7 @@ static int run_build(const BuildOptions &opt) {
                 build += " -- " + q("--CDCLANG_P2996_ROOT=" + opt.p2996_root);
             }
             attempt(lang, run_cmd("npm install", dir) == 0 && run_cmd(build, dir) == 0);
-        } else if (lang == "wasm" || lang == "wasm-expanded") {
+        } else if (lang == "wasm") {
             if (!have_tool("emcc")) {
                 record(lang, "SKIPPED (emcc not found — activate emsdk)");
                 continue;
@@ -254,14 +252,14 @@ static int run_build(const BuildOptions &opt) {
             attempt(lang, run_cmd("emcmake cmake -S " + q(dir) + " -B " + q(dir / "build") +
                                   extra) == 0 &&
                               run_cmd("cmake --build " + q(dir / "build") + par) == 0);
-        } else if (lang == "julia" || lang == "julia-expanded") {
+        } else if (lang == "julia") {
             // the generated CMake locates JlCxx by running julia (CxxWrap.prefix_path())
             if (!have_tool("julia")) {
                 record(lang, "SKIPPED (julia not found)");
                 continue;
             }
             attempt(lang, cmake_build(dir));
-        } else if (lang == "csharp" || lang == "csharp-expanded") {
+        } else if (lang == "csharp") {
             if (!cmake_build(dir)) {
                 attempt(lang, false);
             } else if (!have_tool("dotnet")) {
@@ -270,7 +268,7 @@ static int run_build(const BuildOptions &opt) {
                 attempt(lang, run_cmd("dotnet build " + q(t.name + ".csproj"), dir) == 0,
                         " (dotnet)");
             }
-        } else if (lang == "java" || lang == "java-expanded") {
+        } else if (lang == "java") {
             if (!cmake_build(dir)) {
                 attempt(lang, false);
             } else if (!have_tool("mvn")) {
@@ -321,8 +319,8 @@ const char *kBuildOptions =
     "  --cmake-arg ARG          extra argument for every CMake configure (repeatable)\n"
     "  --jobs N, -jN            parallel build jobs (bare -j: one per core)\n"
     "  --fresh                  wipe the gen and bindings dirs first\n"
-    "  --wheel                  also build a Python wheel for the python-expanded /\n"
-    "                           nanobind-expanded targets (runs their make_wheel.py;\n"
+    "  --wheel                  also build a Python wheel for the python /\n"
+    "                           nanobind targets (runs their make_wheel.py;\n"
     "                           wheels land in <bindings>/<lang>/dist)\n"
     "  --wheel-dir DIR          collect every wheel in DIR instead of a per-backend\n"
     "                           dist/ (implies --wheel)\n";

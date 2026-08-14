@@ -70,15 +70,15 @@ static std::string source_for(const char *lang) {
 // is what every adapter constructs.
 
 TEST(Sequence, PythonAdapterSpellsQualifiedContainer) {
-    const std::string s = source_for("python-expanded");
+    const std::string s = source_for("python");
     EXPECT_NE(s.find("seqns::svec<double> seq0;"), std::string::npos);
     EXPECT_NE(s.find("std::copy(arg0.begin(), arg0.end(), seq0.begin());"), std::string::npos);
 }
 
-// ---- python-expanded ---------------------------------------------------------
+// ---- python ---------------------------------------------------------
 
 TEST(Sequence, PythonEmitsAdapterForOverloadedSeqMethod) {
-    const std::string s = source_for("python-expanded");
+    const std::string s = source_for("python");
     // Adapter lambda with the std::vector boundary — bound even though
     // set_points is an overload set (the sequence overload survived).
     EXPECT_NE(s.find("c.def(\"set_points\", [](SeqGeom &self, std::vector<double> arg0"),
@@ -94,25 +94,25 @@ TEST(Sequence, PythonEmitsAdapterForOverloadedSeqMethod) {
 }
 
 TEST(Sequence, PythonStaticSeqMethod) {
-    const std::string s = source_for("python-expanded");
+    const std::string s = source_for("python");
     EXPECT_NE(s.find("c.def_static(\"make\", []("), std::string::npos);
     EXPECT_NE(s.find("std::vector<int>(r.begin(), r.end())"), std::string::npos);
 }
 
-// ---- nanobind-expanded -------------------------------------------------------
+// ---- nanobind -------------------------------------------------------
 
 TEST(Sequence, NanobindEmitsAdapter) {
-    const std::string s = source_for("nanobind-expanded");
+    const std::string s = source_for("nanobind");
     EXPECT_NE(s.find(".def(\"set_points\", [](SeqGeom &self, std::vector<double> arg0"),
               std::string::npos);
     EXPECT_NE(s.find(".def_prop_rw(\"weights\","), std::string::npos);
     EXPECT_EQ(s.find("&SeqGeom::set_points"), std::string::npos);
 }
 
-// ---- node-expanded -----------------------------------------------------------
+// ---- node -----------------------------------------------------------
 
 TEST(Sequence, NodeEmitsFreeAdapterAndBindsThroughExtMethod) {
-    const std::string s = source_for("node-expanded");
+    const std::string s = source_for("node");
     // Namespace-scope adapter (the runtime introspects ITS signature).
     EXPECT_NE(s.find("inline void seq_SeqGeom_set_points(SeqGeom &self, "
                      "std::vector<double> arg0"),
@@ -126,10 +126,10 @@ TEST(Sequence, NodeEmitsFreeAdapterAndBindsThroughExtMethod) {
     EXPECT_EQ(s.find("get_field<&SeqGeom::weights>"), std::string::npos);
 }
 
-// ---- wasm-expanded -----------------------------------------------------------
+// ---- wasm -----------------------------------------------------------
 
 TEST(Sequence, WasmEmitsAdapterAndRegistersBoundaryVector) {
-    const std::string s = source_for("wasm-expanded");
+    const std::string s = source_for("wasm");
     EXPECT_NE(s.find(".function(\"set_points\", +[](SeqGeom &self, std::vector<double> arg0"),
               std::string::npos);
     EXPECT_NE(s.find(".class_function(\"make\", +[]("), std::string::npos);

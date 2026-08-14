@@ -66,8 +66,8 @@ static std::string render(const char *lang, const rosetta::GenContext &c) {
     return rosetta::backend_registry().at(lang)->render(c);
 }
 
-// Base listed BEFORE the derived: both backends need the base registered by
-// the time the derived class declares it.
+// Base listed BEFORE the derived: nanobind needs the base registered by the
+// time the derived class declares it.
 static rosetta::GenContext ctx_base_and_derived() {
     return rosetta::gen_detail::make_context<bcns::Base, bcns::Derived>("bctest");
 }
@@ -82,51 +82,42 @@ TEST(BaseClasses, ContextRecordsDirectPublicBases) {
     EXPECT_EQ(c.classes[1].bases[0], "bcns::Base"); // qualified spelling
 }
 
-// ---- nanobind (expanded / reflection-free) ---------------------------------
+// ---- nanobind --------------------------------------------------------------
 
-TEST(BaseClasses, NanobindExpandedRegistersTheBase) {
-    const std::string s = render("nanobind-expanded", ctx_base_and_derived());
+TEST(BaseClasses, NanobindRegistersTheBase) {
+    const std::string s = render("nanobind", ctx_base_and_derived());
     EXPECT_NE(s.find("nb::class_<bcns::Derived, bcns::Base>(m, \"Derived\")"), std::string::npos);
 }
 
-TEST(BaseClasses, NanobindExpandedLeavesARootClassAlone) {
-    const std::string s = render("nanobind-expanded", ctx_base_and_derived());
+TEST(BaseClasses, NanobindLeavesARootClassAlone) {
+    const std::string s = render("nanobind", ctx_base_and_derived());
     // Base has no base of its own: no trailing template argument.
     EXPECT_NE(s.find("nb::class_<bcns::Base>(m, \"Base\")"), std::string::npos);
 }
 
-TEST(BaseClasses, NanobindExpandedDropsAnUnboundBase) {
+TEST(BaseClasses, NanobindDropsAnUnboundBase) {
     // Derived alone: bcns::Base is not in the module, and nanobind resolves a
     // base by looking the type up there. Naming it would break the import.
     const auto        c = rosetta::gen_detail::make_context<bcns::Derived>("bctest");
-    const std::string s = render("nanobind-expanded", c);
+    const std::string s = render("nanobind", c);
     EXPECT_NE(s.find("nb::class_<bcns::Derived>(m, \"Derived\")"), std::string::npos);
     EXPECT_EQ(s.find("bcns::Derived, bcns::Base"), std::string::npos);
 }
 
-TEST(BaseClasses, NanobindExpandedKeepsOnlyOneOfSeveralBoundBases) {
+TEST(BaseClasses, NanobindKeepsOnlyOneOfSeveralBoundBases) {
     // Both : Base, Other — with both bases bound. nanobind has no multiple
     // inheritance, so exactly one relationship is registered (the first).
     const auto c = rosetta::gen_detail::make_context<bcns::Base, bcns::Other, bcns::Both>("bctest");
-    const std::string s = render("nanobind-expanded", c);
+    const std::string s = render("nanobind", c);
     EXPECT_NE(s.find("nb::class_<bcns::Both, bcns::Base>(m, \"Both\")"), std::string::npos);
     EXPECT_EQ(s.find("bcns::Base, bcns::Other"), std::string::npos);
 }
 
-// ---- nanobind (reflection, via bind_nanobind<T, Bases...>) -----------------
-
-TEST(BaseClasses, NanobindForwardsTheBaseToBindNanobind) {
-    const std::string s = render("nanobind", ctx_base_and_derived());
-    EXPECT_NE(s.find("bind_nanobind<bcns::Derived, bcns::Base>(m, \"Derived\")"),
-              std::string::npos);
-    EXPECT_NE(s.find("bind_nanobind<bcns::Base>(m, \"Base\")"), std::string::npos);
-}
-
 // ---- pybind11 keeps multiple inheritance (no regression) -------------------
 
-TEST(BaseClasses, PybindExpandedRegistersEveryBoundBase) {
+TEST(BaseClasses, PybindRegistersEveryBoundBase) {
     const auto c = rosetta::gen_detail::make_context<bcns::Base, bcns::Other, bcns::Both>("bctest");
-    const std::string s = render("python-expanded", c);
+    const std::string s = render("python", c);
     // py::class_ takes as many bases as the C++ type has.
     EXPECT_NE(s.find("py::class_<bcns::Both, bcns::Base, bcns::Other>"), std::string::npos);
 }

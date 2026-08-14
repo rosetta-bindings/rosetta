@@ -136,9 +136,8 @@ Every emitted **pointer** is then cast to that signature:
 | N-API (expanded) | `napi_free_entry<static_cast<int(*)(int, int)>(&api::add)>` — a cast is a valid non-type template argument; `&api::add` is not |
 | TypeScript | `export function add(arg0: number, arg1: number): number;` |
 
-The backends that splice `^^name` (thin `node`, `rest`, `julia`, `csharp`,
-`java`) skip such an entry and say so on stderr — one member of an overload set
-has no reflection to splice.
+`rest`, the one backend that still splices `^^name`, skips such an entry and
+says so on stderr — one member of an overload set has no reflection to splice.
 
 ### Renaming a function (`expose`)
 

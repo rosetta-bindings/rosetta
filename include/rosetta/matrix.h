@@ -17,7 +17,7 @@
 // sequence in any useful sense, so the backends with no caster for it (node,
 // wasm, lua) skipped every member that named one. They now marshal it by COPY
 // through a std::vector<std::vector<element>> boundary — scripts pass and
-// receive an array of row arrays — while python-expanded / nanobind-expanded,
+// receive an array of row arrays — while python / nanobind,
 // where "interop" gives them a real caster, keep binding the type as numpy.
 //
 // A registered type must be default-constructible and provide value_type,

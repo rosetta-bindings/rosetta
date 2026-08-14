@@ -1,11 +1,26 @@
 // SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
 // SPDX-License-Identifier: UNLICENSED
 
-// WebAssembly (emscripten/embind) generation backend — declaration. Part of
-// the generate pipeline (included by inline/generate.hxx after the shared
-// render helpers); the emit() implementation and any source templates live in
-// inline/wasm_backend.hxx. Not a standalone header — it relies on Backend /
-// GenContext from <rosetta/generate.h> being already visible.
+// WebAssembly (emscripten/embind) generation backend — *expanded* /
+// self-contained variant, registered under the "wasm" target.
+//
+// Like the python backend, this fully expands every field, method,
+// constructor and enumerator into explicit embind calls from the IR the driver
+// already produced, instead of emitting a thin `auto_emscripten.cpp` that
+// re-runs the reflection walk (bind_wasm<T>) at the target's compile time. The
+// generated source includes only <emscripten/bind.h> plus the user's headers —
+// no rosetta, no <experimental/meta>, no reflection — so it builds with a
+// *stock* emsdk rather than a reflection-aware fork.
+//
+// Members whose signature carries a type embind cannot marshal (e.g. a
+// std::function parameter) are skipped rather than emitted, matching rosetta's
+// "skip, don't fail" contract. std::vector<T> members/returns are supported via
+// emitted register_vector<T>() registrations.
+//
+// Implementation in inline/wasm_backend.hxx. Relies on Backend /
+// GenContext from <rosetta/generate.h> and on gen_detail::qualify_std() from
+// python_backend.h (both already visible when generate.hxx includes
+// this file).
 
 #pragma once
 
@@ -13,7 +28,8 @@ namespace rosetta {
     namespace gen_detail {
 
         struct WasmBackend : Backend {
-            void emit(const GenContext &c) const override;
+            void        emit(const GenContext &c) const override;
+            std::string render(const GenContext &c) const override;
         };
 
     } // namespace gen_detail

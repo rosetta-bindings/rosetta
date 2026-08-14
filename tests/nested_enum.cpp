@@ -76,14 +76,14 @@ TEST(NestedEnum, QualifiedOfFallsBackWhenQualifiedIsEmpty) {
 }
 
 // Every backend that spells the enum as a C++ type must emit the
-// class-qualified name. (node-expanded is excluded on purpose: it registers
+// class-qualified name. (node is excluded on purpose: it registers
 // enums as name/value pairs via rosetta::make_enum and never names the C++
 // type, so it was never affected.)
 TEST(NestedEnum, BackendsEmitTheClassQualifiedSpelling) {
     const auto c =
         rosetta::gen_detail::make_context<nens::Solver, nens::Solver::Mode, nens::Flat>("netest");
 
-    for (const char *lang : {"python-expanded", "nanobind-expanded", "wasm-expanded"}) {
+    for (const char *lang : {"python", "nanobind", "wasm"}) {
         const std::string out = rosetta::backend_registry().at(lang)->render(c);
         EXPECT_NE(out.find("nens::Solver::Mode"), std::string::npos)
             << lang << " lost the enclosing class in the enum spelling";

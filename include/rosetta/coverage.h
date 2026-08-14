@@ -61,7 +61,7 @@ namespace rosetta::coverage {
      * which share `member`.
      */
     struct Skip {
-        std::string target;    // backend lang ("python-expanded", "node-expanded")
+        std::string target;    // backend lang ("python", "node")
         std::string scope;     // owning class, qualified ("geom::Model"); "" for a free function
         std::string member;    // "at"
         std::string signature; // "int (int, int) const", when the backend knows it

@@ -1,8 +1,8 @@
-# nanobind-expanded demo — module "nbgeom".
+# nanobind demo — module "nbgeom".
 #
 # Build first:
-#   cmake -S bindings/nanobind-expanded -B bindings/nanobind-expanded/build
-#   cmake --build bindings/nanobind-expanded/build -j
+#   cmake -S bindings/nanobind -B bindings/nanobind/build
+#   cmake --build bindings/nanobind/build -j
 # then run:
 #   python3 example_nanobind.py
 #
@@ -13,7 +13,7 @@ import os
 import sys
 
 sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "bindings", "nanobind-expanded", "build")
+    0, os.path.join(os.path.dirname(__file__), "bindings", "nanobind", "build")
 )
 
 import nbgeom as geom

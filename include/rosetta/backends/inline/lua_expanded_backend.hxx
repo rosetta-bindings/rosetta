@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: UNLICENSED
 
 // Expanded (reflection-free) sol2 / Lua backend. Included by
-// inline/generate.hxx after python_expanded_backend.h (whose qualify_std() it
+// inline/generate.hxx after python_backend.h (whose qualify_std() it
 // reuses) and after the shared render helpers (subst / num_str / write_file).
 
 #pragma once

@@ -1,10 +1,10 @@
-// wasm-expanded binding for the `space` library.
+// wasm binding for the `space` library.
 //
 //   # first build space as a wasm static archive with the SAME emsdk:
 //   emcmake cmake -S space -B space/build-wasm && cmake --build space/build-wasm
 //   # then the embind module (links libspace.a statically — no .dylib, no rpath):
-//   emcmake cmake -S rosetta/bindings/wasm-expanded -B rosetta/bindings/wasm-expanded/build
-//   cmake --build rosetta/bindings/wasm-expanded/build
+//   emcmake cmake -S rosetta/bindings/wasm -B rosetta/bindings/wasm/build
+//   cmake --build rosetta/bindings/wasm/build
 //   node example_wasm.js
 //
 // Unlike the node/python bindings (which dlopen libspace.dylib at run time),
@@ -14,7 +14,7 @@
 const path = require("path");
 // Emscripten MODULARIZE=1, EXPORT_NAME=createModule — the module is an async
 // factory returning a promise for the instantiated wasm instance.
-const createModule = require(path.join(__dirname, "bindings", "wasm-expanded", "build", "space.js"));
+const createModule = require(path.join(__dirname, "bindings", "wasm", "build", "space.js"));
 
 createModule().then((space) => {
     const v = new space.Vector3(3, 0, 4);

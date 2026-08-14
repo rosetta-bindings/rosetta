@@ -2,7 +2,7 @@
 
 `rosetta_gen` is the single binary that drives the whole rosetta pipeline. It reads a [`manifest.json`](MANIFEST.md) and can take you from "a folder of C++ headers" to "compiled bindings for every declared language" in one command — or one step at a time, when you want to inspect what each stage produces.
 
-The tool itself uses **no reflection** — only JSON parsing and text templating — so it builds with a stock C++17 compiler. Only the *generator* it emits (and the thin backends) need the clang-p2996 toolchain.
+The tool itself uses **no reflection** — only JSON parsing and text templating — so it builds with a stock C++17 compiler. Only the *generator* it emits (and the `rest` target) needs the clang-p2996 toolchain.
 
 ---
 
@@ -89,11 +89,11 @@ runs, in order:
 | Backend | Build |
 |---|---|
 | `python`, `nanobind`, `rest`, `json`, `lua-expanded`, `imgui-expanded`, … | plain `cmake` configure + build |
-| `node`, `node-expanded` | `npm install` + `npm run build` |
-| `wasm`, `wasm-expanded` | `emcmake cmake` + `cmake --build` |
-| `julia`, `julia-expanded` | `cmake` (locates JlCxx by running `julia`) |
-| `csharp`, `csharp-expanded` | `cmake`, then `dotnet build` as a second stage |
-| `java`, `java-expanded` | `cmake`, then `mvn package` as a second stage |
+| `node`, `node` | `npm install` + `npm run build` |
+| `wasm`, `wasm` | `emcmake cmake` + `cmake --build` |
+| `julia`, `julia` | `cmake` (locates JlCxx by running `julia`) |
+| `csharp`, `csharp` | `cmake`, then `dotnet build` as a second stage |
+| `java`, `java` | `cmake`, then `mvn package` as a second stage |
 | `qt-expanded`, `qml-expanded` | `cmake` with `-DQT_DIR` (see `--qt-dir`) |
 | `markdown`, `html`, `typescript`, `openapi`, `paraview` | nothing to compile |
 
@@ -101,9 +101,9 @@ A backend whose toolchain is **missing** (no `npm`, no `emcc`, no `julia`…) is
 
 ```
 == summary
-   python-expanded      OK
-   node-expanded        OK
-   wasm-expanded        SKIPPED (emcc not found — activate emsdk)
+   python      OK
+   node        OK
+   wasm        SKIPPED (emcc not found — activate emsdk)
    markdown             OK (nothing to compile)
 ```
 
@@ -118,8 +118,8 @@ A backend whose toolchain is **missing** (no `npm`, no `emcc`, no `julia`…) is
 --cmake-arg ARG          extra argument for every CMake configure (repeatable)
 --jobs N, -jN            parallel build jobs (bare -j: one per core)
 --fresh                  wipe the gen and bindings dirs first
---wheel                  also build a Python wheel for the python-expanded /
-                         nanobind-expanded targets (runs their make_wheel.py;
+--wheel                  also build a Python wheel for the python /
+                         nanobind targets (runs their make_wheel.py;
                          wheels land in <bindings>/<lang>/dist)
 --wheel-dir DIR          collect every wheel in DIR instead of a per-backend
                          dist/ (implies --wheel)
@@ -139,15 +139,15 @@ While developing you rarely want the full matrix. `--only` / `--skip` filter **w
 
 ```bash
 # just python and node, 8-way parallel (`-j` alone: one job per core)
-bin/rosetta_gen --build manifest.json --only python-expanded,node-expanded -j8
+bin/rosetta_gen --build manifest.json --only python,node -j8
 
 # everything except the slow wasm link
-bin/rosetta_gen --build manifest.json --skip wasm-expanded
+bin/rosetta_gen --build manifest.json --skip wasm
 ```
 
-### Case 5: thin backends with a custom reflection toolchain
+### Case 5: `rest` with a custom reflection toolchain
 
-The thin (non-`-expanded`) backends re-run reflection when *they* compile, so every CMake configure needs to know where the clang-p2996 build lives if it isn't at the manifest's `cpp26_root` default:
+`rest` is the one target whose generated code still splices reflections, so it re-runs reflection when *it* compiles. Its CMake configure needs to know where the clang-p2996 build lives if it isn't at the manifest's `cpp26_root` default:
 
 ```bash
 bin/rosetta_gen --build manifest.json \
@@ -177,21 +177,21 @@ bin/rosetta_gen --build manifest.json \
 
 ### Case 8: Python wheels
 
-By default `--build` compiles the extension module and stops — it produces an importable `.so` / `.pyd`, not a distributable artifact. `--wheel` adds the packaging step for the two backends that emit a [`make_wheel.py`](MANIFEST.md#python-wheels-version), `python-expanded` and `nanobind-expanded`:
+By default `--build` compiles the extension module and stops — it produces an importable `.so` / `.pyd`, not a distributable artifact. `--wheel` adds the packaging step for the two backends that emit a [`make_wheel.py`](MANIFEST.md#python-wheels-version), `python` and `nanobind`:
 
 ```bash
-bin/rosetta_gen --build manifest.json --only python-expanded,nanobind-expanded --wheel
+bin/rosetta_gen --build manifest.json --only python,nanobind --wheel
 ```
 
 ```
-== building python-expanded
-== packaging python-expanded
-== building nanobind-expanded
-== packaging nanobind-expanded
+== building python
+== packaging python
+== building nanobind
+== packaging nanobind
 
 == summary
-   python-expanded      OK (wheel)
-   nanobind-expanded    OK (wheel)
+   python      OK (wheel)
+   nanobind    OK (wheel)
 ```
 
 Wheels land in `<bindings>/<lang>/dist`, with the repaired (redistributable) copies in `dist/repaired`. It is opt-in because packaging is a release action, not a development one: it pip-installs `build`, `scikit-build-core` and a repair tool into the environment, and takes noticeably longer than the compile `--build` is otherwise optimized for.

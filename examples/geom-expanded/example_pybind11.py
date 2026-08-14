@@ -1,8 +1,8 @@
-# python-expanded (pybind11) demo — module "pygeom".
+# python (pybind11) demo — module "pygeom".
 #
 # Build first:
-#   cmake -S bindings/python-expanded -B bindings/python-expanded/build
-#   cmake --build bindings/python-expanded/build -j
+#   cmake -S bindings/python -B bindings/python/build
+#   cmake --build bindings/python/build -j
 # then run:
 #   python3 example_pybind11.py
 #
@@ -12,7 +12,7 @@ import os
 import sys
 
 sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "bindings", "python-expanded", "build")
+    0, os.path.join(os.path.dirname(__file__), "bindings", "python", "build")
 )
 
 import pygeom as geom

@@ -9,14 +9,13 @@
 // {"ok":…,"value":…} / {"ok":false,"error":…} envelopes, and the `api_*`
 // dispatch the exported C ABI forwards to.
 //
-// Two ways to populate the registry build on this header:
-//   - the *thin* backend's <rosetta/visitors/csharp_visitor.h> runs a reflection
-//     walk and fills each TypeOps with splice-based handlers;
-//   - the *expanded* backend's generated auto_csharp.cpp fills TypeOps with the
-//     member-pointer dispatch templates below (get_field<&T::f>,
-//     call_method<&T::m>, construct<T, Args...>, …), which deduce field /
-//     parameter / return types from the pointer type via fn_traits — no
-//     reflection, so it builds with an ordinary C++17 compiler.
+// The registry is populated by the C# backend's generated auto_csharp.cpp,
+// which fills TypeOps with the member-pointer dispatch templates below
+// (get_field<&T::f>, call_method<&T::m>, construct<T, Args...>, …). These
+// deduce field / parameter / return types from the pointer type via fn_traits —
+// no reflection, so it builds with an ordinary C++17 compiler. (A second,
+// reflection-driven backend used to fill the same registry with splice-based
+// handlers; it was removed.)
 //
 // The two never share a translation unit, so the names never collide.
 

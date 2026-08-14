@@ -1,16 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
 // SPDX-License-Identifier: UNLICENSED
 
-// Reflection-free N-API runtime for the "node-expanded" backend.
+// Reflection-free N-API runtime for the "node" backend.
 //
-// This is the stock-C++ counterpart of <rosetta/visitors/node_visitor.h>: the
-// same marshalling layer (to_napi / from_napi / Wrap / ctor_table /
-// trampoline plumbing), but with the per-member accessors keyed on *member and
-// function pointers* (and a fixed-string name) instead of std::meta::info
-// splices. It includes no <experimental/meta>, so a generated auto_napi.cpp
+// The marshalling layer (to_napi / from_napi / Wrap / ctor_table / trampoline
+// plumbing), with the per-member accessors keyed on *member and function
+// pointers* (and a fixed-string name) rather than std::meta::info splices — as
+// a removed reflection-driven counterpart once did. It includes no <experimental/meta>, so a generated auto_napi.cpp
 // that uses it builds with an ordinary C++20 compiler — no clang-p2996, no
 // reflection. (node-addon-api itself is, of course, still required, exactly as
-// pybind11 is for the python-expanded target.)
+// pybind11 is for the python target.)
 //
 // The names live in namespace `rosetta`, matching node_visitor.h, so the
 // trampoline source emitted by gen_detail::node_trampolines_of() compiles

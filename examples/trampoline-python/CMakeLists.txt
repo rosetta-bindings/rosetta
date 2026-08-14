@@ -9,22 +9,15 @@
 #   cmake -G Ninja -B build && cmake --build build
 #   python3 test_shapes.py
 #
-# Requires the clang-p2996 fork at $HOME/devs/c++/clang-p2996/build
-# and pybind11 installed (e.g. `pip install pybind11`).
+# Requires pybind11 (e.g. `pip install pybind11`) and NOTHING else: the
+# generated binding is fully expanded, so a stock compiler builds it. Only
+# rosetta's own generator needs the clang-p2996 fork.
 
 cmake_minimum_required(VERSION 3.28)
 
-set(CLANG_P2996_ROOT "$ENV{HOME}/devs/c++/clang-p2996/build"
-    CACHE PATH "Bloomberg clang-p2996 fork build directory")
-
-if(NOT CMAKE_CXX_COMPILER)
-    set(CMAKE_C_COMPILER   "${CLANG_P2996_ROOT}/bin/clang")
-    set(CMAKE_CXX_COMPILER "${CLANG_P2996_ROOT}/bin/clang++")
-endif()
-
 project(auto_pybind_trampoline_example CXX)
 
-set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
@@ -46,24 +39,7 @@ if(NOT pybind11_DIR)
 endif()
 find_package(pybind11 REQUIRED CONFIG)
 
-# NO_EXTRAS disables LTO/strip — Apple's libLTO can't parse the fork's bitcode.
-pybind11_add_module(shapes NO_EXTRAS auto_pybind.cpp)
-
-target_include_directories(shapes PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
-
-target_compile_options(shapes PRIVATE
-    -freflection
-    -freflection-latest
-    -fexperimental-library
-    -fannotation-attributes)
-
-target_link_options(shapes PRIVATE
-    -nostdlib++
-    -L${CLANG_P2996_ROOT}/lib
-    -Wl,-rpath,${CLANG_P2996_ROOT}/lib
-    -lc++
-    -lc++abi)
+pybind11_add_module(shapes auto_pybind.cpp)
 
 # Place the module next to the Python script so it imports without PYTHONPATH.
 add_custom_command(TARGET shapes POST_BUILD

@@ -51,7 +51,7 @@ Fill in the generated `manifest.json` — the scaffold leaves `classes` empty; a
   "user_sources": ["./src/*.cxx"],
   "rosetta_include": "./extern/rosetta/include",
   "generator_name": "my_lib_gen",
-  "targets": ["python-expanded", "node-expanded", "rest-expanded", "wasm-expanded"],
+  "targets": ["python", "node", "rest-expanded", "wasm"],
   "classes": [
     { "name": "Person", "header": "person.h" }
   ]
@@ -90,22 +90,22 @@ cmake -B build && cmake --build build
 | `sequences` | — | `[]` | Foreign sequence containers that marshal like `std::vector<T>` — a qualified template name with one type parameter (`"GEO::vector"`), or a concrete type spelled exactly (`{ "type": "Eigen::VectorXd" }`). See [Foreign sequence containers](#foreign-sequence-containers-sequences). |
 | `python` / `requires_python` / `napi_version` / `node_engine` | — | — | Per-target runtime pins: which Python the binding is built for, its minimum version, the N-API level and the npm `engines.node` entry. See [Pinning the runtime](#pinning-the-runtime-python-requires_python-napi_version-node_engine). |
 | `out_dir` | — | — | Where every target's **built artifact** is copied after each build (the `.so` / `.pyd` / `.node` / `.js`+`.wasm`). Per-target `out_dir` overrides it. See [Artifact output directory](#artifact-output-directory-out_dir). |
-| `wheel` | — | `false` | Build a Python wheel for the `python-expanded` / `nanobind-expanded` targets on every `--build`, without passing `--wheel`. See [Python wheels](#python-wheels). |
+| `wheel` | — | `false` | Build a Python wheel for the `python` / `nanobind` targets on every `--build`, without passing `--wheel`. See [Python wheels](#python-wheels). |
 | `wheel_dir` | — | — | Default for `--wheel-dir`: one directory collecting every backend's wheels. Implies `wheel`. |
 | `matrices` | — | `[]` | Foreign 2-D matrices (same two entry forms as `sequences`) that marshal as an array of row arrays. See [Foreign matrices](#foreign-matrices-matrices). |
-| `interop` | — | `[]` | Foreign libraries whose types the target's binding framework marshals itself (`["eigen"]`). `python-expanded` / `nanobind-expanded` bind them natively (numpy); backends with no caster skip those members. See [Foreign-library interop](#foreign-library-interop-interop). |
+| `interop` | — | `[]` | Foreign libraries whose types the target's binding framework marshals itself (`["eigen"]`). `python` / `nanobind` bind them natively (numpy); backends with no caster skip those members. See [Foreign-library interop](#foreign-library-interop-interop). |
 | `user_lib` | — | — | Link the generated bindings against pre-built external libraries — one object, or an array of them when your library has dependencies of its own. See [Linking external libraries](#linking-external-libraries-user_lib). |
 | `user_sources` | — | `[]` | List of user `.cpp` (or `.c`) files compiled directly into every generated binding target. See [Compiling user sources](#compiling-user-sources-user_sources). |
 | `compile_definitions` | — | `[]` | Preprocessor definitions (`"NAME"` or `"NAME=VALUE"`) applied to the generator driver and every compiled binding target. See [Preprocessor definitions](#preprocessor-definitions-compile_definitions). |
 | `build_type` | — | — | Default `CMAKE_BUILD_TYPE` baked into every compiled backend's generated `CMakeLists.txt` (`Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel`). See [Build type & optimization](#build-type--optimization-build_type-optimization). |
 | `optimization` | — | — | Explicit optimization flag (`-O0`…`-O3`, `-Os`, `-Oz`, `-Og`, `-Ofast`) applied to every compiled backend, overriding the build type's own `-O` level. See [Build type & optimization](#build-type--optimization-build_type-optimization). |
-| `version` | — | `0.1.0` | Distribution version stamped into the packaging artifacts — the `pyproject.toml` the `python-expanded` / `nanobind-expanded` backends emit for wheel builds. See [Python wheels](#python-wheels-version). |
+| `version` | — | `0.1.0` | Distribution version stamped into the packaging artifacts — the `pyproject.toml` the `python` / `nanobind` backends emit for wheel builds. See [Python wheels](#python-wheels-version). |
 | `plugins` | — | `[]` | Extra `.cpp` sources to compile into the generator driver (e.g. a custom backend). Paths relative to the manifest. |
 | `out_params` | — | `{}` | Which parameters a method returns **through a reference**, keyed `"Class::method"`. Never inferred. See [below](#out-parameters-out_params). |
 | `module_init` | — | — | Statements the generated module runs when it **loads** (plus the headers declaring them) — a library's lifecycle, which is not a binding. See [below](#module-init-module_init). |
 | `generated_headers` | — | `[]` | Headers the bound library's own build system would have produced (e.g. a configured `version.h`), written into the generated tree and put first on the include path. See [below](#generated-headers-generated_headers). |
 | `qt_dir` | — | a built-in path | Qt 6 install prefix used by the `qt` / `qml` (and `-expanded`) backends. e.g. `"$ENV{HOME}/Qt/6.8.3/macos"`. |
-| `cpp26_root` | — | `$ENV{HOME}/devs/c++/clang-p2996/build` | Root of the C++26 / P2996 reflection toolchain used by the *thin* backends. Moves `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` together. |
+| `cpp26_root` | — | `$ENV{HOME}/devs/c++/clang-p2996/build` | Root of the C++26 / P2996 reflection toolchain. The generator always needs it; of the targets, only `rest` does. Moves `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` together. |
 | `cpp26_cxx` | — | `${cpp26_root}/bin/clang++` | C++ compiler (name or path) for the reflection toolchain. |
 | `cpp26_cc` | — | `${cpp26_root}/bin/clang` | C compiler (name or path). |
 | `cpp26_lib` | — | `${cpp26_root}/lib` | Directory holding the fork's `libc++` / `libc++abi` (`-L` / rpath). |
@@ -161,7 +161,7 @@ That happens as soon as two bound namespaces declare the same identifier — e.g
 
 Python then sees `arch.Data` (the `sinv` one) and `arch.SlipData`; C++ is untouched. Cross-references follow the rename automatically — a TypeScript signature touching `arch::Data` says `SlipData`, and the emitted C++ spells every bound class by its **qualified** name, so the shared identifier never becomes ambiguous in the generated TU.
 
-`expose` is honored by **every** backend — the runtime ones (`python`, `nanobind`, `node`, `wasm`, `lua`, `julia`, thin and `-expanded` alike), the C-ABI ones (`csharp`, `java` — where it also names the generated `.cs` / `.java` file and the runtime type key), the UI inspectors (`qt`, `qml`, `imgui`), `rest` / `openapi` (route paths and schema names), and the text outputs (`typescript`, `markdown`, `html`, `json`, `paraview`). The same field works on an **enum** entry, and on a **free function** or **extension method** — see [Functions](#functions).
+`expose` is honored by **every** backend — the runtime ones (`python`, `nanobind`, `node`, `wasm`, `lua-expanded`, `julia`), the C-ABI ones (`csharp`, `java` — where it also names the generated `.cs` / `.java` file and the runtime type key), the UI inspectors (`qt`, `qml`, `imgui`), `rest` / `openapi` (route paths and schema names), and the text outputs (`typescript`, `markdown`, `html`, `json`, `paraview`). The same field works on an **enum** entry, and on a **free function** or **extension method** — see [Functions](#functions).
 
 The rule each backend follows is the same: the exposed name is what appears in the host language (module attribute, class / enum declaration, route path, doc heading, generated file name), while every C++ spelling it emits uses the **qualified** name — which is what makes two same-named bound types unambiguous in the generated TU.
 
@@ -265,7 +265,7 @@ m.set_surface(coords, triangles)   # calls georo::set_surface(m, ...)
 print(len(m.vertices()) // 3)
 ```
 
-The receiver is dropped from the exposed signature; the remaining parameters and the return type marshal exactly like a free function's. The method name is the function's unqualified identifier. Supported by the `python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded` targets and all text backends (`typescript`, `markdown`, `html`); the thin (reflection-re-running) backends don't see them, and backends that can only emit member pointers (`qt`/`qml`/`csharp`/`java`) skip them.
+The receiver is dropped from the exposed signature; the remaining parameters and the return type marshal exactly like a free function's. The method name is the function's unqualified identifier. Supported by the `python`, `nanobind`, `node`, `wasm` targets and all text backends (`typescript`, `markdown`, `html`); backends that can only emit member pointers (`qt-expanded`/`qml-expanded`/`csharp`/`java`) skip them.
 
 ---
 
@@ -275,9 +275,9 @@ By default a generated project takes whatever the `PATH` gives it: the emitted C
 
 ```json
 "targets": [
-  { "lang": "nanobind-expanded", "name": "geom",
+  { "lang": "nanobind", "name": "geom",
     "python": "3.11", "requires_python": ">=3.10" },
-  { "lang": "node-expanded", "name": "geom",
+  { "lang": "node", "name": "geom",
     "napi_version": 9, "node_engine": ">=18" }
 ]
 ```
@@ -289,7 +289,7 @@ By default a generated project takes whatever the `PATH` gives it: the emitted C
 | `napi_version` | `NAPI_VERSION=` for the addon. This is the real Node floor — N-API 8 means Node 12.22+, N-API 9 means Node 18.17+. | `8` |
 | `node_engine` | `engines.node` in `package.json` — documentation for npm rather than a compile setting, which is why it is separate from `napi_version`. | absent |
 
-Per-target, not top-level, so a manifest carrying both a `python-expanded` and a `nanobind-expanded` target can point them at different interpreters.
+Per-target, not top-level, so a manifest carrying both a `python` and a `nanobind` target can point them at different interpreters.
 
 Two things worth knowing:
 
@@ -304,8 +304,8 @@ A generated project drops its built module next to its own sources — handy for
 
 ```json
 "targets": [
-  { "lang": "nanobind-expanded", "name": "implicit3d", "out_dir": "./dist" },
-  { "lang": "wasm-expanded",     "name": "implicit3d", "out_dir": "../www/assets" }
+  { "lang": "nanobind", "name": "implicit3d", "out_dir": "./dist" },
+  { "lang": "wasm",     "name": "implicit3d", "out_dir": "../www/assets" }
 ],
 "out_dir": "./dist"
 ```
@@ -314,7 +314,7 @@ The top-level `out_dir` is the default for every target that names none; a targe
 
 This is **not** where the generated project goes (that is `rosetta_gen`'s own output tree, `--bindings-dir`) — it is where the loadable artifact lands: `libfoo.so` / `foo.pyd`, `foo.node`, `foo.so` for Lua, and for wasm **both** halves, the `.js` loader and its `.wasm`. The copy is `copy_if_different`, so an unchanged build touches nothing downstream, and the existing next-to-the-sources copy still happens.
 
-Supported by every backend that builds a loadable module: `python`, `python-expanded`, `nanobind`, `nanobind-expanded`, `node`, `node-expanded`, `wasm`, `wasm-expanded`, `lua-expanded`, `julia`, `julia-expanded`. The document backends (`markdown`, `typescript`, `json`, …) have no artifact to place, and the application-shaped ones (`qt`, `qml`, `imgui`, `rest`, `csharp`, `java`) are not covered.
+Supported by every backend that builds a loadable module: `python`, `python`, `nanobind`, `nanobind`, `node`, `node`, `wasm`, `wasm`, `lua-expanded`, `julia`, `julia`. The document backends (`markdown`, `typescript`, `json`, …) have no artifact to place, and the application-shaped ones (`qt`, `qml`, `imgui`, `rest`, `csharp`, `java`) are not covered.
 
 ---
 
@@ -328,7 +328,7 @@ Many libraries carry their bulk data in their **own vector type** — geogram's 
 
 `rosetta_gen` emits `template <typename T> struct rosetta::is_sequence<GEO::vector<T>> : std::true_type {};` into the generated `bindings.h` (equivalently, write that specialization yourself for programmatic use — see `rosetta/sequence.h`). The container must be default-constructible with `value_type`, `size()`, `resize(n)` and `begin()`/`end()`; elements must be arithmetic, `bool`, `std::string` or a bound enum.
 
-The opted-in backends (`python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded`, `lua-expanded`, plus `typescript` declarations) marshal it **by copy through a `std::vector<element>` boundary** inside an emitted adapter — scripts pass and receive plain arrays/lists/tables. Every other backend keeps skipping the type (the IR leaves `kind` "unknown", like raw pointers and callbacks). Three consequences worth knowing:
+The opted-in backends (`python`, `nanobind`, `node`, `wasm`, `lua-expanded`, plus `typescript` declarations) marshal it **by copy through a `std::vector<element>` boundary** inside an emitted adapter — scripts pass and receive plain arrays/lists/tables. Every other backend keeps skipping the type (the IR leaves `kind` "unknown", like raw pointers and callbacks). Three consequences worth knowing:
 
 - **Mutable `Seq&` parameters bind, input-only** — the adapter's local container is a real lvalue (geogram's `assign_points(vector<double>&, dim, steal)` works; `steal` steals from the adapter's copy, which is fine). In-place mutations are discarded, exactly like pybind's `std::vector&` casters.
 - **Overload sets whose sequence overload is the one that binds** — the adapter calls the method *by name* with concrete arguments instead of spelling the ambiguous `&T::name` member pointer. The walk now emits every overload, but a backend that keys methods by name binds the **first-declared** one (see [overloads and coverage](COVERAGE.md)), so `GEO::MeshVertices::assign_points` (sequence overload first) binds; a set whose first declaration is the raw-pointer one stays skipped there.
@@ -362,7 +362,7 @@ Entries take the **same two forms** as `sequences`: a plain string for a one-typ
 
 The type must be default-constructible with `value_type`, `rows()`, `cols()`, `resize(r, c)` and `operator()(i, j)`; the element must be **arithmetic** (a grid of strings has no natural script shape).
 
-The opted-in backends (`python-expanded`, `nanobind-expanded`, `node-expanded`, `wasm-expanded`, `lua-expanded`, plus `typescript` declarations, which say `number[][]`) marshal it **by copy through a `std::vector<std::vector<element>>` boundary** — an array of row arrays. Every other backend keeps skipping the type, exactly as for sequences.
+The opted-in backends (`python`, `nanobind`, `node`, `wasm`, `lua-expanded`, plus `typescript` declarations, which say `number[][]`) marshal it **by copy through a `std::vector<std::vector<element>>` boundary** — an array of row arrays. Every other backend keeps skipping the type, exactly as for sequences.
 
 Three things to know:
 
@@ -390,8 +390,8 @@ What follows splits by backend:
 
 | Backend | Behaviour |
 | --- | --- |
-| `python-expanded` | Emits `#include <pybind11/eigen.h>`; the types bind **natively as numpy arrays**, both directions, matrices included. No adapter, no copy where the layout allows a view. |
-| `nanobind-expanded` | Same, through `#include <nanobind/eigen/dense.h>`. (Sparse is not emitted — `<nanobind/eigen/sparse.h>` costs compile time a rare signature doesn't justify.) |
+| `python` | Emits `#include <pybind11/eigen.h>`; the types bind **natively as numpy arrays**, both directions, matrices included. No adapter, no copy where the layout allows a view. |
+| `nanobind` | Same, through `#include <nanobind/eigen/dense.h>`. (Sparse is not emitted — `<nanobind/eigen/sparse.h>` costs compile time a rare signature doesn't justify.) |
 | every other backend | **Skips** the member. Deliberate, and an improvement: a skipped method is honest, a bound one that always throws is not. |
 
 The IR marks these types with `GenType::interop` and leaves `kind` "unknown" — the same pattern raw pointers, callbacks and foreign sequences use, which is what makes the non-caster backends skip them without a single change of their own.
@@ -405,7 +405,7 @@ This replaces the flat-array extension-method pattern for the Python-family back
 
 ### Reaching the caster-less backends: register the type as a sequence too
 
-`node-expanded` / `wasm-expanded` / `lua-expanded` have no caster to lean on, so on their own they skip every Eigen-typed member. Give them the flat array by ALSO registering the concrete type under [`sequences`](#registering-a-concrete-type):
+`node` / `wasm` / `lua-expanded` have no caster to lean on, so on their own they skip every Eigen-typed member. Give them the flat array by ALSO registering the concrete type under [`sequences`](#registering-a-concrete-type):
 
 ```json
 "interop":   ["eigen"],
@@ -416,8 +416,8 @@ The IR then carries both marks, and each backend picks:
 
 | Backend | Behaviour |
 | --- | --- |
-| `python-expanded` / `nanobind-expanded` | The **caster wins** — still numpy, still no copy. A dual-marked type costs them nothing. |
-| `node-expanded` / `wasm-expanded` / `lua-expanded` | Bind through the **sequence adapter**: `Eigen::VectorXd` in, out and back through a `std::vector<double>` boundary; scripts see a plain array. |
+| `python` / `nanobind` | The **caster wins** — still numpy, still no copy. A dual-marked type costs them nothing. |
+| `node` / `wasm` / `lua-expanded` | Bind through the **sequence adapter**: `Eigen::VectorXd` in, out and back through a `std::vector<double>` boundary; scripts see a plain array. |
 | `typescript` | Declares `number[]`, matching what those runtimes hand out. |
 
 The sequence rules apply as written — the copy is real, and a mutable `Eigen::VectorXd&` parameter binds input-only.
@@ -451,8 +451,8 @@ families differ in how they honour it:
 
 | Backend | Behaviour |
 | --- | --- |
-| `python-expanded` / `nanobind-expanded` (and the thin `python` / `nanobind`) | **Native**, through `<pybind11/stl/filesystem.h>` / `<nanobind/stl/filesystem.h>` — callers pass a `str` **or** any `os.PathLike`, and a returned path comes back as `pathlib.Path`. |
-| `node-expanded` / `wasm-expanded` / `lua-expanded` | Through the same **copy adapter** the foreign containers use: the boundary declares `std::string`, the emitted code builds a `std::filesystem::path` from it and calls `.string()` on the way back. Scripts see a plain string. |
+| `python` / `nanobind` | **Native**, through `<pybind11/stl/filesystem.h>` / `<nanobind/stl/filesystem.h>` — callers pass a `str` **or** any `os.PathLike`, and a returned path comes back as `pathlib.Path`. |
+| `node` / `wasm` / `lua-expanded` | Through the same **copy adapter** the foreign containers use: the boundary declares `std::string`, the emitted code builds a `std::filesystem::path` from it and calls `.string()` on the way back. Scripts see a plain string. |
 | `typescript` | Declares `string`. |
 
 **`std::shared_ptr<T>` crosses in the return direction**, which is where a
@@ -461,11 +461,11 @@ backend does with it:
 
 | Backend | Behaviour |
 | --- | --- |
-| `python-expanded` | `py::class_<T, std::shared_ptr<T>>` — the holder is declared automatically for every pointee the module hands out. |
-| `nanobind-expanded` | Native, through `<nanobind/stl/shared_ptr.h>`. |
-| `wasm-expanded` | The class registration gains `.smart_ptr<std::shared_ptr<T>>("T_sp")`, and only for classes that actually travel that way. |
+| `python` | `py::class_<T, std::shared_ptr<T>>` — the holder is declared automatically for every pointee the module hands out. |
+| `nanobind` | Native, through `<nanobind/stl/shared_ptr.h>`. |
+| `wasm` | The class registration gains `.smart_ptr<std::shared_ptr<T>>("T_sp")`, and only for classes that actually travel that way. |
 | `lua-expanded` | Native — sol2's own `unique_usertype_traits` handles it; the userdata is T's usertype. |
-| `node-expanded` | The JS object **adopts** the pointer: a third ownership mode in the wrapper, next to "owns" and "aliases a member of a pinned parent". The C++ object lives as long as the JS handle does. |
+| `node` | The JS object **adopts** the pointer: a third ownership mode in the wrapper, next to "owns" and "aliases a member of a pinned parent". The C++ object lives as long as the JS handle does. |
 | `typescript` | Declares the **pointee** (`Doc`), not `shared_ptr`. |
 
 Two limits worth knowing:
@@ -509,10 +509,10 @@ ok, uv, dim = mesh.facet_corners.attributes().get_doubles("tex_coord")
 
 | Backend | Shape |
 | --- | --- |
-| `python-expanded` / `nanobind-expanded` | A tuple — `(ok, uv, dim)`. |
+| `python` / `nanobind` | A tuple — `(ok, uv, dim)`. |
 | `lua-expanded` | Lua's own **multiple returns** — `local ok, uv, dim = …`. |
-| `node-expanded` | An **array** — `const [ok, uv, dim] = …`. |
-| `wasm-expanded` | An array too, built as an `emscripten::val` (embind marshals no tuple). |
+| `node` | An **array** — `const [ok, uv, dim] = …`. |
+| `wasm` | An array too, built as an `emscripten::val` (embind marshals no tuple). |
 | `typescript` | A tuple type: `get_doubles(arg0: string): [boolean, number[], number]`. |
 
 The return value comes first when the function has one; with a `void` return
@@ -571,8 +571,8 @@ is *fixed* start-up work, not a configurable entry point. Anything a caller
 should be able to vary (a verbosity flag, a thread count) still belongs in a
 bound function.
 
-Emitted by the `python`, `nanobind`, `node`, `wasm`, `lua` and `julia` backends
-(thin and expanded alike) — the ones with a module entry point. The C#, Java,
+Emitted by the `python`, `nanobind`, `node`, `wasm`, `lua-expanded` and `julia`
+backends — the ones with a module entry point. The C#, Java,
 REST, Qt/QML/ImGui and documentation backends ignore the field: they have no
 single load-time hook to hang it on.
 
@@ -708,13 +708,12 @@ bind two of them:
 Backends form the function pointer through a disambiguating
 `static_cast<void(*)(…)>(&GEO::mesh_union)` — including where the pointer is a
 template argument (`napi_free_entry<…>`) — so **every backend that emits a
-pointer binds the selected overload**: python, nanobind, wasm, lua, node, julia,
-C#, Java (thin and expanded alike), and typescript declares it like any other
-function. The five that spell the function's *reflection* instead — the thin
-`node`, `rest`, `julia`, `csharp` and `java` backends, which emit
-`bind_*_function<^^name>` — **skip the entry with a note on stderr**: there is no
-reflection for one member of an overload set, and a skipped function is honest
-where an ambiguous one would not compile.
+pointer binds the selected overload**: python, nanobind, wasm, lua-expanded,
+node, julia, C#, Java, and typescript declares it like any other function. The
+one that spells the function's *reflection* instead — `rest`, which emits
+`bind_rest_function<^^name>` — **skips the entry with a note on stderr**: there
+is no reflection for one member of an overload set, and a skipped function is
+honest where an ambiguous one would not compile.
 
 Overload selection is a `functions` feature. An [extension
 method](#extension-methods-extensions) cannot take a `signature` (rosetta_gen
@@ -752,8 +751,8 @@ The object form also accepts **`link_options`** — extra linker flags applied t
 
 ```json
 "targets": [
-  { "lang": "python-expanded" },
-  { "lang": "wasm-expanded", "link_options": ["-lnodefs.js"] }
+  { "lang": "python" },
+  { "lang": "wasm", "link_options": ["-lnodefs.js"] }
 ]
 ```
 
@@ -765,16 +764,16 @@ Thin (reflection re-runs at the target's compile time — needs the C++26 toolch
 
 | `lang` | Output | Expanded variant |
 |---|---|---|
-| `python` | pybind11 extension module | `python-expanded` |
-| `nanobind` | nanobind extension module | `nanobind-expanded` |
-| `node` | N-API native addon | `node-expanded` |
-| `wasm` | Emscripten / embind module | `wasm-expanded` |
+| `python` | pybind11 extension module | `python` |
+| `nanobind` | nanobind extension module | `nanobind` |
+| `node` | N-API native addon | `node` |
+| `wasm` | Emscripten / embind module | `wasm` |
 | `qt` | Qt Widgets property/method inspector | `qt-expanded` |
 | `imgui-expanded` | Dear ImGui inspector app (GLFW + OpenGL3, auto-fetched) | expanded only |
 | `qml` | QML / QtQuick inspector | `qml-expanded` |
-| `csharp` | C-ABI shared lib + P/Invoke wrappers | `csharp-expanded` |
-| `java` | C-ABI + handle-backed FFM wrappers | `java-expanded` |
-| `julia` | CxxWrap.jl / jlcxx shared module | `julia-expanded` (adds `std::vector` support) |
+| `csharp` | C-ABI shared lib + P/Invoke wrappers | `csharp` |
+| `java` | C-ABI + handle-backed FFM wrappers | `java` |
+| `julia` | CxxWrap.jl / jlcxx shared module | `julia` (adds `std::vector` support) |
 | `lua-expanded` | sol2 shared module, `require`-able (Lua 5.1–5.4 / LuaJIT) | expanded only |
 | `rest` | cpp-httplib JSON server + browser client | — |
 | `openapi` | OpenAPI 3.1 spec | text output |
@@ -917,13 +916,13 @@ Both are optional and independent:
 - **`build_type`** — one of `Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel` (case-insensitive). Emitted as a *default* inside `if(NOT CMAKE_BUILD_TYPE)`, so `-DCMAKE_BUILD_TYPE=...` at configure time still wins. Omitted ⇒ CMake's usual no-build-type behaviour.
 - **`optimization`** — an explicit optimization level: `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, `-Oz`, `-Og` or `-Ofast` (the leading `-` may be omitted). Emitted as `add_compile_options(...)` / `add_link_options(...)`, which land *after* the build type's own per-config flags on the compiler command line — so this `-O` overrides the level the build type implies (e.g. `"build_type": "Release", "optimization": "-O2"` builds `-DNDEBUG` but at `-O2` instead of Release's `-O3`). The link option matters for the wasm targets, where emscripten optimizes at link time too.
 
-The flags apply to the *bindings* (and any [`user_sources`](#compiling-user-sources-user_sources) compiled into them), in every compiled backend — thin and `-expanded` alike. The text-only backends compile nothing and ignore both.
+The flags apply to the *bindings* (and any [`user_sources`](#compiling-user-sources-user_sources) compiled into them), in every compiled backend. The text-only backends compile nothing and ignore both.
 
 ---
 
 ## Python wheels (`version`)
 
-The `python-expanded` and `nanobind-expanded` backends emit, alongside `CMakeLists.txt`, everything needed to build a redistributable Python wheel:
+The `python` and `nanobind` backends emit, alongside `CMakeLists.txt`, everything needed to build a redistributable Python wheel:
 
 | File | Role |
 | --- | --- |
@@ -931,7 +930,7 @@ The `python-expanded` and `nanobind-expanded` backends emit, alongside `CMakeLis
 | `make_wheel.py` | One-command builder: builds the wheel, then bundles external shared libraries and fixes the platform tag. Python rather than a shell script, so Linux, macOS and Windows are all covered by one file — building a wheel needs an interpreter anyway. |
 
 ```sh
-cd bindings/nanobind-expanded
+cd bindings/nanobind
 python make_wheel.py                    # -> dist/*.whl, dist/repaired/*.whl
 python3.11 make_wheel.py                # a specific interpreter
 python make_wheel.py --outdir /tmp/whl  # somewhere other than ./dist
@@ -940,7 +939,7 @@ python make_wheel.py --no-repair        # skip the bundling / retagging step
 
 The wheel is built for whichever interpreter runs the script — there is no `--python` flag, just invoke the one you want.
 
-`rosetta_gen --build manifest.json --wheel` runs the same step for every `python-expanded` / `nanobind-expanded` target in one go, and `--wheel-dir DIR` collects the results in one directory instead of a per-backend `dist/` (see [ROSETTA_GEN.md](ROSETTA_GEN.md#case-8-python-wheels)).
+`rosetta_gen --build manifest.json --wheel` runs the same step for every `python` / `nanobind` target in one go, and `--wheel-dir DIR` collects the results in one directory instead of a per-backend `dist/` (see [ROSETTA_GEN.md](ROSETTA_GEN.md#case-8-python-wheels)).
 
 For a project that always ships wheels, say so in the manifest instead of on every command line:
 
@@ -961,7 +960,7 @@ A PEP 440 release string starting with a digit (`"1.2.0"`, `"0.3.0rc1"`; a bare 
 
 A few things worth knowing:
 
-- **ABI tagging.** `nanobind-expanded` builds against CPython's stable ABI on 3.12+ and tags the wheel `abi3`, so one artifact covers every later interpreter. Below 3.12, and for `python-expanded` in every case (pybind11 has no stable-ABI mode), the wheel is tagged for the exact CPython that built it — covering several versions means running the script once per interpreter. The plain `cmake` build is unaffected either way; stable-ABI mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` forces it by hand).
+- **ABI tagging.** `nanobind` builds against CPython's stable ABI on 3.12+ and tags the wheel `abi3`, so one artifact covers every later interpreter. Below 3.12, and for `python` in every case (pybind11 has no stable-ABI mode), the wheel is tagged for the exact CPython that built it — covering several versions means running the script once per interpreter. The plain `cmake` build is unaffected either way; stable-ABI mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` forces it by hand).
 - **`user_lib` and wheel repair.** The generated CMake links [`user_lib`](#linking-external-libraries-user_lib) entries by absolute path, so a freshly built module refers to a directory that does not exist on the installing machine. `make_wheel.py` runs the platform's repair tool — `delocate` (macOS), `auditwheel` (Linux), `delvewheel` (Windows) — to copy those libraries *into* the wheel and rewrite the load paths; results land in `dist/repaired`. On Linux this also retags the wheel `manylinux_*`, without which PyPI rejects it. On Windows the `user_lib` directories are baked into the script as `USER_LIB_DIRS` and handed to `delvewheel --add-path`: a `.pyd` records no search path for its DLLs (Windows has no rpath), so unlike the other two tools delvewheel cannot discover them by following a load command. Repair failing is a warning, not an error — a wheel with nothing external to bundle is already correct. Declaring `"link": "static"` sidesteps the whole question.
 - **Wheels are redistributable; sdists are not.** The generated `CMakeLists.txt` embeds the header and library paths the manifest resolved on the generating machine. Ship wheels, or re-run the generator wherever you build.
 - **Matrix builds.** For several Python versions and platforms in one go, use [cibuildwheel](https://cibuildwheel.pypa.io/) (`pipx run cibuildwheel --platform auto`) instead of looping over the script. This is where the `-expanded` backends pay off: the generated source needs no reflection toolchain, so stock CI runners — including Windows/MSVC — can build it.
@@ -980,7 +979,7 @@ A few things worth knowing:
   "generator_name": "geom_gen",
   "module_name": "geom",
 
-  "//cpp26": "C++26 / P2996 reflection toolchain used to build the thin backends.",
+  "//cpp26": "C++26 / P2996 reflection toolchain used to build the generator (and the rest target).",
   "cpp26_root": "$ENV{HOME}/devs/c++/clang-p2996/build",
   "cpp26_cxx":  "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang++",
   "cpp26_cc":   "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang",
@@ -994,10 +993,10 @@ A few things worth knowing:
   "version": "1.2.0",
 
   "targets": [
-    { "lang": "python-expanded", "name": "geom" },
-    { "lang": "nanobind-expanded", "name": "geom" },
-    { "lang": "node-expanded", "name": "geom" },
-    { "lang": "wasm-expanded", "name": "geom" },
+    { "lang": "python", "name": "geom" },
+    { "lang": "nanobind", "name": "geom" },
+    { "lang": "node", "name": "geom" },
+    { "lang": "wasm", "name": "geom" },
     { "lang": "typescript" },
     { "lang": "markdown" },
     { "lang": "html" }
@@ -1018,7 +1017,7 @@ A few things worth knowing:
 }
 ```
 
-The `cpp26_*` fields point at the **C++26 / P2996 reflection compiler** used to build the thin backends. They are all optional — omit them and rosetta uses these defaults:
+The `cpp26_*` fields point at the **C++26 / P2996 reflection compiler** used to build the generator. They are all optional — omit them and rosetta uses these defaults:
 
 | Field | Default |
 |---|---|
@@ -1027,7 +1026,7 @@ The `cpp26_*` fields point at the **C++26 / P2996 reflection compiler** used to 
 | `cpp26_cc` | `${cpp26_root}/bin/clang` |
 | `cpp26_lib` | `${cpp26_root}/lib` |
 
-If your [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) build lives elsewhere, set `cpp26_root` alone — `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` all derive from it. Override the individual ones only when the compiler binaries or the `libc++` / `libc++abi` directory sit outside the usual `bin/` and `lib/` layout. `$ENV{HOME}` is expanded by CMake at configure time, so the path stays portable across machines. These only affect the *thin* backends — the `-expanded` and text targets build with a stock compiler and ignore them.
+If your [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) build lives elsewhere, set `cpp26_root` alone — `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` all derive from it. Override the individual ones only when the compiler binaries or the `libc++` / `libc++abi` directory sit outside the usual `bin/` and `lib/` layout. `$ENV{HOME}` is expanded by CMake at configure time, so the path stays portable across machines. Of the targets these only affect `rest` — every other one builds with a stock compiler and ignores them.
 
 ---
 
