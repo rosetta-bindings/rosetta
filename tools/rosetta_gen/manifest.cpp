@@ -200,21 +200,24 @@ Manifest load(const fs::path &manifest_path) {
     const std::string module_name =
         j.contains("module_name") ? j.at("module_name").get<std::string>() : m.generator_name;
 
-    // Seven languages used to ship two backends each, a reflection-driven one
-    // and an "-expanded" one; only the expanded half survives and the short
-    // name now means it. The registry still answers to the old spelling, but
-    // everything downstream of here keys off the lang STRING — the output
-    // directory (bindings/<lang>), the per-language build recipe, the wheel
-    // check — so an un-canonicalised alias would generate into bindings/node
-    // and then look for bindings/node-expanded to build. Fold it here, once.
+    // Eleven languages once carried an "-expanded" suffix. Seven of them shipped
+    // two backends each, a reflection-driven one and an "-expanded" one; only
+    // the expanded half survives and the short name now means it. The other four
+    // (lua, qt, qml, imgui) never had a thin twin and only wore the suffix
+    // because their siblings did. The registry still answers to the old
+    // spellings, but everything downstream of here keys off the lang STRING —
+    // the output directory (bindings/<lang>), the per-language build recipe, the
+    // wheel check — so an un-canonicalised alias would generate into
+    // bindings/node and then look for bindings/node-expanded to build. Fold it
+    // here, once.
     const auto canonical_lang = [](std::string lang) {
-        static const char *kCollapsed[] = {"python", "nanobind", "node", "wasm",
-                                           "julia",  "csharp",   "java"};
+        static const char *kCollapsed[] = {"python", "nanobind", "node", "wasm", "julia", "csharp",
+                                           "java",   "lua",      "qt",   "qml",  "imgui"};
         for (const char *base : kCollapsed) {
             if (lang == std::string(base) + "-expanded") {
                 std::fprintf(stderr,
                              "rosetta_gen: target \"%s\" is deprecated — it is now spelled "
-                             "\"%s\" (the thin backend it contrasted with is gone)\n",
+                             "\"%s\"\n",
                              lang.c_str(), base);
                 return std::string(base);
             }
@@ -819,7 +822,7 @@ Manifest load(const fs::path &manifest_path) {
     if (j.contains("cpp26_lib")) {
         m.cpp26_lib = j.at("cpp26_lib").get<std::string>();
     }
-    // Optional Qt 6 install prefix for the qt-expanded / qml-expanded backends.
+    // Optional Qt 6 install prefix for the qt / qml backends.
     if (j.contains("qt_dir")) {
         m.qt_dir = j.at("qt_dir").get<std::string>();
     }

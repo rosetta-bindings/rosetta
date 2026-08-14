@@ -20,7 +20,7 @@
 #include <iostream>
 #include <map>
 #include <rosetta/generate.h>            // rosetta::to_markdown
-#include <rosetta/visitors/json_visitor.h> // rosetta::to_json / from_json
+#include <rosetta/visitors/json.h> // rosetta::to_json / from_json
 #include <string>
 
 // ---- single inheritance ----------------------------------------------------

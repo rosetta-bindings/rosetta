@@ -12,7 +12,7 @@
 #
 # Requires node-addon-api and NOTHING else: the generated binding is fully
 # expanded, so a stock compiler builds it (rosetta's include dir is still on the
-# path for node_runtime.h, which is ordinary C++20). Only rosetta's own
+# path for runtime/node.h, which is ordinary C++20). Only rosetta's own
 # generator needs the clang-p2996 fork.
 
 cmake_minimum_required(VERSION 3.28)

@@ -32,14 +32,14 @@ name" is not something every runtime can express.
 | python (pybind11) | **all overloads** | repeated `.def("at", …)` builds one overload set; pybind dispatches on argument types |
 | nanobind | **all overloads** | same model as pybind11 *(previously skipped overload sets entirely)* |
 | julia (jlcxx) | **all overloads** | each becomes a Julia method; Julia's multiple dispatch picks |
-| qt-expanded | **all overloads** | builds an independent widget row per method — nothing is keyed by name |
+| qt | **all overloads** | builds an independent widget row per method — nothing is keyed by name |
 | wasm (embind) | first only | a second `.function("at", …)` throws `BindingError` at module init |
 | node (N-API) | first only | property descriptors are keyed by name; JS has no type dispatch |
-| lua-expanded (sol2) | first only | `c["at"] = …` is an assignment — a second one overwrites *(previously skipped the whole set)* |
+| lua (sol2) | first only | `c["at"] = …` is an assignment — a second one overwrites *(previously skipped the whole set)* |
 | csharp / java | first only | the op table is a name-keyed map, and marshalling goes through JSON |
 | typescript | first only | the `.d.ts` describes the N-API module, so it must not promise what node did not bind |
 | rest | first only | a route is a URL path; two overloads would register the same path |
-| qml-expanded | first only | `registerInvoker` is keyed by name and QML calls with an untyped `QVariantList` |
+| qml | first only | `registerInvoker` is keyed by name and QML calls with an untyped `QVariantList` |
 
 "First" always means **first-declared**, which is stable across regenerations.
 

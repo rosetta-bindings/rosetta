@@ -8,13 +8,13 @@ the machine that compiles the binding. It ships eleven such targets:
 - **`nanobind`** → a [nanobind](https://github.com/wjakob/nanobind) module
   (leaner/faster pybind11 successor) — stock **C++17**, smallest binary of the set.
 - **`node`** → an N-API addon that builds with a stock **C++20** compiler
-  (uses the header-only, reflection-free `node_runtime.h`).
+  (uses the header-only, reflection-free `runtime/node.h`).
 - **`wasm`** → an emscripten/embind module that builds with a **stock emsdk**
   (no reflection-aware fork — the limitation noted for the plain `wasm` target).
-- **`qt-expanded`** → a Qt Widgets inspector window (stock **C++17** + Qt 6) via the
-  header-only, reflection-free `qt_widgets_runtime.h`; no moc on the generated code.
-- **`qml-expanded`** → a QtQuick inspector (stock **C++17** + Qt 6) that fills the
-  generic `ReflectedObject` bridge; moc runs only on that bridge, never per type.
+- **`qt`** → a Qt Widgets inspector window (stock **C++17** + Qt 6) via the
+  header-only, reflection-free `runtime/qt_widgets.h`; no moc on the generated code.
+- **`qml`** → a QtQuick inspector (stock **C++17** + Qt 6) that fills the generic
+  `ReflectedObject` bridge; moc runs only on that bridge, never per type.
 - **`csharp`** → a native shared library (stock **C++20**) exposing a flat
   C ABI, plus idiomatic handle-backed C# wrappers that reach it through P/Invoke
   (values marshalled as JSON via `System.Text.Json`); ships a `.csproj`. The native
@@ -23,8 +23,8 @@ the machine that compiles the binding. It ships eleven such targets:
   flow straight in (e.g. `Triangle.a` rejects an out-of-range value at run time).
 - **`java`** → the same C-ABI shim (stock **C++20**) plus handle-backed
   Java wrappers reaching it through the FFM API (`java.lang.foreign`).
-- **`lua-expanded`** → a [sol2](https://github.com/ThePhD/sol2) module (stock
-  **C++17** + Lua 5.1–5.4 / LuaJIT; sol2 fetched automatically) built as a plain
+- **`lua`** → a [sol2](https://github.com/ThePhD/sol2) module (stock **C++17** +
+  Lua 5.1–5.4 / LuaJIT; sol2 fetched automatically) built as a plain
   `require`-able C module (`luaopen_luageom` in `luageom.so`). Vector parameters
   accept plain Lua tables (a second `sol::nested` overload is generated beside
   the exact one), a Lua function converts natively into a `std::function`
@@ -40,12 +40,12 @@ the machine that compiles the binding. It ships eleven such targets:
   convention (`x(p)` / `x!(p, v)`), and the `range` annotation validates in the
   generated setter.
 
-- **`imgui-expanded`** → a Dear ImGui inspector app (stock **C++20**; ImGui and
-  GLFW are fetched automatically at configure time) — the immediate-mode
-  counterpart of `qt-expanded`. One tab per class; ranged fields become
-  clamping sliders (`Triangle.a/b/c`), enums become combos, docs become "(?)"
-  tooltips, and scalar methods get a call button. `ROSETTA_IMGUI_FRAMES=N`
-  auto-exits after N frames (smoke tests).
+- **`imgui`** → a Dear ImGui inspector app (stock **C++20**; ImGui and GLFW are
+  fetched automatically at configure time) — the immediate-mode counterpart of
+  `qt`. One tab per class; ranged fields become clamping sliders
+  (`Triangle.a/b/c`), enums become combos, docs become "(?)" tooltips, and
+  scalar methods get a call button. `ROSETTA_IMGUI_FRAMES=N` auto-exits after N
+  frames (smoke tests).
 
 Two things make the stock-toolchain targets possible:
 
@@ -56,12 +56,13 @@ Two things make the stock-toolchain targets possible:
    wired in by the manifest's `"annotations"` field. So the bound headers
    themselves are stock C++ and parse under any compiler.
 
-2. **The `*-expanded` targets.** Instead of emitting a thin binding that re-runs
-   the reflection walk at the target's compile time (the plain `python` /
-   `nanobind` / `node` / `wasm` targets), these backends fully expand every field,
-   method, constructor and enumerator into explicit pybind11 / nanobind / N-API /
-   embind calls. The generated TU includes only the binding-framework headers plus
-   the (stock) user headers.
+2. **Expansion.** Rather than emit a binding that re-runs the reflection walk at
+   the target's compile time, every backend fully expands each field, method,
+   constructor and enumerator into explicit pybind11 / nanobind / N-API / embind
+   calls. The generated TU includes only the binding-framework headers plus the
+   (stock) user headers. (Until 2026-08 this was the distinguishing half of a
+   `*-expanded` target; the thin variants are gone and every target works this
+   way, so the suffix no longer appears in a manifest.)
 
 The docstrings and the `range` validation on `Triangle::a/b/c` are baked into the
 generated source as literal C++ — even though the headers carry none — because
@@ -111,15 +112,15 @@ cmake --build bindings/wasm/build -j
 ```sh
 # Qt prefix defaults to ~/Qt/6.8.3/macos; set it per-project with "qt_dir" in
 # manifest.json, or override at configure time with -DQT_DIR=...
-cmake -S bindings/qt-expanded  -B bindings/qt-expanded/build  && cmake --build bindings/qt-expanded/build  -j
-cmake -S bindings/qml-expanded -B bindings/qml-expanded/build && cmake --build bindings/qml-expanded/build -j
-#   -> ./bindings/qt-expanded/build/geom_qt    (QTabWidget, one inspector per class)
-#   -> ./bindings/qml-expanded/build/geom_qml  (QtQuick inspector via the generic ReflectedObject)
+cmake -S bindings/qt  -B bindings/qt/build  && cmake --build bindings/qt/build  -j
+cmake -S bindings/qml -B bindings/qml/build && cmake --build bindings/qml/build -j
+#   -> ./bindings/qt/build/geom_qt    (QTabWidget, one inspector per class)
+#   -> ./bindings/qml/build/geom_qml  (QtQuick inspector via the generic ReflectedObject)
 ```
 
-`qt-expanded` includes only Qt + the (stock) user headers — no moc on the generated
-code. `qml-expanded` reuses rosetta's generic `ReflectedObject` + `qml/Inspector.qml`,
-so moc runs on that bridge only, never on per-type reflection.
+`qt` includes only Qt + the (stock) user headers — no moc on the generated code.
+`qml` reuses rosetta's generic `ReflectedObject` + `qml/Inspector.qml`, so moc
+runs on that bridge only, never on per-type reflection.
 
 ### 3f. C# — native library (stock C++20) + .NET assembly
 ```sh
@@ -145,10 +146,10 @@ At run time the .NET loader must find `libcsgeom.*` (e.g.
 
 ### 3g. Dear ImGui — inspector app (stock C++20, deps auto-fetched)
 ```sh
-cmake -S bindings/imgui-expanded -B bindings/imgui-expanded/build
-cmake --build bindings/imgui-expanded/build -j
-./bindings/imgui-expanded/build/geom_imgui          # opens the inspector window
-ROSETTA_IMGUI_FRAMES=5 ./bindings/imgui-expanded/build/geom_imgui  # smoke test
+cmake -S bindings/imgui -B bindings/imgui/build
+cmake --build bindings/imgui/build -j
+./bindings/imgui/build/geom_imgui          # opens the inspector window
+ROSETTA_IMGUI_FRAMES=5 ./bindings/imgui/build/geom_imgui  # smoke test
 ```
 
 ### 3h. Julia — jlcxx module (stock C++20 + CxxWrap.jl)
@@ -167,9 +168,9 @@ Unlike the thin `julia` target, `std::vector` is fully bound here (`getPoints`,
 ```sh
 # sol2 is fetched automatically at configure time; on macOS `brew install lua@5.4`
 # (sol2 does not support Lua 5.5 yet — the generated CMake prefers a 5.4 install)
-cmake -S bindings/lua-expanded -B bindings/lua-expanded/build
-cmake --build bindings/lua-expanded/build -j
-#   -> bindings/lua-expanded/luageom.so — a require-able C module
+cmake -S bindings/lua -B bindings/lua/build
+cmake --build bindings/lua/build -j
+#   -> bindings/lua/luageom.so — a require-able C module
 ```
 
 ```lua
@@ -195,7 +196,7 @@ python3 -m http.server 8000   # wasm running in a browser
 
 DYLD_LIBRARY_PATH=bindings/csharp/build dotnet run --project run # csharp
 
-# lua-expanded (luageom — tables, callbacks, range). Use the SAME Lua version
+# lua (luageom — tables, callbacks, range). Use the SAME Lua version
 # the module was built against (Homebrew's plain `lua` is 5.5 — unsupported):
 /opt/homebrew/opt/lua@5.4/bin/lua example_lua.lua
 

@@ -51,7 +51,7 @@ Fill in the generated `manifest.json` — the scaffold leaves `classes` empty; a
   "user_sources": ["./src/*.cxx"],
   "rosetta_include": "./extern/rosetta/include",
   "generator_name": "my_lib_gen",
-  "targets": ["python", "node", "rest-expanded", "wasm"],
+  "targets": ["python", "node", "rest", "wasm"],
   "classes": [
     { "name": "Person", "header": "person.h" }
   ]
@@ -104,7 +104,7 @@ cmake -B build && cmake --build build
 | `out_params` | — | `{}` | Which parameters a method returns **through a reference**, keyed `"Class::method"`. Never inferred. See [below](#out-parameters-out_params). |
 | `module_init` | — | — | Statements the generated module runs when it **loads** (plus the headers declaring them) — a library's lifecycle, which is not a binding. See [below](#module-init-module_init). |
 | `generated_headers` | — | `[]` | Headers the bound library's own build system would have produced (e.g. a configured `version.h`), written into the generated tree and put first on the include path. See [below](#generated-headers-generated_headers). |
-| `qt_dir` | — | a built-in path | Qt 6 install prefix used by the `qt` / `qml` (and `-expanded`) backends. e.g. `"$ENV{HOME}/Qt/6.8.3/macos"`. |
+| `qt_dir` | — | a built-in path | Qt 6 install prefix used by the `qt` / `qml` backends. e.g. `"$ENV{HOME}/Qt/6.8.3/macos"`. |
 | `cpp26_root` | — | `$ENV{HOME}/devs/c++/clang-p2996/build` | Root of the C++26 / P2996 reflection toolchain. The generator always needs it; of the targets, only `rest` does. Moves `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` together. |
 | `cpp26_cxx` | — | `${cpp26_root}/bin/clang++` | C++ compiler (name or path) for the reflection toolchain. |
 | `cpp26_cc` | — | `${cpp26_root}/bin/clang` | C compiler (name or path). |
@@ -161,7 +161,7 @@ That happens as soon as two bound namespaces declare the same identifier — e.g
 
 Python then sees `arch.Data` (the `sinv` one) and `arch.SlipData`; C++ is untouched. Cross-references follow the rename automatically — a TypeScript signature touching `arch::Data` says `SlipData`, and the emitted C++ spells every bound class by its **qualified** name, so the shared identifier never becomes ambiguous in the generated TU.
 
-`expose` is honored by **every** backend — the runtime ones (`python`, `nanobind`, `node`, `wasm`, `lua-expanded`, `julia`), the C-ABI ones (`csharp`, `java` — where it also names the generated `.cs` / `.java` file and the runtime type key), the UI inspectors (`qt`, `qml`, `imgui`), `rest` / `openapi` (route paths and schema names), and the text outputs (`typescript`, `markdown`, `html`, `json`, `paraview`). The same field works on an **enum** entry, and on a **free function** or **extension method** — see [Functions](#functions).
+`expose` is honored by **every** backend — the runtime ones (`python`, `nanobind`, `node`, `wasm`, `lua`, `julia`), the C-ABI ones (`csharp`, `java` — where it also names the generated `.cs` / `.java` file and the runtime type key), the UI inspectors (`qt`, `qml`, `imgui`), `rest` / `openapi` (route paths and schema names), and the text outputs (`typescript`, `markdown`, `html`, `json`, `paraview`). The same field works on an **enum** entry, and on a **free function** or **extension method** — see [Functions](#functions).
 
 The rule each backend follows is the same: the exposed name is what appears in the host language (module attribute, class / enum declaration, route path, doc heading, generated file name), while every C++ spelling it emits uses the **qualified** name — which is what makes two same-named bound types unambiguous in the generated TU.
 
@@ -265,7 +265,7 @@ m.set_surface(coords, triangles)   # calls georo::set_surface(m, ...)
 print(len(m.vertices()) // 3)
 ```
 
-The receiver is dropped from the exposed signature; the remaining parameters and the return type marshal exactly like a free function's. The method name is the function's unqualified identifier. Supported by the `python`, `nanobind`, `node`, `wasm` targets and all text backends (`typescript`, `markdown`, `html`); backends that can only emit member pointers (`qt-expanded`/`qml-expanded`/`csharp`/`java`) skip them.
+The receiver is dropped from the exposed signature; the remaining parameters and the return type marshal exactly like a free function's. The method name is the function's unqualified identifier. Supported by the `python`, `nanobind`, `node`, `wasm` targets and all text backends (`typescript`, `markdown`, `html`); backends that can only emit member pointers (`qt`/`qml`/`csharp`/`java`) skip them.
 
 ---
 
@@ -314,7 +314,7 @@ The top-level `out_dir` is the default for every target that names none; a targe
 
 This is **not** where the generated project goes (that is `rosetta_gen`'s own output tree, `--bindings-dir`) — it is where the loadable artifact lands: `libfoo.so` / `foo.pyd`, `foo.node`, `foo.so` for Lua, and for wasm **both** halves, the `.js` loader and its `.wasm`. The copy is `copy_if_different`, so an unchanged build touches nothing downstream, and the existing next-to-the-sources copy still happens.
 
-Supported by every backend that builds a loadable module: `python`, `python`, `nanobind`, `nanobind`, `node`, `node`, `wasm`, `wasm`, `lua-expanded`, `julia`, `julia`. The document backends (`markdown`, `typescript`, `json`, …) have no artifact to place, and the application-shaped ones (`qt`, `qml`, `imgui`, `rest`, `csharp`, `java`) are not covered.
+Supported by every backend that builds a loadable module: `python`, `nanobind`, `node`, `wasm`, `lua`, `julia`. The document backends (`markdown`, `typescript`, `json`, …) have no artifact to place, and the application-shaped ones (`qt`, `qml`, `imgui`, `rest`, `csharp`, `java`) are not covered.
 
 ---
 
@@ -328,7 +328,7 @@ Many libraries carry their bulk data in their **own vector type** — geogram's 
 
 `rosetta_gen` emits `template <typename T> struct rosetta::is_sequence<GEO::vector<T>> : std::true_type {};` into the generated `bindings.h` (equivalently, write that specialization yourself for programmatic use — see `rosetta/sequence.h`). The container must be default-constructible with `value_type`, `size()`, `resize(n)` and `begin()`/`end()`; elements must be arithmetic, `bool`, `std::string` or a bound enum.
 
-The opted-in backends (`python`, `nanobind`, `node`, `wasm`, `lua-expanded`, plus `typescript` declarations) marshal it **by copy through a `std::vector<element>` boundary** inside an emitted adapter — scripts pass and receive plain arrays/lists/tables. Every other backend keeps skipping the type (the IR leaves `kind` "unknown", like raw pointers and callbacks). Three consequences worth knowing:
+The opted-in backends (`python`, `nanobind`, `node`, `wasm`, `lua`, plus `typescript` declarations) marshal it **by copy through a `std::vector<element>` boundary** inside an emitted adapter — scripts pass and receive plain arrays/lists/tables. Every other backend keeps skipping the type (the IR leaves `kind` "unknown", like raw pointers and callbacks). Three consequences worth knowing:
 
 - **Mutable `Seq&` parameters bind, input-only** — the adapter's local container is a real lvalue (geogram's `assign_points(vector<double>&, dim, steal)` works; `steal` steals from the adapter's copy, which is fine). In-place mutations are discarded, exactly like pybind's `std::vector&` casters.
 - **Overload sets whose sequence overload is the one that binds** — the adapter calls the method *by name* with concrete arguments instead of spelling the ambiguous `&T::name` member pointer. The walk now emits every overload, but a backend that keys methods by name binds the **first-declared** one (see [overloads and coverage](COVERAGE.md)), so `GEO::MeshVertices::assign_points` (sequence overload first) binds; a set whose first declaration is the raw-pointer one stays skipped there.
@@ -362,7 +362,7 @@ Entries take the **same two forms** as `sequences`: a plain string for a one-typ
 
 The type must be default-constructible with `value_type`, `rows()`, `cols()`, `resize(r, c)` and `operator()(i, j)`; the element must be **arithmetic** (a grid of strings has no natural script shape).
 
-The opted-in backends (`python`, `nanobind`, `node`, `wasm`, `lua-expanded`, plus `typescript` declarations, which say `number[][]`) marshal it **by copy through a `std::vector<std::vector<element>>` boundary** — an array of row arrays. Every other backend keeps skipping the type, exactly as for sequences.
+The opted-in backends (`python`, `nanobind`, `node`, `wasm`, `lua`, plus `typescript` declarations, which say `number[][]`) marshal it **by copy through a `std::vector<std::vector<element>>` boundary** — an array of row arrays. Every other backend keeps skipping the type, exactly as for sequences.
 
 Three things to know:
 
@@ -405,7 +405,7 @@ This replaces the flat-array extension-method pattern for the Python-family back
 
 ### Reaching the caster-less backends: register the type as a sequence too
 
-`node` / `wasm` / `lua-expanded` have no caster to lean on, so on their own they skip every Eigen-typed member. Give them the flat array by ALSO registering the concrete type under [`sequences`](#registering-a-concrete-type):
+`node` / `wasm` / `lua` have no caster to lean on, so on their own they skip every Eigen-typed member. Give them the flat array by ALSO registering the concrete type under [`sequences`](#registering-a-concrete-type):
 
 ```json
 "interop":   ["eigen"],
@@ -417,7 +417,7 @@ The IR then carries both marks, and each backend picks:
 | Backend | Behaviour |
 | --- | --- |
 | `python` / `nanobind` | The **caster wins** — still numpy, still no copy. A dual-marked type costs them nothing. |
-| `node` / `wasm` / `lua-expanded` | Bind through the **sequence adapter**: `Eigen::VectorXd` in, out and back through a `std::vector<double>` boundary; scripts see a plain array. |
+| `node` / `wasm` / `lua` | Bind through the **sequence adapter**: `Eigen::VectorXd` in, out and back through a `std::vector<double>` boundary; scripts see a plain array. |
 | `typescript` | Declares `number[]`, matching what those runtimes hand out. |
 
 The sequence rules apply as written — the copy is real, and a mutable `Eigen::VectorXd&` parameter binds input-only.
@@ -452,7 +452,7 @@ families differ in how they honour it:
 | Backend | Behaviour |
 | --- | --- |
 | `python` / `nanobind` | **Native**, through `<pybind11/stl/filesystem.h>` / `<nanobind/stl/filesystem.h>` — callers pass a `str` **or** any `os.PathLike`, and a returned path comes back as `pathlib.Path`. |
-| `node` / `wasm` / `lua-expanded` | Through the same **copy adapter** the foreign containers use: the boundary declares `std::string`, the emitted code builds a `std::filesystem::path` from it and calls `.string()` on the way back. Scripts see a plain string. |
+| `node` / `wasm` / `lua` | Through the same **copy adapter** the foreign containers use: the boundary declares `std::string`, the emitted code builds a `std::filesystem::path` from it and calls `.string()` on the way back. Scripts see a plain string. |
 | `typescript` | Declares `string`. |
 
 **`std::shared_ptr<T>` crosses in the return direction**, which is where a
@@ -464,7 +464,7 @@ backend does with it:
 | `python` | `py::class_<T, std::shared_ptr<T>>` — the holder is declared automatically for every pointee the module hands out. |
 | `nanobind` | Native, through `<nanobind/stl/shared_ptr.h>`. |
 | `wasm` | The class registration gains `.smart_ptr<std::shared_ptr<T>>("T_sp")`, and only for classes that actually travel that way. |
-| `lua-expanded` | Native — sol2's own `unique_usertype_traits` handles it; the userdata is T's usertype. |
+| `lua` | Native — sol2's own `unique_usertype_traits` handles it; the userdata is T's usertype. |
 | `node` | The JS object **adopts** the pointer: a third ownership mode in the wrapper, next to "owns" and "aliases a member of a pinned parent". The C++ object lives as long as the JS handle does. |
 | `typescript` | Declares the **pointee** (`Doc`), not `shared_ptr`. |
 
@@ -510,7 +510,7 @@ ok, uv, dim = mesh.facet_corners.attributes().get_doubles("tex_coord")
 | Backend | Shape |
 | --- | --- |
 | `python` / `nanobind` | A tuple — `(ok, uv, dim)`. |
-| `lua-expanded` | Lua's own **multiple returns** — `local ok, uv, dim = …`. |
+| `lua` | Lua's own **multiple returns** — `local ok, uv, dim = …`. |
 | `node` | An **array** — `const [ok, uv, dim] = …`. |
 | `wasm` | An array too, built as an `emscripten::val` (embind marshals no tuple). |
 | `typescript` | A tuple type: `get_doubles(arg0: string): [boolean, number[], number]`. |
@@ -571,7 +571,7 @@ is *fixed* start-up work, not a configurable entry point. Anything a caller
 should be able to vary (a verbosity flag, a thread count) still belongs in a
 bound function.
 
-Emitted by the `python`, `nanobind`, `node`, `wasm`, `lua-expanded` and `julia`
+Emitted by the `python`, `nanobind`, `node`, `wasm`, `lua` and `julia`
 backends — the ones with a module entry point. The C#, Java,
 REST, Qt/QML/ImGui and documentation backends ignore the field: they have no
 single load-time hook to hang it on.
@@ -708,7 +708,7 @@ bind two of them:
 Backends form the function pointer through a disambiguating
 `static_cast<void(*)(…)>(&GEO::mesh_union)` — including where the pointer is a
 template argument (`napi_free_entry<…>`) — so **every backend that emits a
-pointer binds the selected overload**: python, nanobind, wasm, lua-expanded,
+pointer binds the selected overload**: python, nanobind, wasm, lua,
 node, julia, C#, Java, and typescript declares it like any other function. The
 one that spells the function's *reflection* instead — `rest`, which emits
 `bind_rest_function<^^name>` — **skips the entry with a note on stderr**: there
@@ -760,22 +760,22 @@ The flags are emitted **after** the template's own `target_link_options`, so on 
 
 ### Available `lang` values
 
-Thin (reflection re-runs at the target's compile time — needs the C++26 toolchain to build) and **expanded** (reflection runs once on the host; the generated code builds with a stock compiler).
+Every compiled target is **expanded**: reflection runs once on the generation host and the emitted code builds with a stock compiler. `rest` is the exception — its generated server still splices reflections, so it alone needs the C++26 toolchain to build.
 
-| `lang` | Output | Expanded variant |
+| `lang` | Output | Builds with |
 |---|---|---|
-| `python` | pybind11 extension module | `python` |
-| `nanobind` | nanobind extension module | `nanobind` |
-| `node` | N-API native addon | `node` |
-| `wasm` | Emscripten / embind module | `wasm` |
-| `qt` | Qt Widgets property/method inspector | `qt-expanded` |
-| `imgui-expanded` | Dear ImGui inspector app (GLFW + OpenGL3, auto-fetched) | expanded only |
-| `qml` | QML / QtQuick inspector | `qml-expanded` |
-| `csharp` | C-ABI shared lib + P/Invoke wrappers | `csharp` |
-| `java` | C-ABI + handle-backed FFM wrappers | `java` |
-| `julia` | CxxWrap.jl / jlcxx shared module | `julia` (adds `std::vector` support) |
-| `lua-expanded` | sol2 shared module, `require`-able (Lua 5.1–5.4 / LuaJIT) | expanded only |
-| `rest` | cpp-httplib JSON server + browser client | — |
+| `python` | pybind11 extension module | stock compiler |
+| `nanobind` | nanobind extension module | stock compiler |
+| `node` | N-API native addon | stock compiler |
+| `wasm` | Emscripten / embind module | stock emsdk |
+| `qt` | Qt Widgets property/method inspector | stock compiler + Qt 6 |
+| `imgui` | Dear ImGui inspector app (GLFW + OpenGL3, auto-fetched) | stock compiler |
+| `qml` | QML / QtQuick inspector | stock compiler + Qt 6 |
+| `csharp` | C-ABI shared lib + P/Invoke wrappers | stock compiler + .NET |
+| `java` | C-ABI + handle-backed FFM wrappers | stock compiler + JDK |
+| `julia` | CxxWrap.jl / jlcxx shared module | stock compiler + CxxWrap.jl |
+| `lua` | sol2 shared module, `require`-able (Lua 5.1–5.4 / LuaJIT) | stock compiler |
+| `rest` | cpp-httplib JSON server + browser client | **C++26 toolchain** |
 | `openapi` | OpenAPI 3.1 spec | text output |
 | `json` | nlohmann (de)serialization | text output |
 | `typescript` | ambient `.d.ts` declarations | text output |
@@ -783,9 +783,11 @@ Thin (reflection re-runs at the target's compile time — needs the C++26 toolch
 | `html` | styled API reference page | text output |
 | `paraview` | ParaView Server Manager plugin XML | text output |
 
+Each name also accepts a deprecated `-expanded` spelling (`lua-expanded`, `qt-expanded`, …) resolving to the same backend, so manifests written before the suffix was dropped keep working.
+
 The text-only outputs (`markdown`, `html`, `json`, `typescript`, `openapi`, `paraview`) don't compile anything, so the C++26-vs-stock distinction doesn't apply — they're produced directly.
 
-> **Why expanded?** If your *target* compiler doesn't support reflection, use the `-expanded` variants: generate once on a C++26 / P2996 host, then ship and build the generated sources anywhere with a stock toolchain (plain Clang / GCC / MSVC, stock emsdk, stock Qt 6). The generator host still needs C++26; the target does not. Pairs naturally with out-of-line annotations so the bound headers stay stock C++ too. See [`examples/geom-expanded`](../examples/geom-expanded).
+> **Why expanded?** Your *target* compiler doesn't have to support reflection: generate once on a C++26 / P2996 host, then ship and build the generated sources anywhere with a stock toolchain (plain Clang / GCC / MSVC, stock emsdk, stock Qt 6). The generator host still needs C++26; the target does not. Pairs naturally with out-of-line annotations so the bound headers stay stock C++ too. See [`examples/geom-expanded`](../examples/geom-expanded).
 
 ---
 

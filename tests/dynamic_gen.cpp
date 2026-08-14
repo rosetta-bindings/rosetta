@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: UNLICENSED
 
 // Google Test suite for the `dynamic` backend — the emitter that turns the IR
-// into runtime metadata (see include/rosetta/backends/dynamic_backend.h).
+// into runtime metadata (see include/rosetta/backends/dynamic.h).
 //
 // The companion suite tests/dynamic.cpp exercises the RUNTIME with hand-built
 // tables; this one checks that the emitter produces tables of that same shape.

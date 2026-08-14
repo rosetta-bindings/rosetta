@@ -149,7 +149,7 @@ TEST(InteropEigen, OverloadCastSpellsTheTypeQualified) {
 TEST(InteropEigen, BackendsWithoutACasterSkipTheMembers) {
     const auto c = rosetta::gen_detail::make_context<itp::Solver>("itest");
 
-    for (const char *lang : {"node", "wasm", "lua-expanded"}) {
+    for (const char *lang : {"node", "wasm", "lua"}) {
         const std::string out = rosetta::backend_registry().at(lang)->render(c);
         EXPECT_EQ(out.find("\"solution\""), std::string::npos)
             << lang << " bound an Eigen-returning method it cannot marshal";

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: UNLICENSED
 
 // Auto-Qt-Widgets demo: a property/method inspector window built by
-// one rosetta::walk over Person. The visitor in widget_visitor.h
+// one rosetta::walk over Person. The visitor in visitors/widget.h
 // constructs QSpinBox / QLineEdit / QCheckBox / QPushButton rows
 // directly — no QML, no moc on our side.
 //
@@ -10,7 +10,7 @@
 // See CMakeLists.txt in this folder.
 
 #include "../Algo.h"
-#include <rosetta/visitors/qt_visitor.h>
+#include <rosetta/visitors/qt.h>
 #include <QApplication>
 
 int main(int argc, char *argv[]) {

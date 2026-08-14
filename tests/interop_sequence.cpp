@@ -136,7 +136,7 @@ TEST(InteropSequence, IrCarriesBothMarksWithTheStatedSpelling) {
 TEST(InteropSequence, CasterlessBackendsBindThroughTheFlatAdapter) {
     const auto c = rosetta::gen_detail::make_context<itp::Solver>("itest");
 
-    for (const char *lang : {"node", "wasm", "lua-expanded"}) {
+    for (const char *lang : {"node", "wasm", "lua"}) {
         const std::string out = rosetta::backend_registry().at(lang)->render(c);
         EXPECT_NE(out.find("\"solution\""), std::string::npos)
             << lang << " skipped the returning method the escape hatch is for";
@@ -183,7 +183,7 @@ TEST(InteropSequence, MatrixSplitsTheSameWay) {
     EXPECT_EQ(st.interop, "eigen");
     EXPECT_EQ(st.mat_cpp, "Eigen::MatrixXd");
 
-    for (const char *lang : {"node", "wasm", "lua-expanded"}) {
+    for (const char *lang : {"node", "wasm", "lua"}) {
         const std::string out = rosetta::backend_registry().at(lang)->render(c);
         EXPECT_NE(out.find("\"stiffness\""), std::string::npos)
             << lang << " skipped the matrix member";
@@ -205,7 +205,7 @@ TEST(InteropSequence, TypescriptDeclaresTheFlatArray) {
     const auto c = rosetta::gen_detail::make_context<itp::Solver>("itest");
     // The .d.ts backend writes a file rather than rendering to a string; check
     // the type mapping directly, as the sequence suite does.
-    using rosetta::gen_detail::ts_type;
+    using rosetta::backend::ts_type;
     ASSERT_FALSE(c.classes.empty());
     EXPECT_EQ(ts_type(method_named(c.classes.front(), "solution").ret, c), "number[]");
 }

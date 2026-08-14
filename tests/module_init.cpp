@@ -71,7 +71,7 @@ namespace {
 
     // The backends whose render() returns the module source.
     const std::vector<const char *> kRenderable{"python", "nanobind", "node",
-                                                "wasm",   "lua-expanded"};
+                                                "wasm",   "lua"};
 
 } // namespace
 

@@ -59,7 +59,7 @@ Override either with `-D<name>=...` on the cmake line.
 
 | File                  | Role                                                          |
 |-----------------------|---------------------------------------------------------------|
-| `widget_visitor.h`    | `rosetta::WidgetVisitor<T>` + `build_inspector<T>` entry point|
+| `visitors/widget.h`    | `rosetta::WidgetVisitor<T>` + `build_inspector<T>` entry point|
 | `main.cpp`            | Walks `Person`, shows the inspector                           |
 | `CMakeLists.txt`      | Qt6::Widgets + clang-p2996 wiring                             |
 

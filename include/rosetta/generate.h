@@ -457,7 +457,7 @@ namespace rosetta {
         // reconstruction collapses to the bare identifier. That is not a name
         // the emitted code can resolve: backends open namespaces with
         // `using namespace`, and cannot open a class. Read it through
-        // gen_detail::qualified_of(), which falls back to the old
+        // qualified_of(), which falls back to the old
         // reconstruction when this is empty (hand-built IR).
         std::string qualified;
 
@@ -646,8 +646,8 @@ namespace rosetta {
         std::string cpp26_lib;
 
         // Optional Qt 6 install prefix, baked as the default of the QT_DIR cache
-        // variable in the qt-expanded / qml-expanded CMakeLists. Empty ⇒ built-in
-        // default ($ENV{HOME}/Qt/6.8.3/macos). Overridable at configure time with
+        // variable in the qt / qml CMakeLists. Empty ⇒ built-in default
+        // ($ENV{HOME}/Qt/6.8.3/macos). Overridable at configure time with
         // -DQT_DIR=...; backends other than qt/qml ignore it.
         std::string qt_dir;
 
@@ -784,6 +784,30 @@ namespace rosetta {
         std::vector<std::string> init_headers;
         std::vector<std::string> init_statements;
     };
+
+    /**
+     * @name IR accessors
+     * The vocabulary a backend uses to name a bound type. Two spellings that
+     * are never interchangeable: `qualified_of` is the C++ one, for anything
+     * the generated TU has to compile; `exposed_of` is the host-language one,
+     * honoring the manifest's "expose" rename. `exposed_object_of` resolves
+     * the type an IR entry *references* to its exposed name, which is what a
+     * backend printing a cross-reference (a TypeScript class, a C# type, a doc
+     * link) wants. Defined inline in inline/generate.hxx.
+     *
+     * Public because out-of-tree backends need them as much as the built-in
+     * ones do — see docs/EXTENDING_BACKEND.md. They lived in
+     * `rosetta::gen_detail` until 2026-08 and that spelling still resolves.
+     * @{
+     */
+    std::string qualified_of(const GenClass &k);
+    std::string exposed_of(const GenClass &k);
+    std::string qualified_of(const GenEnum &e);
+    std::string exposed_of(const GenEnum &e);
+    /** @brief Does IR type `t` name the bound class / enumeration `k`? */
+    template <typename K> bool names_type(const GenType &t, const K &k);
+    std::string exposed_object_of(const GenType &t, const GenContext &c);
+    /** @} */
 
     /**
      * @brief Code-generation backend for one target language. Implement this

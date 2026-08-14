@@ -64,7 +64,7 @@ example only needs its own `main.cpp` + `CMakeLists.txt`:
 
 | File                                          | Role                                                          |
 |-----------------------------------------------|---------------------------------------------------------------|
-| `rosetta/visitors/qml_visitor.h` (+ inline)   | `rosetta::QmlVisitor<T>` + `bind_qml<T>` entry point          |
+| `rosetta/visitors/qml.h` (+ inline)   | `rosetta::QmlVisitor<T>` + `bind_qml<T>` entry point          |
 | `rosetta/visitors/qml_reflected_object.h`     | The `Q_OBJECT` adapter exposed to QML (no template parameter) |
 | `rosetta/visitors/qml/Inspector.qml`          | Generic inspector — one `Repeater` over fields / methods      |
 | `main.cpp`                                    | Walks `Person`, registers the wrapper, launches QML           |

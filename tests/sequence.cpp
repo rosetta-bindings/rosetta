@@ -6,7 +6,7 @@
 //
 // A trait-registered container (GEO::vector-style) keeps kind "unknown" in
 // the IR — backends that don't opt in skip it — and the opted-in backends
-// (python/nanobind/node/wasm/lua-expanded + typescript) marshal it by COPY
+// (python/nanobind/node/wasm/lua + typescript) marshal it by COPY
 // through a std::vector<element> boundary inside an emitted adapter. The
 // adapter calls the method BY NAME with concrete arguments, so an overload
 // set whose surviving IR entry is the sequence overload binds too (the
@@ -141,10 +141,10 @@ TEST(Sequence, WasmEmitsAdapterAndRegistersBoundaryVector) {
     EXPECT_EQ(s.find("&SeqGeom::set_points"), std::string::npos);
 }
 
-// ---- lua-expanded ------------------------------------------------------------
+// ---- lua ------------------------------------------------------------
 
 TEST(Sequence, LuaEmitsUserdataAndTableOverloadPair) {
-    const std::string s = source_for("lua-expanded");
+    const std::string s = source_for("lua");
     // Both forms dispatch: container userdata (what a bound sequence return
     // pushes) and a plain Lua table (sol::nested).
     EXPECT_NE(s.find("c[\"set_points\"] = sol::overload("), std::string::npos);
@@ -160,7 +160,7 @@ TEST(Sequence, LuaEmitsUserdataAndTableOverloadPair) {
 TEST(Sequence, TypescriptDeclaresArrays) {
     const auto  c = rosetta::gen_detail::make_context<SeqGeom>("seqtest");
     // The .d.ts backend writes a file; check the type mapping directly.
-    using rosetta::gen_detail::ts_type;
+    using rosetta::backend::ts_type;
     ASSERT_FALSE(c.classes.empty());
     for (const auto &f : c.classes.front().fields) {
         if (f.name == "weights") {

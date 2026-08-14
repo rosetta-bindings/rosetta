@@ -88,13 +88,13 @@ runs, in order:
 
 | Backend | Build |
 |---|---|
-| `python`, `nanobind`, `rest`, `json`, `lua-expanded`, `imgui-expanded`, … | plain `cmake` configure + build |
-| `node`, `node` | `npm install` + `npm run build` |
-| `wasm`, `wasm` | `emcmake cmake` + `cmake --build` |
-| `julia`, `julia` | `cmake` (locates JlCxx by running `julia`) |
-| `csharp`, `csharp` | `cmake`, then `dotnet build` as a second stage |
-| `java`, `java` | `cmake`, then `mvn package` as a second stage |
-| `qt-expanded`, `qml-expanded` | `cmake` with `-DQT_DIR` (see `--qt-dir`) |
+| `python`, `nanobind`, `rest`, `json`, `lua`, `imgui`, … | plain `cmake` configure + build |
+| `node` | `npm install` + `npm run build` |
+| `wasm` | `emcmake cmake` + `cmake --build` |
+| `julia` | `cmake` (locates JlCxx by running `julia`) |
+| `csharp` | `cmake`, then `dotnet build` as a second stage |
+| `java` | `cmake`, then `mvn package` as a second stage |
+| `qt`, `qml` | `cmake` with `-DQT_DIR` (see `--qt-dir`) |
 | `markdown`, `html`, `typescript`, `openapi`, `paraview` | nothing to compile |
 
 A backend whose toolchain is **missing** (no `npm`, no `emcc`, no `julia`…) is *skipped with a note*, not an error — likewise `dotnet` / `mvn` absence downgrades csharp / java to "OK (native only)". A backend whose build **fails** is reported and `--build` exits non-zero *after trying the rest*. Every run ends with a per-backend summary:
@@ -113,7 +113,7 @@ A backend whose toolchain is **missing** (no `npm`, no `emcc`, no `julia`…) is
 --gen-dir DIR            generator project dir   (default: <manifest dir>/gen)
 --bindings-dir DIR       generated bindings dir  (default: <manifest dir>/bindings)
 --clang-p2996-root PATH  -DCLANG_P2996_ROOT for every CMake configure
---qt-dir PATH            -DQT_DIR for the qt-/qml-expanded builds
+--qt-dir PATH            -DQT_DIR for the qt / qml builds
 --only a,b / --skip a,b  restrict the backend builds to / exclude these
 --cmake-arg ARG          extra argument for every CMake configure (repeatable)
 --jobs N, -jN            parallel build jobs (bare -j: one per core)
@@ -160,7 +160,7 @@ bin/rosetta_gen --build manifest.json \
 
 ```bash
 bin/rosetta_gen --build manifest.json \
-    --only qt-expanded,qml-expanded --qt-dir ~/Qt/6.8.3/macos
+    --only qt,qml --qt-dir ~/Qt/6.8.3/macos
 ```
 
 (Equivalently, set `qt_dir` in the manifest itself and drop the flag.)

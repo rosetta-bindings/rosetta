@@ -11,9 +11,9 @@
     "module_name": "algo",
 
     "targets": [
-        { "lang": "imgui-expanded", "name": "algo" },
-        { "lang": "qt-expanded",    "name": "algo" },
-        { "lang": "qml-expanded",   "name": "algo" }
+        { "lang": "imgui", "name": "algo" },
+        { "lang": "qt",    "name": "algo" },
+        { "lang": "qml",   "name": "algo" }
     ],
 
     "classes": [

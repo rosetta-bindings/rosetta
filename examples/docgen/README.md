@@ -60,5 +60,5 @@ Returns a greeting prefixed by the given salutation.
 | `../Algo.h`         | Demo type                                            |
 
 `to_markdown<T>()` is the markdown backend's render-to-string entry point
-(`include/rosetta/backends/markdown_backend.h`); `to_html<T>()` is its HTML
+(`include/rosetta/backends/markdown.h`); `to_html<T>()` is its HTML
 counterpart. Both build on the same reflected IR every backend consumes.

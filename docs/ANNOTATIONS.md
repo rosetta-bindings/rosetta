@@ -94,7 +94,7 @@ Hints pick the editor when more than one would fit the field's type. They are co
 
 ## Who consumes what
 
-- **Scripting backends** (python / nanobind / node / wasm / lua-expanded / julia, plus C# / Java): `doc` → docstrings where the framework has them; `range` → validating setters; `readonly` → getter-only properties. `label`, `button` and `widget::*` are ignored — they are UI concepts.
+- **Scripting backends** (python / nanobind / node / wasm / lua / julia, plus C# / Java): `doc` → docstrings where the framework has them; `range` → validating setters; `readonly` → getter-only properties. `label`, `button` and `widget::*` are ignored — they are UI concepts.
 - **UI inspectors** (qt / qml / imgui): everything — `doc` as tooltips, `range` as slider bounds / commit validation, `readonly` as disabled editors, `combobox` as drop-downs, plus `label` / `button` / `widget::*`.
 - **Document backends** (markdown / html / openapi / typescript): `doc` and the constraints (`range`, `readonly`, `combobox`) are rendered into the reference text / schema.
 
@@ -107,7 +107,7 @@ An annotation a backend has no use for is simply ignored — never an error.
 | | Inline `[[= …]]` | Side-car `.ann.json` |
 |---|---|---|
 | Header stays stock C++ | ✗ (needs the P2996 fork to *parse*) | ✅ |
-| Works with `-expanded` targets on a stock compiler | ✗ (the generated binding `#include`s the header) | ✅ |
+| Generated binding builds on a stock compiler | ✗ (the generated binding `#include`s the header) | ✅ |
 | Third-party headers you can't edit | ✗ | ✅ |
 | Expressiveness | full set | full set (parity) |
 

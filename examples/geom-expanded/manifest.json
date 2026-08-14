@@ -14,14 +14,14 @@
         { "lang": "python",   "name": "pygeom" },
         { "lang": "nanobind", "name": "nbgeom" },
         { "lang": "node",     "name": "jsgeom" },
-        { "lang": "wasm",   "name": "geom" },
-        { "lang": "qt-expanded",     "name": "geom" },
-        { "lang": "qml-expanded",    "name": "geom" },
-        { "lang": "csharp", "name": "csgeom" },
-        { "lang": "java",   "name": "jvgeom" },
-        { "lang": "lua-expanded",    "name": "luageom" },
-        { "lang": "julia",  "name": "jlgeom" },
-        { "lang": "imgui-expanded",  "name": "geom" }
+        { "lang": "wasm",     "name": "geom" },
+        { "lang": "qt",       "name": "geom" },
+        { "lang": "qml",      "name": "geom" },
+        { "lang": "csharp",   "name": "csgeom" },
+        { "lang": "java",     "name": "jvgeom" },
+        { "lang": "lua",      "name": "luageom" },
+        { "lang": "julia",    "name": "jlgeom" },
+        { "lang": "imgui",    "name": "geom" }
     ],
 
     "classes": [

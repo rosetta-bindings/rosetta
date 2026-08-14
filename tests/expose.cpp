@@ -91,7 +91,7 @@ TEST(Expose, WasmBindsTheExposedName) {
 }
 
 TEST(Expose, LuaBindsTheExposedName) {
-    const std::string s = render("lua-expanded", "length");
+    const std::string s = render("lua", "length");
     EXPECT_NE(s.find("m.set_function(\"length\", &expns::norm"), std::string::npos);
 }
 
@@ -105,7 +105,7 @@ TEST(Expose, WithoutOverrideEveryBackendKeepsTheIdentifier) {
     EXPECT_NE(render("python", "").find("m.def(\"norm\", &expns::norm"),
               std::string::npos);
     EXPECT_NE(render("node", "").find("exports.Set(\"norm\""), std::string::npos);
-    EXPECT_NE(render("lua-expanded", "").find("m.set_function(\"norm\", &expns::norm"),
+    EXPECT_NE(render("lua", "").find("m.set_function(\"norm\", &expns::norm"),
               std::string::npos);
 }
 
@@ -179,11 +179,37 @@ TEST(Expose, IrCarriesBothNamesForClassesAndEnums) {
     ASSERT_EQ(c.classes.size(), 1u);
     ASSERT_EQ(c.enums.size(), 1u);
     EXPECT_EQ(c.classes.front().name, "Thing");
+    EXPECT_EQ(rosetta::exposed_of(c.classes.front()), "Widget");
+    EXPECT_EQ(rosetta::qualified_of(c.classes.front()), "rnns::Thing");
+    EXPECT_EQ(c.enums.front().name, "Kind");
+    EXPECT_EQ(rosetta::exposed_of(c.enums.front()), "Flavor");
+    EXPECT_EQ(rosetta::qualified_of(c.enums.front()), "rnns::Kind");
+}
+
+// The IR accessors moved out of gen_detail into rosetta:: (2026-08) because
+// EXTENDING_BACKEND.md documents them to out-of-tree backend authors. The old
+// spelling has to keep compiling for those plugins — and has to name the SAME
+// function, not a copy, which is what taking both addresses proves.
+TEST(Expose, DeprecatedGenDetailSpellingStillResolves) {
+    const auto c = rosetta::gen_detail::make_context<rnns::Thing, rnns::Kind>("rntest");
+    ASSERT_EQ(c.classes.size(), 1u);
+
     EXPECT_EQ(rosetta::gen_detail::exposed_of(c.classes.front()), "Widget");
     EXPECT_EQ(rosetta::gen_detail::qualified_of(c.classes.front()), "rnns::Thing");
-    EXPECT_EQ(c.enums.front().name, "Kind");
-    EXPECT_EQ(rosetta::gen_detail::exposed_of(c.enums.front()), "Flavor");
-    EXPECT_EQ(rosetta::gen_detail::qualified_of(c.enums.front()), "rnns::Kind");
+
+    // A type naming the renamed class resolves to the exposed name either way.
+    rosetta::GenType t;
+    t.object           = "Thing";
+    t.object_qualified = "rnns::Thing";
+    EXPECT_EQ(rosetta::gen_detail::exposed_object_of(t, c), "Widget");
+    EXPECT_EQ(rosetta::exposed_object_of(t, c), "Widget");
+    EXPECT_TRUE(rosetta::gen_detail::names_type(t, c.classes.front()));
+
+    using ClassFn = std::string (*)(const rosetta::GenClass &);
+    EXPECT_EQ(static_cast<ClassFn>(&rosetta::gen_detail::exposed_of),
+              static_cast<ClassFn>(&rosetta::exposed_of));
+    EXPECT_EQ(static_cast<ClassFn>(&rosetta::gen_detail::qualified_of),
+              static_cast<ClassFn>(&rosetta::qualified_of));
 }
 
 TEST(Expose, EveryRenderingBackendUsesTheExposedName) {
@@ -199,7 +225,7 @@ TEST(Expose, EveryRenderingBackendUsesTheExposedName) {
         {"nanobind", "nb::class_<rnns::Thing>(m, \"Widget\")", "(m, \"Thing\")"},
         {"node", "\"Widget\"", "\"Thing\""},
         {"wasm", "emscripten::class_<rnns::Thing>(\"Widget\")", "(\"Thing\")"},
-        {"lua-expanded", "m.new_usertype<rnns::Thing>(\"Widget\"", "(\"Thing\""},
+        {"lua", "m.new_usertype<rnns::Thing>(\"Widget\"", "(\"Thing\""},
         {"julia", "mod.add_type<rnns::Thing>(\"Widget\"", "(\"Thing\""},
         {"csharp", "registry()[\"Widget\"]", "registry()[\"Thing\"]"},
         {"java", "registry()[\"Widget\"]", "registry()[\"Thing\"]"},
@@ -221,21 +247,21 @@ TEST(Expose, RenamedEnumKeepsTheQualifiedCppSpelling) {
     EXPECT_NE(py.find("py::enum_<rnns::Kind>(m, \"Flavor\")"), std::string::npos);
     EXPECT_NE(py.find(".value(\"A\", rnns::Kind::A)"), std::string::npos);
 
-    const std::string lua = renamed("lua-expanded");
+    const std::string lua = renamed("lua");
     EXPECT_NE(lua.find("m.new_enum<rnns::Kind>(\"Flavor\""), std::string::npos);
 
     // The C# / Java wrappers are separate artifacts from what render() returns.
     const auto        c  = rosetta::gen_detail::make_context<rnns::Thing, rnns::Kind>("rntest");
-    const std::string cs = rosetta::gen_detail::csharp_wrapper(c);
+    const std::string cs = rosetta::backend::csharp_wrapper(c);
     EXPECT_NE(cs.find("public enum Flavor"), std::string::npos);
     EXPECT_NE(cs.find("public sealed class Widget"), std::string::npos);
     EXPECT_EQ(cs.find("class Thing"), std::string::npos);
     // A field of the renamed enum type is declared with the renamed type.
     EXPECT_NE(cs.find("Flavor kind"), std::string::npos);
 
-    const std::string jv = rosetta::gen_detail::java_class(c, c.classes.front());
+    const std::string jv = rosetta::backend::java_class(c, c.classes.front());
     EXPECT_NE(jv.find("public final class Widget"), std::string::npos);
     EXPECT_NE(jv.find("_t = \"Widget\""), std::string::npos);
-    const std::string je = rosetta::gen_detail::java_enum(c, c.enums.front());
+    const std::string je = rosetta::backend::java_enum(c, c.enums.front());
     EXPECT_NE(je.find("public enum Flavor"), std::string::npos);
 }

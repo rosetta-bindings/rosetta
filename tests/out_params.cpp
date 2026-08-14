@@ -162,7 +162,7 @@ TEST(OutParams, NodeReturnsATupleForJs) {
 }
 
 TEST(OutParams, LuaReturnsATupleSolUnpacks) {
-    const std::string s = render("lua-expanded", marked_context());
+    const std::string s = render("lua", marked_context());
     EXPECT_TRUE(has(s, "return std::make_tuple(r, "));
 }
 

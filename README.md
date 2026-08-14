@@ -27,16 +27,20 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/bindings-Python%20%7C%20Node%20%7C%20Wasm%20%7C%20TypeScript%20%7C%20Lua%20%7C%20Julia%20%7C%20Csharp%20%7C%20Java-green.svg" alt="Bindings">
+  <img src="https://img.shields.io/badge/bindings-Python%20%7C%20Node%20%7C%20Wasm%20%7C%20TypeScript%20%7C%20Lua%20%7C%20Julia%20%7C%20Csharp%20%7C%20Java%20%7C%20Dynamic-green.svg" alt="Bindings">
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/bindings-Qt%20%7C%20QML%20%7C%20ImGUI%20%7C%20ParaView%20%7C%20Json%20%7C%20Html%20%7C%20REST%20%7C%20OpenAPI%20%7C%20Markdown-green.svg" alt="Bindings">
+  <img src="https://img.shields.io/badge/bindings-Qt%20%7C%20QML%20%7C%20ImGUI-green.svg" alt="Bindings">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/bindings-ParaView%20%7C%20Json%20%7C%20Html%20%7C%20REST%20%7C%20OpenAPI%20%7C%20Markdown-green.svg" alt="Bindings">
 </p>
 
 A C++26 reflection playground with **19 generator backends** — Python (pybind11 / nanobind), Node, WebAssembly, Qt, QML, Dear ImGui, REST, Julia, Lua, OpenAPI, JSON, TypeScript, C#, Java, Markdown, HTML, ParaView, a runtime object model... bindings for **your existing classes — without modifying them**. Point rosetta at a header via a small [manifest.json](./docs/MANIFEST.md), run one tool, get per-language binding projects out.
 
-> **Your target compiler doesn't support reflection?** Generate the expanded binding once on a Linux or macOS host with a C++26 / P2996 compiler — e.g. the [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) fork — then ship and build the generated sources anywhere with a stock toolchain (plain Clang / GCC / MSVC, or a stock emsdk for WebAssembly). No reflection is needed on the target (see the **expanded** backends below).
+> **Your target compiler doesn't support reflection?** Generate the expanded binding once on a Linux or macOS host with a C++26 / P2996 compiler — e.g. the [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) fork — then ship and build the generated sources anywhere with a stock toolchain (plain Clang / GCC / MSVC, or a stock emsdk for WebAssembly). No reflection is needed on the target (see **Reflection-free by construction** below).
 
 Annotations (`doc`, `range`, `readonly`, …) are an *opt-in* enrichment, not a requirement: add them where you want docstrings, validation, or UI hints; leave the rest of the class alone. Reflection does the work either way.
 
@@ -92,15 +96,15 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 | 3 | **Node** (`node`) — N-API native addon | ✅ |
 | 4 | **Julia** (`julia`) — CxxWrap.jl / jlcxx shared module, `std::vector` included | ✅ |
 | 5 | **WebAssembly** (`wasm`) — Emscripten/embind module | ✅ |
-| 6 | **Lua** (`lua-expanded`) — sol2 module, `require`-able (stock C++17) | ✅ |
+| 6 | **Lua** (`lua`) — sol2 module, `require`-able (stock C++17) | ✅ |
 | 7 | **C#** (`csharp`) — native C-ABI shared library + handle-backed P/Invoke wrappers | ✅ |
 | 8 | **Java** (`java`) — native C-ABI + handle-backed FFM wrappers | ✅ |
-| 9 | **Qt Widgets** (`qt-expanded`) — generated property/method inspector via `qt_widgets_runtime.h` | ✅ |
-| 10 | **QML** (`qml-expanded`) — fills a generic `ReflectedObject` explicitly | ✅ |
-| 11 | **Dear ImGui** (`imgui-expanded`) — immediate-mode inspector app (GLFW + OpenGL3, auto-fetched) | ✅ |
+| 9 | **Qt Widgets** (`qt`) — generated property/method inspector via `runtime/qt_widgets.h` | ✅ |
+| 10 | **QML** (`qml`) — fills a generic `ReflectedObject` explicitly | ✅ |
+| 11 | **Dear ImGui** (`imgui`) — immediate-mode inspector app (GLFW + OpenGL3, auto-fetched) | ✅ |
 | 12 | **REST** (`rest`) — cpp-httplib JSON server + generated browser client| — |
 | 13 | **OpenAPI** (`openapi`) — OpenAPI 3.1 spec describing the REST surface | ✅ |
-| 14 | **JSON** — reflection-based nlohmann (de)serialization (`json_visitor.h`) | — |
+| 14 | **JSON** — reflection-based nlohmann (de)serialization (`visitors/json.h`) | — |
 | 15 | **TypeScript** (`typescript`) — ambient `.d.ts` type declarations | ✅ |
 | 16 | **Markdown** (`markdown`) — API reference document | ✅ |
 | 17 | **HTML** (`html`) — self-contained, styled API reference page | ✅ |
@@ -113,13 +117,13 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 >
 > Notes:
 > **Qt/QML** targets need Qt 6 but no moc on the generated code; 
-> **lua-expanded** needs Lua 5.1–5.4 or LuaJIT (sol2 does not support Lua 5.5 yet) — sol2 itself is fetched automatically at configure time. 
+> **lua** needs Lua 5.1–5.4 or LuaJIT (sol2 does not support Lua 5.5 yet) — sol2 itself is fetched automatically at configure time. 
 > **REST** is the one target whose generated code still splices reflections, so it alone needs the C++26 toolchain to build.  
 > **dynamic** is not a language binding: it emits the metadata itself, for a caller that discovers types at run time — see below.
 
 **Reflection-free by construction.** Every binding target **fully expands** each field, method, constructor and enumerator into explicit pybind11 / nanobind / N-API / embind / Qt / sol2 / jlcxx / member-pointer calls (the `dynamic` backend expands them into aggregate-initialized tables and thunks instead — data rather than framework calls, but the same once-on-the-host rule). Reflection runs once, on the generation host; the generated binding is ordinary C++ that builds with a stock compiler — a plain C++17/20 compiler, a stock emsdk, or stock Qt 6 (the host still needs C++26 to *run the generator*, the target does not). This pairs naturally with [out-of-line annotations](docs/OUT_OF_LINE_ANNOTATIONS.md) so the bound headers stay stock C++ too.
 
-> Until 2026-08 seven of these languages shipped a second, *thin* backend whose generated code re-ran the reflection walk at the target's compile time. It has been removed: the short name (`python`, `nanobind`, `node`, `wasm`, `julia`, `csharp`, `java`) now means what `-expanded` used to, and the `-expanded` spellings still resolve for existing manifests.
+> Until 2026-08 seven of these languages shipped a second, *thin* backend whose generated code re-ran the reflection walk at the target's compile time. It has been removed: the short name (`python`, `nanobind`, `node`, `wasm`, `julia`, `csharp`, `java`) now means what `-expanded` used to. `qt`, `qml`, `imgui` and `lua` never had a thin twin at all, and have since dropped the suffix too. No target spells `-expanded` any more — but every old spelling still resolves, so existing manifests keep working.
 
 **Python wheels.** `python` and `nanobind` also emit a `pyproject.toml` and a `make_wheel.py`, so a generated binding goes from source to an installable, redistributable wheel in one command — `python make_wheel.py`, the same on Linux, macOS and Windows. External shared libraries are bundled in and the platform tag repaired; on 3.12+ nanobind wheels are tagged `abi3`, covering every later CPython with a single artifact. See [Python wheels](docs/MANIFEST.md#python-wheels-version).
 
@@ -359,7 +363,7 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 | `examples/manifest`        | Manifest-driven generation for `Person` (no class modification) |
 | `examples/annotate-manifest`| Out-of-line annotations from an external JSON file, wired by the manifest's `annotations` field ([details](docs/OUT_OF_LINE_ANNOTATIONS.md)) |
 | `examples/geom-lib`        | Manifest-driven bindings for a small geometry library (nested types, vectors) |
-| `examples/geom-expanded`   | Reflection-free `python` / `nanobind` / `node` / `wasm` / `qt-expanded` / `qml-expanded` / `csharp` / `java` / `lua-expanded` / `julia` bindings (stock compiler, stock emsdk, stock Qt, any Lua 5.1–5.4, CxxWrap.jl) with out-of-line annotations |
+| `examples/geom-expanded`   | Reflection-free `python` / `nanobind` / `node` / `wasm` / `qt` / `qml` / `csharp` / `java` / `lua` / `julia` bindings (stock compiler, stock emsdk, stock Qt, any Lua 5.1–5.4, CxxWrap.jl) with out-of-line annotations |
 | `examples/dynamic`         | The `dynamic` backend end to end: one set of generated metadata driving a terminal interpreter *and* a Qt viewer (3D view + property panel + console), neither naming a bound type |
 | `examples/trampoline-python` | Overriding C++ virtuals from Python — generated pybind11 trampolines from `virtual_spec` |
 | `examples/trampoline-node` | Overriding C++ virtuals from JavaScript — generated N-API trampolines from `virtual_spec` |

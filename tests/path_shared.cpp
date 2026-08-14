@@ -183,7 +183,7 @@ TEST(PathShared, WasmExpandedConvertsAtTheBoundary) {
 }
 
 TEST(PathShared, LuaExpandedConvertsAtTheBoundary) {
-    const std::string s = render("lua-expanded", full_context());
+    const std::string s = render("lua", full_context());
     EXPECT_TRUE(has(s, "std::filesystem::path pth0(arg0);"));
 }
 
@@ -206,7 +206,7 @@ TEST(PathShared, NodeAdoptsASharedPtrReturn) {
 }
 
 TEST(PathShared, LuaTakesTheSharedPtrNatively) {
-    const std::string s = render("lua-expanded", full_context());
+    const std::string s = render("lua", full_context());
     EXPECT_TRUE(has(s, "load_string"));
     EXPECT_TRUE(has(s, "load_node")); // sol2 has no trampoline restriction
 }

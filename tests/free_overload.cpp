@@ -151,7 +151,7 @@ TEST(FreeOverload, WasmEmitsTheCast) {
 }
 
 TEST(FreeOverload, LuaExpandedEmitsTheCast) {
-    const std::string s = render("lua-expanded", ctx_with_functions());
+    const std::string s = render("lua", ctx_with_functions());
     EXPECT_TRUE(has(s, "m.set_function(\"scale\", static_cast<void(*)(int, int)>(&fov::scale)"));
 }
 

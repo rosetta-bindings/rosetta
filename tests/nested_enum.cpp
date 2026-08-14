@@ -53,13 +53,13 @@ TEST(NestedEnum, IrQualifiesThroughTheEnclosingClass) {
     // the wrong spelling — and why the field must stay as it is: it feeds
     // `using namespace`, which a class name would make invalid C++.
     EXPECT_EQ(nested.name_space, "");
-    EXPECT_EQ(rosetta::gen_detail::qualified_of(nested), "nens::Solver::Mode");
+    EXPECT_EQ(rosetta::qualified_of(nested), "nens::Solver::Mode");
     // The host-language name stays the plain identifier.
-    EXPECT_EQ(rosetta::gen_detail::exposed_of(nested), "Mode");
+    EXPECT_EQ(rosetta::exposed_of(nested), "Mode");
 
     const auto &flat = c.enums.back();
     EXPECT_EQ(flat.name, "Flat");
-    EXPECT_EQ(rosetta::gen_detail::qualified_of(flat), "nens::Flat");
+    EXPECT_EQ(rosetta::qualified_of(flat), "nens::Flat");
 }
 
 // A hand-built GenEnum leaves `qualified` empty; qualified_of() must still fall
@@ -68,11 +68,11 @@ TEST(NestedEnum, QualifiedOfFallsBackWhenQualifiedIsEmpty) {
     rosetta::GenEnum e;
     e.name       = "Mode";
     e.name_space = "nens";
-    EXPECT_EQ(rosetta::gen_detail::qualified_of(e), "nens::Mode");
+    EXPECT_EQ(rosetta::qualified_of(e), "nens::Mode");
 
     rosetta::GenEnum global;
     global.name = "Mode";
-    EXPECT_EQ(rosetta::gen_detail::qualified_of(global), "Mode");
+    EXPECT_EQ(rosetta::qualified_of(global), "Mode");
 }
 
 // Every backend that spells the enum as a C++ type must emit the

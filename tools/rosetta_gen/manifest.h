@@ -22,8 +22,8 @@
 //                                                   //   libc++abi (-L/-rpath).
 //                                                   //   Default ${root}/lib
 //     "qt_dir": "$ENV{HOME}/Qt/6.8.3/macos",        // optional: Qt 6 prefix for the
-//                                                   //   qt-expanded / qml-expanded
-//                                                   //   backends. Default that path.
+//                                                   //   the qt / qml backends.
+//                                                   //   Default that path.
 //     "build_type": "Release",                      // optional: default CMAKE_BUILD_TYPE
 //                                                   //   baked into every compiled backend's
 //                                                   //   CMakeLists (Debug | Release |

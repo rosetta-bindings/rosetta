@@ -1,8 +1,8 @@
--- lua-expanded (sol2) demo — module "luageom".
+-- lua (sol2) demo — module "luageom".
 --
 -- Build first (needs Lua 5.1–5.4 or LuaJIT; sol2 is fetched automatically):
---   cmake -S bindings/lua-expanded -B bindings/lua-expanded/build
---   cmake --build bindings/lua-expanded/build -j
+--   cmake -S bindings/lua -B bindings/lua/build
+--   cmake --build bindings/lua/build -j
 -- then run WITH THE SAME LUA VERSION THE MODULE WAS BUILT AGAINST — the CMake
 -- prints it ("Lua headers: ..."). Homebrew's plain `lua` is 5.5, which sol2
 -- does not support; the build therefore prefers lua@5.4, so run e.g.:
@@ -12,7 +12,7 @@
 -- Mirrors example_pybind11.py: same classes, same free function — the module
 -- is a plain `require`-able C module (luaopen_luageom in luageom.so).
 
-package.cpath = package.cpath .. ";./bindings/lua-expanded/?.so"
+package.cpath = package.cpath .. ";./bindings/lua/?.so"
 local geom = require("luageom")
 
 -- A Surface from plain Lua tables (positions, triangle indices): the binding

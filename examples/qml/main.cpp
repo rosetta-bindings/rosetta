@@ -10,7 +10,7 @@
 // See CMakeLists.txt in this folder.
 
 #include "../Algo.h"
-#include <rosetta/visitors/qml_visitor.h>
+#include <rosetta/visitors/qml.h>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>

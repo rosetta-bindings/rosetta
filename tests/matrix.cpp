@@ -107,7 +107,7 @@ TEST(Matrix, RuntimeBackendsBindThroughTheRowArrayBoundary) {
     const auto c = rosetta::gen_detail::make_context<mat::Field>("mtest");
 
     for (const char *lang : {"python", "nanobind", "node",
-                             "wasm", "lua-expanded"}) {
+                             "wasm", "lua"}) {
         const std::string out = rosetta::backend_registry().at(lang)->render(c);
         EXPECT_NE(out.find("\"data\""), std::string::npos) << lang << " skipped the matrix return";
         EXPECT_NE(out.find("\"setData\""), std::string::npos)
@@ -147,7 +147,7 @@ TEST(Matrix, FieldsBindAsCopyingProperties) {
 // TypeScript declares the two-dimensional shape.
 TEST(Matrix, TypescriptDeclaresAnArrayOfRows) {
     const auto c = rosetta::gen_detail::make_context<mat::Field>("mtest");
-    using rosetta::gen_detail::ts_type;
+    using rosetta::backend::ts_type;
     ASSERT_FALSE(c.classes.empty());
     EXPECT_EQ(ts_type(method_named(c.classes.front(), "data").ret, c), "number[][]");
 }

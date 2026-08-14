@@ -14,8 +14,8 @@
 //
 //   * NO reflection, NO <experimental/meta>, NO dependency on generate.h.
 //     It is compiled into the TARGET, next to the generated tables, exactly
-//     like the -expanded backends' runtime headers (node_runtime.h,
-//     qt_widgets_runtime.h). The generation host still needs C++26; the
+//     like the -expanded backends' runtime headers (runtime/node.h,
+//     runtime/qt_widgets.h). The generation host still needs C++26; the
 //     target needs a stock C++20 compiler.
 //
 //   * The tables are static aggregates of trivially-constructible data —
@@ -27,8 +27,8 @@
 //
 //   1. UI built by query, not by codegen. Walk registry().classes(), read
 //      MetaField::range / choices / readonly / doc, emit widgets. This is what
-//      visitors/qml_reflected_object.h, visitors/imgui_runtime.h and
-//      visitors/qt_widgets_runtime.h each hand-roll today against a different
+//      visitors/qml_reflected_object.h, runtime/imgui.h and
+//      runtime/qt_widgets.h each hand-roll today against a different
 //      Any type (QVariant, ImGui state, JSON).
 //
 //   2. One wrapper per language instead of one per class. A Python or Lua

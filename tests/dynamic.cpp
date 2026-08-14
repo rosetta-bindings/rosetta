@@ -5,7 +5,7 @@
 //
 // The metadata below is HAND-BUILT, in exactly the shape the `dynamic` backend
 // emits, so this file doubles as the emitter's specification: if
-// dynamic_backend.hxx produces something these tests would not accept, one of
+// backends/inline/dynamic.hxx produces something these tests would not accept, one of
 // the two is wrong.
 //
 // Deliberately stock C++20 — no <experimental/meta>, no -freflection, no
@@ -54,7 +54,7 @@ namespace demo {
 } // namespace demo
 
 // ---------------------------------------------------------------------------
-// The generated metadata. This is what dynamic_backend.hxx writes out.
+// The generated metadata. This is what backends/inline/dynamic.hxx writes out.
 // ---------------------------------------------------------------------------
 
 namespace {

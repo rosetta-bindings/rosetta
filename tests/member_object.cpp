@@ -176,12 +176,12 @@ TEST(MemberObject, WasmEmitsBorrowedHandleGetter) {
               std::string::npos);
 }
 
-// ---- lua-expanded -----------------------------------------------------------
+// ---- lua -----------------------------------------------------------
 
 TEST(MemberObject, LuaBindsMemberObjectReadonly) {
     // sol2 pushes a class member by REFERENCE, so the non-copyable member
     // object rides the ordinary readonly member-pointer path.
-    const std::string s = source_for("lua-expanded");
+    const std::string s = source_for("lua");
     EXPECT_NE(s.find("sol::readonly(&MoOwner::store)"), std::string::npos);
 }
 
@@ -236,7 +236,7 @@ TEST(MemberObject, NameKeyedBackendsBindExactlyTheFirstOverload) {
               std::string::npos);
 
     // lua used to skip the whole set; it now binds the first overload.
-    const std::string l = source_for("lua-expanded");
+    const std::string l = source_for("lua");
     EXPECT_NE(l.find("c[\"f\"] = static_cast<int (MoOver::*)() const>(&MoOver::f)"),
               std::string::npos);
     EXPECT_EQ(l.find("static_cast<int (MoOver::*)(int) const>(&MoOver::f)"),

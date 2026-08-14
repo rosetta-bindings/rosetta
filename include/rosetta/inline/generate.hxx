@@ -217,74 +217,104 @@ namespace rosetta {
             return std::string(n);
         }
 
-        // The qualified C++ spelling of a bound class, for emitted code. Always
-        // unambiguous — unlike the unqualified `name`, which needs the
-        // `using namespace` directives and breaks down as soon as two bound
-        // namespaces declare the same identifier (the "expose" rename case).
-        inline std::string qualified_of(const GenClass &k) {
-            // Prefers GenClass::qualified, which also carries the enclosing
-            // *classes* — a nested class has an empty `name_space`, so the
-            // namespace-only spelling would emit the bare identifier and fail
-            // to compile. Falls back to `name_space::name` for hand-built IR.
-            if (!k.qualified.empty()) {
-                return k.qualified;
+    } // namespace gen_detail
+
+    // ------------------------------------------------------------------------
+    // IR accessors — PUBLIC. Every backend spells a bound type through these,
+    // and docs/EXTENDING_BACKEND.md documents them to out-of-tree backend
+    // authors, so they are API, not detail: they live in rosetta:: rather than
+    // in gen_detail:: for the same reason Backend / register_backend do. The
+    // built-in backends reach them by unqualified lookup from inside
+    // gen_detail; the pre-2026-08 `rosetta::gen_detail::` spellings still
+    // resolve (see the compatibility block below).
+    // ------------------------------------------------------------------------
+
+    // The qualified C++ spelling of a bound class, for emitted code. Always
+    // unambiguous — unlike the unqualified `name`, which needs the
+    // `using namespace` directives and breaks down as soon as two bound
+    // namespaces declare the same identifier (the "expose" rename case).
+    inline std::string qualified_of(const GenClass &k) {
+        // Prefers GenClass::qualified, which also carries the enclosing
+        // *classes* — a nested class has an empty `name_space`, so the
+        // namespace-only spelling would emit the bare identifier and fail
+        // to compile. Falls back to `name_space::name` for hand-built IR.
+        if (!k.qualified.empty()) {
+            return k.qualified;
+        }
+        return k.name_space.empty() ? k.name : k.name_space + "::" + k.name;
+    }
+
+    // The host-language-visible name of a bound class: the manifest
+    // "expose" override when set, else the reflected identifier. Falls back
+    // to `name` so hand-built GenClass values (tests, render callers) keep
+    // working without filling `expose`.
+    inline std::string exposed_of(const GenClass &k) {
+        return k.expose.empty() ? k.name : k.expose;
+    }
+
+    // Same pair for an enumeration. Prefers GenEnum::qualified, which also
+    // carries the enclosing *classes* — a nested enum has an empty
+    // `name_space`, so the namespace-only spelling would emit the bare
+    // identifier and fail to compile. Falls back to `name_space::name` for
+    // hand-built IR that leaves `qualified` empty.
+    inline std::string qualified_of(const GenEnum &e) {
+        if (!e.qualified.empty()) {
+            return e.qualified;
+        }
+        return e.name_space.empty() ? e.name : e.name_space + "::" + e.name;
+    }
+
+    inline std::string exposed_of(const GenEnum &e) {
+        return e.expose.empty() ? e.name : e.expose;
+    }
+
+    // Does this IR type name that bound class / enumeration? Compares the
+    // QUALIFIED spelling when the IR carries it — `object` alone cannot tell
+    // two bound types apart once they share an unqualified identifier (the
+    // "expose" rename case) — and falls back to the bare identifier so
+    // hand-built IR (tests, render() callers) keeps resolving. Public with the
+    // rest of the cluster: it is what exposed_object_of() is built from, it
+    // takes nothing but public IR types, and holding it back would have split
+    // one group of six accessors across two namespaces.
+    template <typename K> inline bool names_type(const GenType &t, const K &k) {
+        return t.object_qualified.empty() ? (k.name == t.object)
+                                          : (qualified_of(k) == t.object_qualified);
+    }
+
+    // The host-language name of the class / enumeration an IR type names:
+    // its "expose" override when it is bound, else the reflected identifier
+    // the IR carries. Every backend that prints a bound type's name in
+    // generated host-language text (a TypeScript class, a C# / Java type, a
+    // doc cross-reference) should go through this, so a renamed type is
+    // named consistently everywhere it appears.
+    inline std::string exposed_object_of(const GenType &t, const GenContext &c) {
+        for (const auto &k : c.classes) {
+            if (names_type(t, k)) {
+                return exposed_of(k);
             }
-            return k.name_space.empty() ? k.name : k.name_space + "::" + k.name;
         }
-
-        // The host-language-visible name of a bound class: the manifest
-        // "expose" override when set, else the reflected identifier. Falls back
-        // to `name` so hand-built GenClass values (tests, render callers) keep
-        // working without filling `expose`.
-        inline std::string exposed_of(const GenClass &k) {
-            return k.expose.empty() ? k.name : k.expose;
-        }
-
-        // Same pair for an enumeration. Prefers GenEnum::qualified, which also
-        // carries the enclosing *classes* — a nested enum has an empty
-        // `name_space`, so the namespace-only spelling would emit the bare
-        // identifier and fail to compile. Falls back to `name_space::name` for
-        // hand-built IR that leaves `qualified` empty.
-        inline std::string qualified_of(const GenEnum &e) {
-            if (!e.qualified.empty()) {
-                return e.qualified;
+        for (const auto &e : c.enums) {
+            if (names_type(t, e)) {
+                return exposed_of(e);
             }
-            return e.name_space.empty() ? e.name : e.name_space + "::" + e.name;
         }
+        return t.object;
+    }
 
-        inline std::string exposed_of(const GenEnum &e) {
-            return e.expose.empty() ? e.name : e.expose;
-        }
+    namespace gen_detail {
 
-        // Does this IR type name that bound class / enumeration? Compares the
-        // QUALIFIED spelling when the IR carries it — `object` alone cannot tell
-        // two bound types apart once they share an unqualified identifier (the
-        // "expose" rename case) — and falls back to the bare identifier so
-        // hand-built IR (tests, render() callers) keeps resolving.
-        template <typename K> inline bool names_type(const GenType &t, const K &k) {
-            return t.object_qualified.empty() ? (k.name == t.object)
-                                              : (qualified_of(k) == t.object_qualified);
-        }
-
-        // The host-language name of the class / enumeration an IR type names:
-        // its "expose" override when it is bound, else the reflected identifier
-        // the IR carries. Every backend that prints a bound type's name in
-        // generated host-language text (a TypeScript class, a C# / Java type, a
-        // doc cross-reference) should go through this, so a renamed type is
-        // named consistently everywhere it appears.
-        inline std::string exposed_object_of(const GenType &t, const GenContext &c) {
-            for (const auto &k : c.classes) {
-                if (names_type(t, k)) {
-                    return exposed_of(k);
-                }
-            }
-            for (const auto &e : c.enums) {
-                if (names_type(t, e)) {
-                    return exposed_of(e);
-                }
-            }
-            return t.object;
-        }
+        // DEPRECATED spellings. Until 2026-08 the six accessors above lived in
+        // gen_detail, and docs/EXTENDING_BACKEND.md told out-of-tree backend
+        // authors to write `using rosetta::gen_detail::qualified_of;` — a
+        // "detail" namespace documented as an extension point, which is the
+        // contradiction the promotion resolves. These keep that spelling
+        // compiling; they name the same functions, not copies. In-tree callers
+        // need nothing: a backend sits inside gen_detail, so unqualified
+        // `exposed_of(k)` finds the enclosing rosetta:: one either way.
+        using rosetta::exposed_object_of;
+        using rosetta::exposed_of;
+        using rosetta::names_type;
+        using rosetta::qualified_of;
 
         // -------- shared CMake fragment --------
 
@@ -296,7 +326,7 @@ namespace rosetta {
         constexpr std::string_view DEFAULT_CPP26_CXX  = "${CLANG_P2996_ROOT}/bin/clang++";
         constexpr std::string_view DEFAULT_CPP26_CC   = "${CLANG_P2996_ROOT}/bin/clang";
         constexpr std::string_view DEFAULT_CPP26_LIB  = "${CLANG_P2996_ROOT}/lib";
-        // Default Qt 6 prefix for the qt-expanded / qml-expanded CMakeLists.
+        // Default Qt 6 prefix for the qt / qml CMakeLists.
         constexpr std::string_view DEFAULT_QT_DIR = "$ENV{HOME}/Qt/6.8.3/macos";
         // Default distribution version for the packaging artifacts (the wheel
         // pyproject.toml) when the manifest sets no "version".
@@ -2422,33 +2452,42 @@ endif()
 } // namespace rosetta
 
 // -------- built-in backends (one file each) --------
-// Each defines its templates + a gen_detail::*Backend, using the shared
-// render helpers above. New backends register the same way (see
-// docs/EXTENDING_BACKEND.md) without touching generate().
+// Each defines its templates + a rosetta::backend::* implementation of the
+// Backend interface, using the shared render helpers above. New backends
+// register the same way (see docs/EXTENDING_BACKEND.md) without touching
+// generate().
+//
+// Why backend:: and not gen_detail:: — the implementations are what the
+// directory, the file and the namespace all name once (backends/python.h ->
+// backend::Python), where gen_detail::PythonBackend said "backend" twice and
+// "detail" about something that is not. gen_detail keeps what it is actually
+// the detail namespace OF: the consteval walk helpers and the cross-backend
+// render/marshal ones, which every backend file pulls in with a
+// `using namespace gen_detail;` so no body had to change when they split.
 // The order of the binding backends is a real dependency, not alphabetical
-// taste: python_backend.h defines qualify_std() and the pybind11 trampoline
-// helpers that csharp / java / nanobind / node reuse, and csharp_backend.h
-// defines csx_double_lit() that java_backend.h reuses. The documentation and
+// taste: backends/python.h defines qualify_std() and the pybind11 trampoline
+// helpers that csharp / java / nanobind / node reuse, and backends/csharp.h
+// defines csx_double_lit() that backends/java.h reuses. The documentation and
 // GUI backends below depend on none of them.
-#include <rosetta/backends/python_backend.h>
-#include <rosetta/backends/csharp_backend.h>
-#include <rosetta/backends/dynamic_backend.h>
-#include <rosetta/backends/java_backend.h>
-#include <rosetta/backends/julia_backend.h>
-#include <rosetta/backends/lua_expanded_backend.h>
-#include <rosetta/backends/nanobind_backend.h>
-#include <rosetta/backends/node_backend.h>
-#include <rosetta/backends/wasm_backend.h>
-#include <rosetta/backends/qt_expanded_backend.h>
-#include <rosetta/backends/imgui_expanded_backend.h>
-#include <rosetta/backends/qml_expanded_backend.h>
-#include <rosetta/backends/html_backend.h>
-#include <rosetta/backends/json_backend.h>
-#include <rosetta/backends/markdown_backend.h>
-#include <rosetta/backends/openapi_backend.h>
-#include <rosetta/backends/paraview_backend.h>
-#include <rosetta/backends/rest_backend.h>
-#include <rosetta/backends/typescript_backend.h>
+#include <rosetta/backends/python.h>
+#include <rosetta/backends/csharp.h>
+#include <rosetta/backends/dynamic.h>
+#include <rosetta/backends/java.h>
+#include <rosetta/backends/julia.h>
+#include <rosetta/backends/lua.h>
+#include <rosetta/backends/nanobind.h>
+#include <rosetta/backends/node.h>
+#include <rosetta/backends/wasm.h>
+#include <rosetta/backends/qt.h>
+#include <rosetta/backends/imgui.h>
+#include <rosetta/backends/qml.h>
+#include <rosetta/backends/html.h>
+#include <rosetta/backends/json.h>
+#include <rosetta/backends/markdown.h>
+#include <rosetta/backends/openapi.h>
+#include <rosetta/backends/paraview.h>
+#include <rosetta/backends/rest.h>
+#include <rosetta/backends/typescript.h>
 
 namespace rosetta {
 
@@ -2457,37 +2496,40 @@ namespace rosetta {
     inline std::map<std::string, std::shared_ptr<Backend>> &backend_registry() {
         static std::map<std::string, std::shared_ptr<Backend>> reg = [] {
             std::map<std::string, std::shared_ptr<Backend>> m;
-            m["python"]         = std::make_shared<gen_detail::PythonBackend>();
-            m["nanobind"]       = std::make_shared<gen_detail::NanobindBackend>();
-            m["node"]           = std::make_shared<gen_detail::NodeBackend>();
-            m["wasm"]           = std::make_shared<gen_detail::WasmBackend>();
-            m["julia"]          = std::make_shared<gen_detail::JuliaBackend>();
-            m["csharp"]         = std::make_shared<gen_detail::CSharpBackend>();
-            m["java"]           = std::make_shared<gen_detail::JavaBackend>();
-            m["lua-expanded"]   = std::make_shared<gen_detail::LuaExpandedBackend>();
-            m["qt-expanded"]    = std::make_shared<gen_detail::QtExpandedBackend>();
-            m["imgui-expanded"] = std::make_shared<gen_detail::ImGuiExpandedBackend>();
-            m["qml-expanded"]   = std::make_shared<gen_detail::QmlExpandedBackend>();
-            m["rest"]           = std::make_shared<gen_detail::RestBackend>();
-            m["typescript"]     = std::make_shared<gen_detail::TypeScriptBackend>();
-            m["markdown"]       = std::make_shared<gen_detail::MarkdownBackend>();
-            m["html"]           = std::make_shared<gen_detail::HtmlBackend>();
-            m["json"]           = std::make_shared<gen_detail::JsonBackend>();
-            m["openapi"]        = std::make_shared<gen_detail::OpenApiBackend>();
-            m["paraview"]       = std::make_shared<gen_detail::ParaViewBackend>();
-            m["dynamic"]        = std::make_shared<gen_detail::DynamicBackend>();
+            m["python"]         = std::make_shared<backend::Python>();
+            m["nanobind"]       = std::make_shared<backend::Nanobind>();
+            m["node"]           = std::make_shared<backend::Node>();
+            m["wasm"]           = std::make_shared<backend::Wasm>();
+            m["julia"]          = std::make_shared<backend::Julia>();
+            m["csharp"]         = std::make_shared<backend::CSharp>();
+            m["java"]           = std::make_shared<backend::Java>();
+            m["lua"]            = std::make_shared<backend::Lua>();
+            m["qt"]             = std::make_shared<backend::Qt>();
+            m["imgui"]          = std::make_shared<backend::ImGui>();
+            m["qml"]            = std::make_shared<backend::Qml>();
+            m["rest"]           = std::make_shared<backend::Rest>();
+            m["typescript"]     = std::make_shared<backend::TypeScript>();
+            m["markdown"]       = std::make_shared<backend::Markdown>();
+            m["html"]           = std::make_shared<backend::Html>();
+            m["json"]           = std::make_shared<backend::Json>();
+            m["openapi"]        = std::make_shared<backend::OpenApi>();
+            m["paraview"]       = std::make_shared<backend::ParaView>();
+            m["dynamic"]        = std::make_shared<backend::Dynamic>();
 
-            // DEPRECATED spellings. These seven languages used to ship TWO
+            // DEPRECATED spellings. The first seven languages used to ship TWO
             // backends — a reflection-driven "thin" one whose generated code
             // called back into rosetta's visitors at the target's compile time,
             // and an "-expanded" one that wrote every call out so the bindings
             // build with a stock compiler. Only the expanded half survives, so
             // the suffix no longer distinguishes anything and the short name IS
-            // the expanded backend. The old keys stay as aliases — sharing the
-            // instance, not a second copy — so manifests written against them
-            // keep generating, and resolve to what they already resolved to.
+            // the expanded backend. The last four never had a thin twin at all —
+            // they were born reflection-free and only wore the suffix because
+            // their siblings did. Either way the suffix names nothing. The old
+            // keys stay as aliases — sharing the instance, not a second copy —
+            // so manifests written against them keep generating, and resolve to
+            // what they already resolved to.
             for (const char *lang : {"python", "nanobind", "node", "wasm", "julia", "csharp",
-                                     "java"}) {
+                                     "java", "lua", "qt", "qml", "imgui"}) {
                 m[std::string(lang) + "-expanded"] = m[lang];
             }
             return m;

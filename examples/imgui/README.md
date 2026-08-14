@@ -1,14 +1,14 @@
 # imgui — a Dear ImGui inspector from out-of-line annotations
 
-Binds the `Algo` demo class to the **`imgui-expanded`** backend: a
-self-contained desktop app (Dear ImGui + GLFW + OpenGL 3, both fetched
-automatically by CMake) that builds with a **stock C++20 compiler**. The same
-manifest also emits the **`qt-expanded`** and **`qml-expanded`** inspectors, so
-the three UI backends can be compared on the identical annotated surface:
+Binds the `Algo` demo class to the **`imgui`** backend: a self-contained
+desktop app (Dear ImGui + GLFW + OpenGL 3, both fetched automatically by CMake)
+that builds with a **stock C++20 compiler**. The same manifest also emits the
+**`qt`** and **`qml`** inspectors, so the three UI backends can be compared on
+the identical annotated surface:
 
 ```sh
-cmake -S bindings/qt-expanded  -B bindings/qt-expanded/build  && cmake --build bindings/qt-expanded/build  -j && ./bindings/qt-expanded/build/algo_qt
-cmake -S bindings/qml-expanded -B bindings/qml-expanded/build && cmake --build bindings/qml-expanded/build -j && ./bindings/qml-expanded/build/algo_qml
+cmake -S bindings/qt  -B bindings/qt/build  && cmake --build bindings/qt/build  -j && ./bindings/qt/build/algo_qt
+cmake -S bindings/qml -B bindings/qml/build && cmake --build bindings/qml/build -j && ./bindings/qml/build/algo_qml
 ```
 
 > Qt note: Qt **6.8.3**'s CMake config references the `AGL` framework, which

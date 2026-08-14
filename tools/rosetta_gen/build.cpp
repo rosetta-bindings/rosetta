@@ -30,7 +30,7 @@ struct BuildOptions {
     fs::path                 gen_dir;      // default <manifest dir>/gen
     fs::path                 bindings_dir; // default <manifest dir>/bindings
     std::string              p2996_root;   // -DCLANG_P2996_ROOT for every configure
-    std::string              qt_dir;       // -DQT_DIR for qt-/qml-expanded
+    std::string              qt_dir;       // -DQT_DIR for qt / qml
     std::string              jobs;         // cmake --build --parallel N
     std::vector<std::string> only, skip;   // backend (target lang) filters
     std::vector<std::string> cmake_args;   // extra args for every configure
@@ -276,14 +276,14 @@ static int run_build(const BuildOptions &opt) {
             } else {
                 attempt(lang, run_cmd("mvn -q package", dir) == 0, " (mvn)");
             }
-        } else if (lang == "qt-expanded" || lang == "qml-expanded") {
+        } else if (lang == "qt" || lang == "qml") {
             std::string extra;
             if (!opt.qt_dir.empty()) {
                 extra = " " + q("-DQT_DIR=" + opt.qt_dir);
             }
             attempt(lang, cmake_build(dir, extra));
         } else {
-            // python, nanobind, rest, json, lua-expanded, imgui-expanded, …
+            // python, nanobind, rest, json, lua, imgui, …
             if (!cmake_build(dir)) {
                 attempt(lang, false);
             } else if (!wheel || !is_wheel_backend(lang)) {
@@ -314,7 +314,7 @@ const char *kBuildOptions =
     "  --gen-dir DIR            generator project dir   (default: <manifest dir>/gen)\n"
     "  --bindings-dir DIR       generated bindings dir  (default: <manifest dir>/bindings)\n"
     "  --clang-p2996-root PATH  -DCLANG_P2996_ROOT for every CMake configure\n"
-    "  --qt-dir PATH            -DQT_DIR for the qt-/qml-expanded builds\n"
+    "  --qt-dir PATH            -DQT_DIR for the qt / qml builds\n"
     "  --only a,b / --skip a,b  restrict the backend builds to / exclude these\n"
     "  --cmake-arg ARG          extra argument for every CMake configure (repeatable)\n"
     "  --jobs N, -jN            parallel build jobs (bare -j: one per core)\n"

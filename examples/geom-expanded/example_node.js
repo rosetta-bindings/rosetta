@@ -1,6 +1,6 @@
 // node target  (target name: jsgeom)
 // ---------------------------------------------------------------------------
-// Plain N-API bindings. The node_runtime.h marshaller converts std::vector
+// Plain N-API bindings. The runtime/node.h marshaller converts std::vector
 // <-> JS Array transparently, so you pass and receive ordinary JS arrays —
 // no wrapper vector types, no manual memory management.
 //

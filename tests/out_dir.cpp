@@ -64,7 +64,7 @@ namespace {
 
 // Every backend that builds a loadable artifact honours the directory.
 TEST(OutDir, ArtifactIsCopiedToTheNamedDirectory) {
-    for (const char *lang : {"python", "nanobind", "node", "lua-expanded"}) {
+    for (const char *lang : {"python", "nanobind", "node", "lua"}) {
         const std::string cm = cmake_of(lang, "/tmp/rosetta-artifacts");
         ASSERT_FALSE(cm.empty()) << lang << " emitted no CMakeLists.txt";
         EXPECT_NE(cm.find("# Artifact output directory (manifest \"out_dir\")."),
@@ -92,7 +92,7 @@ TEST(OutDir, WasmCopiesBothHalvesOfTheModule) {
 // make_directory, and the existing next-to-the-sources copy is untouched.
 TEST(OutDir, UnsetEmitsNothing) {
     for (const char *lang : {"python", "nanobind", "node",
-                             "wasm", "lua-expanded"}) {
+                             "wasm", "lua"}) {
         const std::string cm = cmake_of(lang, "");
         ASSERT_FALSE(cm.empty()) << lang;
         EXPECT_EQ(cm.find("Artifact output directory"), std::string::npos) << lang;
