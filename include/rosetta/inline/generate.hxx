@@ -2432,6 +2432,7 @@ endif()
 // GUI backends below depend on none of them.
 #include <rosetta/backends/python_backend.h>
 #include <rosetta/backends/csharp_backend.h>
+#include <rosetta/backends/dynamic_backend.h>
 #include <rosetta/backends/java_backend.h>
 #include <rosetta/backends/julia_backend.h>
 #include <rosetta/backends/lua_expanded_backend.h>
@@ -2474,6 +2475,7 @@ namespace rosetta {
             m["json"]           = std::make_shared<gen_detail::JsonBackend>();
             m["openapi"]        = std::make_shared<gen_detail::OpenApiBackend>();
             m["paraview"]       = std::make_shared<gen_detail::ParaViewBackend>();
+            m["dynamic"]        = std::make_shared<gen_detail::DynamicBackend>();
 
             // DEPRECATED spellings. These seven languages used to ship TWO
             // backends — a reflection-driven "thin" one whose generated code

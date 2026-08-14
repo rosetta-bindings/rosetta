@@ -1,0 +1,22 @@
+{
+    "//1": "Dynamic object model for the scene demo library. scene.h is stock",
+    "//2": "C++ — every doc / range / combobox / label / widget hint lives in",
+    "//3": "Mesh.ann.json and Vec3.ann.json, so the generated metadata (and the",
+    "//4": "hand-written demo next to it) build with a stock C++20 compiler.",
+
+    "user_include": ".",
+    "rosetta_include": "../../include",
+    "generator_name": "scene_dynamic_gen",
+    "module_name": "scene",
+
+    "targets": [
+        { "lang": "dynamic",  "name": "scene" },
+        { "lang": "markdown", "name": "scene" }
+    ],
+
+    "classes": [
+        { "name": "scene::Vec3", "header": "scene.h", "annotations": "Vec3.ann.json" },
+        { "name": "scene::Mesh", "header": "scene.h", "annotations": "Mesh.ann.json" },
+        { "name": "scene::Shading", "header": "scene.h" }
+    ]
+}

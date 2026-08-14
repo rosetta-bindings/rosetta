@@ -265,3 +265,20 @@ target_compile_options(nested_enum PRIVATE -fannotation-attributes)
 target_link_libraries(nested_enum PRIVATE GTest::gtest_main)
 gtest_discover_tests(nested_enum)
 
+
+# The dynamic object model. Two suites:
+#   dynamic     — the RUNTIME (<rosetta/dynamic.h>) against hand-built metadata.
+#                 Deliberately stock C++20: no -freflection, no annotations. It
+#                 is the target-side claim, so it must not need the fork.
+#   dynamic_gen — the `dynamic` BACKEND, checking that what it emits has the
+#                 shape the runtime suite exercises.
+add_executable(dynamic dynamic.cpp)
+target_include_directories(dynamic PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_link_libraries(dynamic PRIVATE GTest::gtest_main)
+gtest_discover_tests(dynamic)
+
+add_executable(dynamic_gen dynamic_gen.cpp)
+target_include_directories(dynamic_gen PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(dynamic_gen PRIVATE -fannotation-attributes)
+target_link_libraries(dynamic_gen PRIVATE GTest::gtest_main)
+gtest_discover_tests(dynamic_gen)

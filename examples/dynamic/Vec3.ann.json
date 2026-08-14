@@ -1,0 +1,7 @@
+{
+  "x":     { "doc": "X component", "label": "X", "widget": "spin" },
+  "y":     { "doc": "Y component", "label": "Y", "widget": "spin" },
+  "z":     { "doc": "Z component", "label": "Z", "widget": "spin" },
+  "norm":  { "doc": "Euclidean length" },
+  "scale": { "doc": "Multiply every component by k" }
+}

@@ -34,7 +34,7 @@
   <img src="https://img.shields.io/badge/bindings-Qt%20%7C%20QML%20%7C%20ImGUI%20%7C%20ParaView%20%7C%20Json%20%7C%20Html%20%7C%20REST%20%7C%20OpenAPI%20%7C%20Markdown-green.svg" alt="Bindings">
 </p>
 
-A C++26 reflection playground with **18 generator backends** — Python (pybind11 / nanobind), Node, WebAssembly, Qt, QML, Dear ImGui, REST, Julia, Lua, OpenAPI, JSON, TypeScript, C#, Java, Markdown, HTML, ParaView... bindings for **your existing classes — without modifying them**. Point rosetta at a header via a small [manifest.json](./docs/MANIFEST.md), run one tool, get per-language binding projects out.
+A C++26 reflection playground with **19 generator backends** — Python (pybind11 / nanobind), Node, WebAssembly, Qt, QML, Dear ImGui, REST, Julia, Lua, OpenAPI, JSON, TypeScript, C#, Java, Markdown, HTML, ParaView, a runtime object model... bindings for **your existing classes — without modifying them**. Point rosetta at a header via a small [manifest.json](./docs/MANIFEST.md), run one tool, get per-language binding projects out.
 
 > **Your target compiler doesn't support reflection?** Generate the expanded binding once on a Linux or macOS host with a C++26 / P2996 compiler — e.g. the [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) fork — then ship and build the generated sources anywhere with a stock toolchain (plain Clang / GCC / MSVC, or a stock emsdk for WebAssembly). No reflection is needed on the target (see the **expanded** backends below).
 
@@ -105,6 +105,7 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 | 16 | **Markdown** (`markdown`) — API reference document | ✅ |
 | 17 | **HTML** (`html`) — self-contained, styled API reference page | ✅ |
 | 18 | **ParaView** (`paraview`) — Server Manager XML for a plugin | ✅ |
+| 19 | **Dynamic** (`dynamic`) — the IR as runtime *data*: a `MetaClass` per type + one thunk per member, queried and called by name ([details](examples/dynamic)) | ✅ |
 
 > New backends register without touching the generator, thanks to the visitor pattern — see [EXTENDING_BACKEND](docs/EXTENDING_BACKEND.md).
 > **C++26** = targets generated against the reflection toolchain.
@@ -113,13 +114,44 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 > Notes:
 > **Qt/QML** targets need Qt 6 but no moc on the generated code; 
 > **lua-expanded** needs Lua 5.1–5.4 or LuaJIT (sol2 does not support Lua 5.5 yet) — sol2 itself is fetched automatically at configure time. 
-> **REST** is the one target whose generated code still splices reflections, so it alone needs the C++26 toolchain to build.
+> **REST** is the one target whose generated code still splices reflections, so it alone needs the C++26 toolchain to build.  
+> **dynamic** is not a language binding: it emits the metadata itself, for a caller that discovers types at run time — see below.
 
-**Reflection-free by construction.** Every binding target **fully expands** each field, method, constructor and enumerator into explicit pybind11 / nanobind / N-API / embind / Qt / sol2 / jlcxx / member-pointer calls. Reflection runs once, on the generation host; the generated binding is ordinary C++ that builds with a stock compiler — a plain C++17/20 compiler, a stock emsdk, or stock Qt 6 (the host still needs C++26 to *run the generator*, the target does not). This pairs naturally with [out-of-line annotations](docs/OUT_OF_LINE_ANNOTATIONS.md) so the bound headers stay stock C++ too.
+**Reflection-free by construction.** Every binding target **fully expands** each field, method, constructor and enumerator into explicit pybind11 / nanobind / N-API / embind / Qt / sol2 / jlcxx / member-pointer calls (the `dynamic` backend expands them into aggregate-initialized tables and thunks instead — data rather than framework calls, but the same once-on-the-host rule). Reflection runs once, on the generation host; the generated binding is ordinary C++ that builds with a stock compiler — a plain C++17/20 compiler, a stock emsdk, or stock Qt 6 (the host still needs C++26 to *run the generator*, the target does not). This pairs naturally with [out-of-line annotations](docs/OUT_OF_LINE_ANNOTATIONS.md) so the bound headers stay stock C++ too.
 
 > Until 2026-08 seven of these languages shipped a second, *thin* backend whose generated code re-ran the reflection walk at the target's compile time. It has been removed: the short name (`python`, `nanobind`, `node`, `wasm`, `julia`, `csharp`, `java`) now means what `-expanded` used to, and the `-expanded` spellings still resolve for existing manifests.
 
 **Python wheels.** `python` and `nanobind` also emit a `pyproject.toml` and a `make_wheel.py`, so a generated binding goes from source to an installable, redistributable wheel in one command — `python make_wheel.py`, the same on Linux, macOS and Windows. External shared libraries are bundled in and the platform tag repaired; on 3.12+ nanobind wheels are tagged `abi3`, covering every later CPython with a single artifact. See [Python wheels](docs/MANIFEST.md#python-wheels-version).
+
+## Dynamic object model — reflect and invoke at run time
+
+<details>
+<summary>The <code>dynamic</code> backend emits the IR as <b>data</b>: ask what exists, call it by name, from a front-end that never includes your headers <i>(expand)</i></summary>
+
+Every other backend turns your classes into calls into some framework. The **`dynamic`** backend turns them back into the IR — a `rosetta::dyn::MetaClass` per bound type plus one captureless-lambda thunk per member — so a program can ask *what exists* and *call it by name*, with no code generated for the caller (see [this example](./examples/dynamic/README.md)):
+
+```cpp
+#include <rosetta/dynamic.h>     // the runtime — stock C++20
+#include "auto_dynamic.h"        // the generated tables (scene.h is NOT included)
+
+scene::register_all();           // publish the tables into the registry, once
+
+for (const rosetta::dyn::MetaClass *k : rosetta::dyn::registry().classes())
+    for (std::size_t i = 0; i < k->n_fields; ++i)
+        std::cout << k->qualified << "::" << k->fields[i].name << '\n';
+        // ... plus .type, .doc, .readonly, .range, .choices — and .get / .set thunks
+```
+
+What that buys, relative to the language backends:
+
+- **Overloads come back.** The metadata keeps the whole overload set and scores it against the actual arguments, so the name-keyed targets' first-only limit ([COVERAGE.md](docs/COVERAGE.md)) doesn't apply — and a failed call can name every candidate it rejected, with the reason.
+- **UI by query, not by codegen.** A property inspector is a walk over `registry()`: `label` → caption, `doc` → tooltip, `range` → slider bounds, `readonly` → disabled row, `combobox` / enumerators → drop-down, `button` → action row. Annotations are enforced once, in the core, instead of per backend.
+- **What can't be marshalled is described, not deleted** — a `std::function` parameter stays in the metadata with the reason it is unavailable, so a UI can grey it out.
+- **Lifetime is explicit** — a `T&` return crosses without a copy and *pins* its parent, so a sub-object handle cannot outlive the object it points into.
+
+The generated tables are aggregate initializers, so like the other targets they build with a **stock C++20 compiler**. The per-call cost (name lookup, overload scoring, `Any` marshalling) makes this the right tool for control — properties, commands, menus, scripting glue — and it wants a cache in front of it for bulk data; [`examples/dynamic`](examples/dynamic) measures both and shows a terminal interpreter and a Qt viewer (3D view, property panel, console) driving one set of tables without naming a single bound type.
+
+</details>
 
 ## Mini-MOC — Qt signals / slots / properties, without moc
 
@@ -320,7 +352,7 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 ## Examples
 
 <details>
-<summary><b>17 worked examples</b> — manifest-driven, expanded targets, trampolines, mini-moc, the three UI inspectors, hand-written references <i>(expand)</i></summary>
+<summary><b>18 worked examples</b> — manifest-driven, expanded targets, the dynamic object model, trampolines, mini-moc, the three UI inspectors, hand-written references <i>(expand)</i></summary>
 
 | Path                       | What it shows                                       |
 |----------------------------|-----------------------------------------------------|
@@ -328,7 +360,8 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 | `examples/annotate-manifest`| Out-of-line annotations from an external JSON file, wired by the manifest's `annotations` field ([details](docs/OUT_OF_LINE_ANNOTATIONS.md)) |
 | `examples/geom-lib`        | Manifest-driven bindings for a small geometry library (nested types, vectors) |
 | `examples/geom-expanded`   | Reflection-free `python` / `nanobind` / `node` / `wasm` / `qt-expanded` / `qml-expanded` / `csharp` / `java` / `lua-expanded` / `julia` bindings (stock compiler, stock emsdk, stock Qt, any Lua 5.1–5.4, CxxWrap.jl) with out-of-line annotations |
-| `examples/trampoline`      | Overriding C++ virtuals from Python — generated pybind11 trampolines from `virtual_spec` |
+| `examples/dynamic`         | The `dynamic` backend end to end: one set of generated metadata driving a terminal interpreter *and* a Qt viewer (3D view + property panel + console), neither naming a bound type |
+| `examples/trampoline-python` | Overriding C++ virtuals from Python — generated pybind11 trampolines from `virtual_spec` |
 | `examples/trampoline-node` | Overriding C++ virtuals from JavaScript — generated N-API trampolines from `virtual_spec` |
 | `examples/moc`             | Qt-flavoured meta-object demo on `mini_moc.h` (properties + signals) |
 | `examples/docgen`          | Reflection-driven Markdown / HTML reference generator |
