@@ -85,32 +85,35 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 
 ## Backends (one combined module per target, from a single generator)
 
-| # | Target | C++26 | C++20 |
-|---|---|:---:|:---:|
-| 1 | **Python** (`python`) — pybind11 extension module | ✅ | ✅ |
-| 2 | **Python** (`nanobind`) — leaner/faster pybind11 successor | ✅ | ✅ |
-| 3 | **Node** (`node`) — N-API native addon | ✅ | ✅ |
-| 4 | **Julia** (`julia`) — CxxWrap.jl / jlcxx shared module, `std::vector` included | ✅ | ✅ |
-| 5 | **WebAssembly** (`wasm`) — Emscripten/embind module | ✅ | ✅ |
-| 6 | **Lua** (`lua-expanded`) — sol2 module, `require`-able (stock C++17) | ✅ | ✅ |
-| 7 | **C#** (`csharp`) — native C-ABI shared library + handle-backed P/Invoke wrappers | ✅ | ✅ |
-| 8 | **Java** (`java`) — native C-ABI + handle-backed FFM wrappers | ✅ | ✅ |
-| 9 | **Qt Widgets** (`qt-expanded`) — generated property/method inspector via `qt_widgets_runtime.h` | ✅ | ✅ |
-| 10 | **QML** (`qml-expanded`) — fills a generic `ReflectedObject` explicitly | ✅ | ✅ |
-| 11 | **Dear ImGui** (`imgui-expanded`) — immediate-mode inspector app (GLFW + OpenGL3, auto-fetched) | ✅ | ✅ |
-| 12 | **REST** (`rest`) — cpp-httplib JSON server + generated browser client| ✅ | — |
-| 13 | **OpenAPI** (`openapi`) — OpenAPI 3.1 spec describing the REST surface | ✅ | ✅ |
-| 14 | **JSON** — reflection-based nlohmann (de)serialization (`json_visitor.h`) | ✅ | — |
-| 15 | **TypeScript** (`typescript`) — ambient `.d.ts` type declarations | ✅ | ✅ |
-| 16 | **Markdown** (`markdown`) — API reference document | ✅ | ✅ |
-| 17 | **HTML** (`html`) — self-contained, styled API reference page | ✅ | ✅ |
-| 18 | **ParaView** (`paraview`) — Server Manager XML for a plugin | ✅ | ✅ |
-
-> **C++26** = builds against the reflection toolchain (⚠️ = with caveats — see notes below). **C++20** = the generated target also builds on a stock, pre-reflection toolchain (no reflection needed on the target); text-only outputs qualify trivially. The generator itself always needs C++26.
->
-> Notes: the Qt/QML targets need Qt 6 but no moc on the generated code; **lua-expanded** needs Lua 5.1–5.4 or LuaJIT (sol2 does not support Lua 5.5 yet) — sol2 itself is fetched automatically at configure time. **REST** is the one target whose generated code still splices reflections, so it alone needs the C++26 toolchain to build.
+| # | Target | Ok |
+|---|---|:---:|
+| 1 | **Python** (`python`) — pybind11 extension module | ✅ | 
+| 2 | **Python** (`nanobind`) — leaner/faster pybind11 successor | ✅ |
+| 3 | **Node** (`node`) — N-API native addon | ✅ |
+| 4 | **Julia** (`julia`) — CxxWrap.jl / jlcxx shared module, `std::vector` included | ✅ |
+| 5 | **WebAssembly** (`wasm`) — Emscripten/embind module | ✅ |
+| 6 | **Lua** (`lua-expanded`) — sol2 module, `require`-able (stock C++17) | ✅ |
+| 7 | **C#** (`csharp`) — native C-ABI shared library + handle-backed P/Invoke wrappers | ✅ |
+| 8 | **Java** (`java`) — native C-ABI + handle-backed FFM wrappers | ✅ |
+| 9 | **Qt Widgets** (`qt-expanded`) — generated property/method inspector via `qt_widgets_runtime.h` | ✅ |
+| 10 | **QML** (`qml-expanded`) — fills a generic `ReflectedObject` explicitly | ✅ |
+| 11 | **Dear ImGui** (`imgui-expanded`) — immediate-mode inspector app (GLFW + OpenGL3, auto-fetched) | ✅ |
+| 12 | **REST** (`rest`) — cpp-httplib JSON server + generated browser client| — |
+| 13 | **OpenAPI** (`openapi`) — OpenAPI 3.1 spec describing the REST surface | ✅ |
+| 14 | **JSON** — reflection-based nlohmann (de)serialization (`json_visitor.h`) | — |
+| 15 | **TypeScript** (`typescript`) — ambient `.d.ts` type declarations | ✅ |
+| 16 | **Markdown** (`markdown`) — API reference document | ✅ |
+| 17 | **HTML** (`html`) — self-contained, styled API reference page | ✅ |
+| 18 | **ParaView** (`paraview`) — Server Manager XML for a plugin | ✅ |
 
 > New backends register without touching the generator, thanks to the visitor pattern — see [EXTENDING_BACKEND](docs/EXTENDING_BACKEND.md).
+> **C++26** = targets generated against the reflection toolchain.
+> **C++20** = target builds on a stock (no reflection needed on the target).
+>
+> Notes:
+> **Qt/QML** targets need Qt 6 but no moc on the generated code; 
+> **lua-expanded** needs Lua 5.1–5.4 or LuaJIT (sol2 does not support Lua 5.5 yet) — sol2 itself is fetched automatically at configure time. 
+> **REST** is the one target whose generated code still splices reflections, so it alone needs the C++26 toolchain to build.
 
 **Reflection-free by construction.** Every binding target **fully expands** each field, method, constructor and enumerator into explicit pybind11 / nanobind / N-API / embind / Qt / sol2 / jlcxx / member-pointer calls. Reflection runs once, on the generation host; the generated binding is ordinary C++ that builds with a stock compiler — a plain C++17/20 compiler, a stock emsdk, or stock Qt 6 (the host still needs C++26 to *run the generator*, the target does not). This pairs naturally with [out-of-line annotations](docs/OUT_OF_LINE_ANNOTATIONS.md) so the bound headers stay stock C++ too.
 
