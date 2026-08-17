@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 700" width="1060" height="700" role="img">
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+  <path d="M0,0 L10,5 L0,10 z" fill="#616e88"/>
+</marker>
+<marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+  <path d="M0,0 L10,5 L0,10 z" fill="#ebcb8b"/>
+</marker>
+<marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+  <path d="M0,0 L10,5 L0,10 z" fill="#a3be8c"/>
+</marker>
+<marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+  <path d="M0,0 L10,5 L0,10 z" fill="#b48ead"/>
+</marker>
+</defs>
+<rect x="0" y="0" width="1060" height="700" rx="14" fill="#2e3440"/>
+<rect x="300" y="26" width="340" height="46" rx="8" fill="#434c5e" stroke="#616e88" stroke-width="1.5"/>
+<text x="470.0" y="55.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="18" font-weight="400" fill="#e5e9f0" text-anchor="middle">manifest.json</text>
+<path d="M470.0,72 L470.0,122" stroke="#616e88" stroke-width="2" fill="none" marker-end="url(#a)"/>
+<text x="484.0" y="104" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#a9b1c1" text-anchor="start">0 · rosetta_gen  (JSON → C++ text, no reflection)</text>
+<rect x="300" y="122" width="340" height="76" rx="8" fill="#3b4252" stroke="#616e88" stroke-width="1.5"/>
+<text x="470.0" y="154.66666666666666" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="17" font-weight="400" fill="#e5e9f0" text-anchor="middle">gen/&lt;name&gt;.cpp</text>
+<text x="470.0" y="176.66666666666666" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="17" font-weight="400" fill="#e5e9f0" text-anchor="middle">gen/bindings.h</text>
+<path d="M470.0,198 L470.0,258" stroke="#ebcb8b" stroke-width="2" fill="none" marker-end="url(#aa)"/>
+<text x="484.0" y="226" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#ebcb8b" text-anchor="start">1a · COMPILE</text>
+<text x="484.0" y="246" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="13" font-weight="400" fill="#ebcb8b" text-anchor="start">clang-p2996 walks your types HERE</text>
+<rect x="340" y="258" width="260" height="48" rx="8" fill="#434c5e" stroke="#ebcb8b" stroke-width="1.5"/>
+<text x="470.0" y="288.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="18" font-weight="400" fill="#e5e9f0" text-anchor="middle">generator</text>
+<text x="470.0" y="328" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="13" font-weight="400" font-style="italic" fill="#a9b1c1" text-anchor="middle">an executable that knows the answers</text>
+<path d="M470.0,340 L470.0,392" stroke="#616e88" stroke-width="2" fill="none" marker-end="url(#a)"/>
+<text x="484.0" y="372" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#e5e9f0" text-anchor="start">1b · RUN</text>
+<rect x="260" y="392" width="420" height="86" rx="8" fill="#3b4252" stroke="#616e88" stroke-width="1.5"/>
+<text x="470.0" y="429.3333333333333" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="16" font-weight="400" fill="#e5e9f0" text-anchor="middle">bindings/python  lua  node  wasm  dynamic</text>
+<text x="470.0" y="451.3333333333333" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="16" font-weight="400" fill="#e5e9f0" text-anchor="middle">bindings/coverage.json</text>
+<text x="696" y="424" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#a3be8c" text-anchor="start">2 · ordinary C++</text>
+<text x="696" y="444" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="13" font-weight="400" fill="#a3be8c" text-anchor="start">no splices left</text>
+<path d="M470.0,478 L470.0,538" stroke="#a3be8c" stroke-width="2" fill="none" marker-end="url(#ag)"/>
+<text x="484.0" y="512" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#a3be8c" text-anchor="start">3 · COMPILE  (stock toolchain)</text>
+<rect x="300" y="538" width="340" height="46" rx="8" fill="#434c5e" stroke="#a3be8c" stroke-width="1.5"/>
+<text x="470.0" y="566.6666666666666" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="17" font-weight="400" fill="#e5e9f0" text-anchor="middle">.so  /  .node  /  .wasm</text>
+<path d="M470.0,584 L470.0,630" stroke="#616e88" stroke-width="2" fill="none" marker-end="url(#a)"/>
+<text x="484.0" y="612" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#e5e9f0" text-anchor="start">4 · import / require</text>
+<rect x="360" y="630" width="220" height="44" rx="8" fill="#434c5e" stroke="#616e88" stroke-width="1.5"/>
+<text x="470.0" y="657.6666666666666" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="17" font-weight="400" fill="#e5e9f0" text-anchor="middle">your script</text>
+<rect x="790" y="116" width="240" height="76" rx="8" fill="#434c5e" stroke="#b48ead" stroke-width="1.5"/>
+<text x="910.0" y="148.0" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="15" font-weight="400" fill="#e5e9f0" text-anchor="middle">YOUR LIBRARY</text>
+<text x="910.0" y="170.0" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="15" font-weight="400" fill="#e5e9f0" text-anchor="middle">stock C++ headers</text>
+<path d="M790,154 H642 V160" stroke="#b48ead" stroke-width="2" fill="none" marker-end="url(#ap)" stroke-dasharray="6 4"/>
+<text x="910" y="214" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#b48ead" text-anchor="middle">read #1 · DESCRIBE</text>
+<text x="910" y="234" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="13" font-weight="400" fill="#b48ead" text-anchor="middle">needs C++26</text>
+<path d="M910,244 V428 H722" stroke="#b48ead" stroke-width="2" fill="none" marker-end="url(#ap)" stroke-dasharray="6 4"/>
+<text x="910" y="470" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#b48ead" text-anchor="middle">read #2 · CALL</text>
+<text x="910" y="490" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="13" font-weight="400" fill="#b48ead" text-anchor="middle">user_sources / user_lib</text>
+</svg>

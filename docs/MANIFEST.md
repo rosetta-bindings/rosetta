@@ -80,11 +80,12 @@ cmake -B build && cmake --build build
 |---|:---:|---|---|
 | `user_include` | ✅ | — | Directory holding your class headers — **or an array of directories** when they live in several places. Each entry is relative to the manifest, or absolute, and resolved to an absolute path. See [Multiple include directories](#multiple-include-directories). |
 | `rosetta_include` | ✅ | — | Path to rosetta's `include/` directory. Same resolution rules. |
-| `generator_name` | ✅ | — | CMake target / binary name of the generated project tool. `"my_person_gen"` ⇒ `my_person_gen.cpp` and a `my_person_gen` binary. |
-| `module_name` | — | `generator_name` | Default binding module name, used by any **shorthand** (bare-string) target. |
+| `generator_name` | — | manifest's directory name | Basename of the emitted reflection driver: `"my_person_gen"` ⇒ `gen/my_person_gen.cpp`. The built binary is always `generator`, so this is mostly cosmetic — its one load-bearing role is being the last-resort default for `module_name`. The **derived** default is folded to an identifier (`my-cool-lib` ⇒ `my_cool_lib`) so that fallback cannot produce an invalid module name; an explicit value is used verbatim. |
+| `module_name` | — | a `preset`'s, else `generator_name` | Default binding module name, used by any **shorthand** (bare-string) target. A [preset](#presets-preset) may supply one, which is why a preset-based manifest usually names neither this nor `generator_name`. |
 | `targets` | ✅ | — | The language backends to emit. See [Targets](#targets). |
-| `classes` | ✅ | — | The classes / structs / enums to bind. See [Classes](#classes). |
+| `classes` | ✅* | — | The classes / structs / enums to bind. See [Classes](#classes). *Optional when a [`preset`](#presets-preset) supplies them. |
 | `functions` | — | `[]` | Free (non-member) functions to bind. See [Functions](#functions). |
+| `preset` | — | — | A named JSON fragment shipped with rosetta that supplies a fixed binding surface, so the manifest states only what is project-specific. See [Presets](#presets-preset). |
 | `namespace` | — | — | Default C++ namespace for `classes` / `functions` / `extensions` names carrying no `::` of their own. See [Shared defaults](#shared-defaults-namespace-header_dir). |
 | `header_dir` | — | — | Directory fragment prepended to every `classes` / `functions` / `extensions` header. See [Shared defaults](#shared-defaults-namespace-header_dir). |
 | `sequences` | — | `[]` | Foreign sequence containers that marshal like `std::vector<T>` — a qualified template name with one type parameter (`"GEO::vector"`), or a concrete type spelled exactly (`{ "type": "Eigen::VectorXd" }`). See [Foreign sequence containers](#foreign-sequence-containers-sequences). |
@@ -111,6 +112,57 @@ cmake -B build && cmake --build build
 | `cpp26_lib` | — | `${cpp26_root}/lib` | Directory holding the fork's `libc++` / `libc++abi` (`-L` / rpath). |
 
 Keys beginning with `//` (e.g. `"//1"`, `"//note"`) are treated as comments and ignored — handy since JSON has no comment syntax.
+
+---
+
+## Presets (`preset`)
+
+Some binding surfaces are **fixed**: they do not depend on your project at all.
+Binding rosetta's own reflection API is the case that motivated this — the
+twelve `rosetta::script` handle classes and the eight registry free functions
+are the same in every project that wants them, and copying twenty entries into
+each manifest makes the three lines that *are* project-specific hard to find.
+
+`preset` names a JSON fragment shipped under
+`<rosetta_include>/rosetta/presets/<name>.json`:
+
+```json
+{
+    "preset": "scriptable",
+    "rosetta_include": "../../include",
+    "user_include": ["../lib", "../lib/bindings/dynamic"],
+    "user_sources": ["../lib/bindings/dynamic/auto_dynamic.cpp"],
+    "module_init": { "headers": ["auto_dynamic.h"], "statements": ["bank::register_all()"] },
+    "targets": ["python", "lua"]
+}
+```
+
+That is a complete manifest — six keys, every one of them about *this* project.
+`classes`, `functions` and `module_name` all come from the preset; a preset that
+supplies `module_name` is what lets the targets stay bare strings.
+
+Give an array to apply several (`"preset": ["scriptable", "..."]`), applied in
+order.
+
+### What it does
+
+| | |
+|---|---|
+| **Merge** | Deep, with the **manifest winning** every conflict it can express: a key you did not write is taken from the preset; arrays present in both are concatenated *preset first*; objects merge recursively; a scalar you spelled out is never overridden. The array rule is what lets `module_init` compose — the preset contributes its `headers` entry and your `statements` survive. |
+| **`classes` / `functions`** | Parsed with a **pristine context**: your `namespace` and `header_dir` defaults describe *your* tree and are not prepended to a preset's headers. They are appended after your own entries. |
+| **Include path** | A preset binds headers that live under `rosetta_include`, so it puts that directory on the **target's** include path too. Every other binding is reflection-free by construction and has no reason to see rosetta's headers, which is why this is not the default. |
+
+`classes` becomes optional when a preset supplies it. An unknown name is an
+error naming the path that was searched, so a typo surfaces immediately.
+
+### Shipped presets
+
+| name | what it binds |
+|---|---|
+| `scriptable` | [`<rosetta/script.h>`](../include/rosetta/script.h) — the bindable facade over the runtime object model — plus the per-language `Value` casters. Lets a host language walk the metadata of any library that emits `dynamic` tables and call into it by name. See [examples/scriptable-model](../examples/scriptable-model). |
+
+A preset is only a JSON fragment: drop your own into
+`<rosetta_include>/rosetta/presets/` to share a binding surface across projects.
 
 ---
 

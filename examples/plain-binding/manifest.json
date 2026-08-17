@@ -1,0 +1,32 @@
+{
+    "//1": "The base case: ONE library, ONE pipeline, four language bindings.",
+    "//2": "",
+    "//3": "No `dynamic` target, no reflection API, no preset — this is what",
+    "//4": "binding a C++ class with rosetta normally looks like. Compare with",
+    "//5": "../scriptable-model, which chains two pipelines to avoid generating a",
+    "//6": "binding per class at all.",
+    "//7": "",
+    "//8": "Serie.h is self-contained, header-only, plain C++20. Every doc lives",
+    "//9": "out of line in Serie.ann.json, so the generated bindings build with a",
+    "//10": "stock compiler.",
+
+    "user_include": ".",
+    "rosetta_include": "../../include",
+
+    "module_name": "serie",
+
+    "targets": ["python", "julia", "node", "wasm"],
+
+    "classes": [
+        { "name": "serie::Serie", "header": "Serie.h", "annotations": "Serie.ann.json",
+          "doc": "A flat buffer of scalars grouped into items of itemSize" }
+    ],
+
+    "//11": "A free function taking a vector of the bound class — defined inline",
+    "//12": "in the header, so nothing needs linking.",
+
+    "functions": [
+        { "name": "serie::weightedSum", "header": "Serie.h",
+          "doc": "Superposition: sum of alpha[j] * series[j], count-1 series broadcast" }
+    ]
+}

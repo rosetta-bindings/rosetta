@@ -1,0 +1,15 @@
+{
+    "//1": "Step 1 of 2. The `dynamic` backend turns bank.h into two files —",
+    "//2": "bindings/dynamic/auto_dynamic.{h,cpp} — and those two files are the",
+    "//3": "entire interface between your library and ../meta/manifest.json.",
+
+    "user_include": ".",
+    "rosetta_include": "../../../../include",
+
+    "generator_name": "bank_dynamic_gen",
+    "module_name": "bank",
+
+    "targets": [{ "lang": "dynamic", "name": "bank" }],
+
+    "classes": [{ "name": "bank::Account", "header": "bank.h" }]
+}

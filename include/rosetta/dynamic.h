@@ -194,7 +194,12 @@ namespace rosetta::dyn {
         static Any real(double v, const TypeDesc *t = nullptr);
         static Any text(std::string v, const TypeDesc *t = nullptr);
         static Any enumeration(long long v, const TypeDesc *t);
-        static Any list(std::vector<Any> v, const TypeDesc *t);
+        // `t` defaults like integer() / real() / text()'s: a host-language
+        // sequence has no single C++ element type to name, and list() supplies
+        // a Kind::vector descriptor so the value still matches a vector
+        // parameter. enumeration() deliberately has NO default — an enum
+        // without its descriptor cannot name its enumerators.
+        static Any list(std::vector<Any> v, const TypeDesc *t = nullptr);
         static Any object(void *p, const MetaClass *c, std::shared_ptr<void> owner = {},
                           const TypeDesc *t = nullptr);
         static Any opaque(std::any v, const TypeDesc *t);

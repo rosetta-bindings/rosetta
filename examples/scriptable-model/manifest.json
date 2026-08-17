@@ -1,0 +1,11 @@
+{
+    "preset": "scriptable",
+    "rosetta_include": "../../include",
+    "user_include": ["../dynamic/bindings/dynamic", "../dynamic"],
+    "user_sources": ["../dynamic/bindings/dynamic/auto_dynamic.cpp"],
+    "module_init": {
+        "headers": ["auto_dynamic.h"],
+        "statements": ["scene::register_all()"]
+    },
+    "targets": ["python", "lua", "node", "wasm", "typescript", "markdown"]
+}

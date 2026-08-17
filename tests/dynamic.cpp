@@ -393,6 +393,30 @@ TEST_F(Fixture, VectorsRoundTripThroughTheCanonicalRepresentation) {
     EXPECT_EQ(raw.scores, (std::vector<double>{9.5, 8.5}));
 }
 
+TEST_F(Fixture, AnUntypedListStillReadsAsAVectorAndReachesAVectorParameter) {
+    // A language wrapper boxing a host-language sequence has no TypeDesc to
+    // hand: there is no single C++ element type behind `[1, 2, 3]`. Any::list
+    // must substitute a builtin the way integer() / real() / text() do —
+    // kind() reads type_->kind, so a null descriptor used to report
+    // Kind::unknown and match() rejected the list against EVERY vector
+    // parameter.
+    const Any untyped = Any::list({Any::real(9.5), Any::real(8.5)});
+
+    EXPECT_EQ(untyped.kind(), Kind::vector);
+    EXPECT_EQ(match(&td_vec_double, untyped), Match::exact);
+
+    // ...and it still marshals, which is the behaviour the kind gates.
+    demo::Person raw;
+    Object       p = Object::borrow(kPerson, &raw);
+    ASSERT_TRUE(p.set("scores", untyped).ok());
+    EXPECT_EQ(raw.scores, (std::vector<double>{9.5, 8.5}));
+
+    // An empty list fits any sequence; a mistyped one still loses, so the
+    // fallback descriptor did not turn match() into a rubber stamp.
+    EXPECT_EQ(match(&td_vec_double, Any::list({})), Match::exact);
+    EXPECT_EQ(match(&td_vec_double, Any::list({Any::text("nope")})), Match::none);
+}
+
 TEST_F(Fixture, AnIntegerArgumentSatisfiesADoubleParameterByPromotion) {
     // The host language has one number type; requiring an exact match would
     // make every double-taking method uncallable from Lua or JavaScript.

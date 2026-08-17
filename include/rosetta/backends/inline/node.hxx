@@ -235,9 +235,59 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
         // classes — GEO::Mesh and its member stores — then bind as opaque
         // handles reached through references only).
 
+        // --- Callbacks ---------------------------------------------------------
+        // A std::function parameter is the only way a callback crosses: a member
+        // TEMPLATE has nothing to reflect on, so a bindable API spells the
+        // callback out as a concrete type. rosetta::napi_make_fn turns the JS
+        // function into it (runtime/node.h), which is the node counterpart of the
+        // wasm backend's rosetta_wx::make_fn.
+
+        // Can a value of this type ride INSIDE the callback, i.e. through the
+        // to_napi / from_napi pair the wrapper closure uses? Scalars, bool,
+        // strings, enums and vectors of those. Raw pointers and nested callbacks
+        // are out — nothing would build the inner adapter — and so are objects:
+        // to_napi wraps a class by COPY into a fresh JS object, which is the
+        // wrong identity for a value handed to a callback mid-iteration.
+        inline bool nx_cb_convertible(const GenType &t) {
+            if (t.is_pointer || t.is_callback || t.is_shared_ptr) {
+                return false;
+            }
+            if (t.kind == "number" || t.kind == "boolean" || t.kind == "string" ||
+                t.kind == "enum") {
+                return true;
+            }
+            if (t.kind == "vector") {
+                return !t.element.empty() && nx_cb_convertible(t.element.front());
+            }
+            return false;
+        }
+
+        // Bindable iff the whole signature is convertible (the return may be void).
+        inline bool nx_callback_convertible(const GenType &t) {
+            if (!t.is_callback || t.callback_sig.empty()) {
+                return false;
+            }
+            const GenType &ret = t.callback_sig.front();
+            if (!(ret.kind == "void" || nx_cb_convertible(ret))) {
+                return false;
+            }
+            for (std::size_t i = 1; i < t.callback_sig.size(); ++i) {
+                if (!nx_cb_convertible(t.callback_sig[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         // OK as an input (parameter / setter side)?
         inline bool nx_pass_ok(const GenParam &p) {
             const GenType &t = p.type;
+            // A callback is not "marshalable" — its kind is unknown — but it IS
+            // convertible when every type in its signature is. Checked before the
+            // marshalable gate, which would reject it on kind alone.
+            if (t.is_callback) {
+                return nx_callback_convertible(t);
+            }
             if (!nx_marshalable(t)) {
                 return false;
             }

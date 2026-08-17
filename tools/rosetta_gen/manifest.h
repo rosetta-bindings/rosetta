@@ -127,6 +127,18 @@
 //     ],                                            //   overloaded name — the only way in,
 //                                                   //   since ^^name is ill-formed for an
 //                                                   //   overload set.
+//     "preset": "scriptable",                       // optional: a name, or a list of
+//                                                   //   them. Pulls in the JSON fragment
+//                                                   //   <rosetta_include>/rosetta/presets/
+//                                                   //   <name>.json — a FIXED binding
+//                                                   //   surface (rosetta's own reflection
+//                                                   //   API, say), so the manifest states
+//                                                   //   only what is project-specific.
+//                                                   //   Deep-merged, manifest wins; its
+//                                                   //   classes/functions are parsed with
+//                                                   //   a pristine context and it puts
+//                                                   //   rosetta_include on the target's
+//                                                   //   include path.
 //     "module_init": {                              // optional: statements the module
 //       "headers": ["lib/lifecycle.h"],             //   runs when it LOADS, plus the
 //       "statements": ["lib::initialize()"]         //   headers declaring them. The

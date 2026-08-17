@@ -1,0 +1,41 @@
+{
+  "itemSize": {
+    "doc": "Scalars per item: 1 = scalars, 3 = vector3, 6 = symmetric tensor"
+  },
+  "count": {
+    "doc": "Number of items"
+  },
+  "size": {
+    "doc": "Raw number of scalars, count() * itemSize()"
+  },
+  "empty": {
+    "doc": "True when there are no scalars"
+  },
+  "item": {
+    "doc": "The i-th item, as a copy of itemSize consecutive scalars"
+  },
+  "scalar": {
+    "doc": "The i-th scalar of an itemSize == 1 serie (throws otherwise)"
+  },
+  "scalars": {
+    "doc": "The scalars of an itemSize == 1 serie (throws otherwise)"
+  },
+  "raw": {
+    "doc": "The flat buffer, whatever the itemSize"
+  },
+  "append": {
+    "doc": "Append the items of another serie; returns this one, so calls chain"
+  },
+  "describe": {
+    "doc": "One-line summary: '<count> items of <itemSize>'"
+  },
+  "map": {
+    "doc": "A new serie of f applied to each scalar (itemSize 1 only)"
+  },
+  "reduce": {
+    "doc": "Fold f over the scalars from init (itemSize 1 only)"
+  },
+  "forEach": {
+    "doc": "Call f once per scalar (itemSize 1 only)"
+  }
+}

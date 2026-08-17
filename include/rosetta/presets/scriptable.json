@@ -1,0 +1,92 @@
+{
+    "//1": "Manifest preset: \"preset\": \"scriptable\"",
+    "//2": "",
+    "//3": "Binds <rosetta/script.h> — the bindable facade over rosetta's runtime",
+    "//4": "reflection API — so a host language can walk the metadata of ANY",
+    "//5": "library that emits `dynamic` tables, and call into it by name.",
+    "//6": "",
+    "//7": "This list is the API surface of rosetta/script.h and nothing else: it",
+    "//8": "names no user type, so a manifest using it supplies only where its own",
+    "//9": "headers and tables live. See examples/scriptable-model/minimal for the",
+    "//10": "smallest complete case.",
+    "//11": "",
+    "//12": "rosetta_gen parses these entries with a PRISTINE context — the",
+    "//13": "manifest's own `namespace` / `header_dir` defaults do not reach them —",
+    "//14": "and adds rosetta_include to the target's include path, since the bound",
+    "//15": "headers are rosetta's own.",
+
+    "classes": [
+        {
+            "namespace": "rosetta::script",
+            "header": "rosetta/script.h",
+            "entries": [
+                { "name": "Value",
+                  "doc": "A dynamically typed value crossing the boundary" },
+                { "name": "Outcome",
+                  "doc": "A call's result: a value, or the reason there isn't one" },
+                { "name": "TypeInfo",
+                  "doc": "What a value is — kind, spelling, element type, enumerators" },
+                { "name": "Annotation",
+                  "doc": "One key/value annotation the core does not interpret" },
+                { "name": "FieldInfo",
+                  "doc": "A field: type, doc, readonly, range, choices — a property row" },
+                { "name": "ParamInfo",
+                  "doc": "One parameter of a method, constructor or free function" },
+                { "name": "MethodInfo",
+                  "doc": "A method, including its position in the overload set" },
+                { "name": "CtorInfo",
+                  "doc": "One constructor overload" },
+                { "name": "ClassInfo",
+                  "doc": "A bound class: members, bases, construction, static calls" },
+                { "name": "EnumInfo",
+                  "doc": "A bound enum and its enumerators" },
+                { "name": "FunctionInfo",
+                  "doc": "A bound free function" },
+                { "name": "Instance",
+                  "doc": "A live object: get / set / call by name" }
+            ]
+        }
+    ],
+
+    "functions": [
+        {
+            "namespace": "rosetta::script",
+            "header": "rosetta/script.h",
+            "entries": [
+                { "name": "classes",
+                  "doc": "Every class the process knows how to reflect on" },
+                { "name": "enums",
+                  "doc": "Every registered enum" },
+                { "name": "functions",
+                  "doc": "Every registered free function" },
+                { "name": "find_class",
+                  "doc": "Look up a class by bound ('Mesh') or qualified ('scene::Mesh') name" },
+                { "name": "find_enum",
+                  "doc": "Look up an enum by bound or qualified name" },
+                { "name": "find_function",
+                  "doc": "Look up a free function by name (first overload)" },
+                { "name": "function_overloads",
+                  "doc": "Every overload of a free function name" },
+                { "name": "create",
+                  "doc": "find_class(name).create(args), in one call" }
+            ]
+        }
+    ],
+
+    "//16": "A default module name, so a manifest using this preset need not name",
+    "//17": "the module at all. Scalars are manifest-wins, so spelling out",
+    "//18": "\"module_name\" (or a per-target \"name\") still overrides it — without",
+    "//19": "one the fallback would be the manifest's own directory name, which",
+    "//20": "says nothing about what the module contains.",
+
+    "module_name": "rosetta_meta",
+
+    "//21": "The type casters, so a script passes 0.5 rather than Value.number(0.5).",
+    "//17": "Every block inside is guarded on a macro only its own target defines,",
+    "//18": "so this one include serves python / lua / node / wasm and expands to",
+    "//19": "nothing everywhere else.",
+
+    "module_init": {
+        "headers": ["rosetta/runtime/script_casters.h"]
+    }
+}

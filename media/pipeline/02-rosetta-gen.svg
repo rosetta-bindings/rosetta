@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 250" width="1000" height="250" role="img">
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+  <path d="M0,0 L10,5 L0,10 z" fill="#616e88"/>
+</marker>
+<marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+  <path d="M0,0 L10,5 L0,10 z" fill="#ebcb8b"/>
+</marker>
+<marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+  <path d="M0,0 L10,5 L0,10 z" fill="#a3be8c"/>
+</marker>
+<marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+  <path d="M0,0 L10,5 L0,10 z" fill="#b48ead"/>
+</marker>
+</defs>
+<rect x="0" y="0" width="1000" height="250" rx="14" fill="#2e3440"/>
+<rect x="40" y="100" width="220" height="50" rx="8" fill="#434c5e" stroke="#616e88" stroke-width="1.5"/>
+<text x="150.0" y="131.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="18" font-weight="400" fill="#e5e9f0" text-anchor="middle">manifest.json</text>
+<path d="M260,125 L340,125" stroke="#616e88" stroke-width="2" fill="none" marker-end="url(#a)"/>
+<text x="300" y="108" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="600" fill="#88c0d0" text-anchor="middle">rosetta_gen</text>
+<rect x="350" y="42" width="250" height="48" rx="8" fill="#3b4252" stroke="#616e88" stroke-width="1.5"/>
+<text x="475.0" y="71.33333333333333" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="16" font-weight="400" fill="#e5e9f0" text-anchor="middle">gen/&lt;name&gt;.cpp</text>
+<text x="620" y="72" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="15" font-weight="400" fill="#a9b1c1" text-anchor="start">a main() that reflects</text>
+<rect x="350" y="108" width="250" height="48" rx="8" fill="#3b4252" stroke="#616e88" stroke-width="1.5"/>
+<text x="475.0" y="137.33333333333334" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="16" font-weight="400" fill="#e5e9f0" text-anchor="middle">gen/bindings.h</text>
+<text x="620" y="138" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="15" font-weight="400" fill="#a9b1c1" text-anchor="start">your types + out-of-line annotations</text>
+<rect x="350" y="174" width="250" height="48" rx="8" fill="#3b4252" stroke="#616e88" stroke-width="1.5"/>
+<text x="475.0" y="203.33333333333334" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="16" font-weight="400" fill="#e5e9f0" text-anchor="middle">gen/CMakeLists.txt</text>
+<text x="620" y="204" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="15" font-weight="400" fill="#a9b1c1" text-anchor="start">knows where the fork lives</text>
+<text x="150" y="190" font-family="ui-sans-serif,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#a3be8c" text-anchor="middle">no reflection · stock C++17</text>
+</svg>

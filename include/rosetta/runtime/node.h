@@ -130,6 +130,38 @@ namespace rosetta {
      */
     template <typename T> decltype(auto) from_napi(const Napi::Value &v);
 
+    // ---- Callbacks: a JS function as a std::function parameter ----
+
+    template <typename T> struct is_std_function : std::false_type {};
+    template <typename R, typename... A>
+    struct is_std_function<std::function<R(A...)>> : std::true_type {};
+
+    /**
+     * @brief Wrap a JS function in the std::function a bound signature asks for.
+     *
+     * A `std::function` parameter is the only way a callback crosses: a member
+     * TEMPLATE (`map(F&&)`) has nothing to reflect on, so a bindable API spells
+     * the callback out as a concrete type. This is the node half of what
+     * rosetta_wx::make_fn does for wasm.
+     *
+     * TWO RULES the wrapper cannot enforce for you:
+     *
+     *   * The persisted reference makes the callback outlive the call, so a class
+     *     that STORES the callback and fires it later still works. The reference
+     *     is released when the last copy of the closure dies — which also means a
+     *     callback stored forever in C++ keeps that JS function alive forever.
+     *   * It is still only callable on the JS thread. Handing it to a C++ thread
+     *     pool is undefined; N-API has no lock to take.
+     */
+    template <typename F> struct napi_fn_wrap;
+    template <typename R, typename... A> struct napi_fn_wrap<std::function<R(A...)>> {
+        static std::function<R(A...)> make(Napi::Function f);
+    };
+
+    template <typename F> F napi_make_fn(Napi::Function f) {
+        return napi_fn_wrap<F>::make(f);
+    }
+
     /** @brief Whether a JS subclass overrides the named bound method. */
     template <typename T> bool napi_is_overridden(Napi::Object self, const char *name);
 
@@ -142,6 +174,27 @@ namespace rosetta {
     template <typename T, typename Ret, typename... Args>
     Ret napi_call_override_pure(const NapiTrampoline &self, const char *name,
                                 const Args &...args);
+
+    /**
+     * @brief Run `body` and turn any C++ exception into a JavaScript one.
+     *
+     * WHY EVERY ENTRY POINT NEEDS THIS. node-addon-api's own boundary wrapper
+     * (`details::WrapCallback`) catches `Napi::Error` and nothing else. A bound
+     * library that rejects bad input the ordinary C++ way — `throw
+     * std::invalid_argument(...)` — therefore escapes past N-API into the C++
+     * runtime, which calls std::terminate: the whole node process dies where
+     * pybind11 and CxxWrap would both have handed the script a catchable error.
+     * Nothing in the generated code can fix that, because the throw happens
+     * inside the user's function; it has to be caught here, at the boundary.
+     *
+     * The mapping follows JavaScript's own vocabulary rather than inventing one:
+     * `std::out_of_range` is a RangeError, `std::invalid_argument` and
+     * `std::domain_error` are TypeErrors, anything else deriving from
+     * std::exception is an Error carrying what(). A `Napi::Error` already on its
+     * way out is left alone — the range and read-only setters throw those
+     * deliberately.
+     */
+    template <typename F> decltype(auto) guard(Napi::Env env, F &&body);
 
     // ---- CRTP wrapper: accessors keyed on member/function pointers ----
 
@@ -161,6 +214,12 @@ namespace rosetta {
 
         Wrap(const Napi::CallbackInfo &info);
         ~Wrap();
+
+      private:
+        /** @brief The constructor's real body, so it can run inside guard(). */
+        void construct(const Napi::CallbackInfo &info);
+
+      public:
 
         /** @brief Field getter (copies through to_napi). */
         template <auto MemPtr> Napi::Value get_field(const Napi::CallbackInfo &info);

@@ -99,11 +99,36 @@ namespace rosetta {
         } else if constexpr (std::is_enum_v<T>) {
             return static_cast<T>(
                 static_cast<std::underlying_type_t<T>>(v.As<Napi::Number>().Int64Value()));
+        } else if constexpr (is_std_function<T>::value) {
+            // Must precede the generic class branch: a std::function IS a class,
+            // and unwrapping a JS function as a bound object would reinterpret
+            // unrelated memory.
+            return napi_make_fn<T>(v.As<Napi::Function>());
         } else if constexpr (std::is_class_v<T>) {
             return static_cast<T &>(Wrap<T>::Unwrap(v.As<Napi::Object>())->inner());
         } else {
             static_assert(sizeof(T) == 0, "from_napi: unsupported type");
         }
+    }
+
+    // ---- Callbacks ----
+
+    template <typename R, typename... A>
+    std::function<R(A...)> napi_fn_wrap<std::function<R(A...)>>::make(Napi::Function f) {
+        // Persist: a Napi::Function handle dies with the enclosing HandleScope,
+        // and a bound class may keep the callback and fire it after the call that
+        // supplied it has returned. shared_ptr because a std::function must be
+        // copyable and a FunctionReference is move-only; the last copy releases.
+        auto ref = std::make_shared<Napi::FunctionReference>(Napi::Persistent(f));
+        return [ref](A... args) -> R {
+            const Napi::Env env = ref->Env();
+            Napi::Value     r   = ref->Call({to_napi(env, args)...});
+            if constexpr (std::is_void_v<R>) {
+                (void)r;
+            } else {
+                return from_napi<std::remove_cvref_t<R>>(r);
+            }
+        };
     }
 
     // ---- Virtual-method override plumbing ----
@@ -160,11 +185,40 @@ namespace rosetta {
                                  "' called before the JS object was bound");
     }
 
+    // ---- Exception translation at the boundary ----
+
+    template <typename F> decltype(auto) guard(Napi::Env env, F &&body) {
+        try {
+            return body();
+        } catch (const Napi::Error &) {
+            throw; // already a JS error (range / read-only setters): let it pass
+        } catch (const std::out_of_range &e) {
+            throw Napi::RangeError::New(env, e.what());
+        } catch (const std::invalid_argument &e) {
+            throw Napi::TypeError::New(env, e.what());
+        } catch (const std::domain_error &e) {
+            throw Napi::TypeError::New(env, e.what());
+        } catch (const std::exception &e) {
+            throw Napi::Error::New(env, e.what());
+        } catch (...) {
+            // A throw of something that is not a std::exception. There is
+            // nothing to report but the fact, which still beats terminate().
+            throw Napi::Error::New(env, "unknown C++ exception");
+        }
+    }
+
     // ---- Wrap: construction / destruction ----
 
     template <typename T, typename Tramp>
     Wrap<T, Tramp>::Wrap(const Napi::CallbackInfo &info)
         : Napi::ObjectWrap<Wrap<T, Tramp>>(info) {
+        // The body lives in construct() so a throwing user constructor becomes
+        // a JS exception rather than a terminate() — see guard().
+        guard(info.Env(), [&] { construct(info); });
+    }
+
+    template <typename T, typename Tramp>
+    void Wrap<T, Tramp>::construct(const Napi::CallbackInfo &info) {
         // Alias construction: (External<void> = address of the member object,
         // parent JS object). Reachable only from get_member_object — JS code
         // cannot forge an External. Restricted to untrampolined classes: the
@@ -263,35 +317,41 @@ namespace rosetta {
     template <typename T, typename Tramp>
     template <auto MemPtr>
     Napi::Value Wrap<T, Tramp>::get_field(const Napi::CallbackInfo &info) {
-        return to_napi(info.Env(), inner().*MemPtr);
+        return guard(info.Env(), [&] { return to_napi(info.Env(), inner().*MemPtr); });
     }
 
     template <typename T, typename Tramp>
     template <auto MemPtr>
     Napi::Value Wrap<T, Tramp>::get_member_object(const Napi::CallbackInfo &info) {
-        using FieldT = std::remove_cvref_t<decltype(std::declval<T &>().*MemPtr)>;
-        FieldT *p    = &(static_cast<T &>(inner()).*MemPtr);
-        return ctor_ref<FieldT>().New(
-            {Napi::External<void>::New(info.Env(), static_cast<void *>(p)), this->Value()});
+        return guard(info.Env(), [&] {
+            using FieldT = std::remove_cvref_t<decltype(std::declval<T &>().*MemPtr)>;
+            FieldT *p    = &(static_cast<T &>(inner()).*MemPtr);
+            return ctor_ref<FieldT>().New(
+                {Napi::External<void>::New(info.Env(), static_cast<void *>(p)), this->Value()});
+        });
     }
 
     template <typename T, typename Tramp>
     template <auto MemPtr>
-    void Wrap<T, Tramp>::set_field(const Napi::CallbackInfo & /*info*/, const Napi::Value &v) {
-        using FieldT    = std::remove_cvref_t<decltype(std::declval<T &>().*MemPtr)>;
-        inner().*MemPtr = from_napi<FieldT>(v);
+    void Wrap<T, Tramp>::set_field(const Napi::CallbackInfo &info, const Napi::Value &v) {
+        guard(info.Env(), [&] {
+            using FieldT    = std::remove_cvref_t<decltype(std::declval<T &>().*MemPtr)>;
+            inner().*MemPtr = from_napi<FieldT>(v);
+        });
     }
 
     template <typename T, typename Tramp>
     template <auto MemPtr, fixed_str Name, double Lo, double Hi>
     void Wrap<T, Tramp>::set_field_ranged(const Napi::CallbackInfo &info, const Napi::Value &v) {
-        using FieldT = std::remove_cvref_t<decltype(std::declval<T &>().*MemPtr)>;
-        FieldT val   = from_napi<FieldT>(v);
-        double d     = static_cast<double>(val);
-        if (d < Lo || d > Hi) {
-            throw Napi::RangeError::New(info.Env(), std::string(Name.data) + " out of range");
-        }
-        inner().*MemPtr = val;
+        guard(info.Env(), [&] {
+            using FieldT = std::remove_cvref_t<decltype(std::declval<T &>().*MemPtr)>;
+            FieldT val   = from_napi<FieldT>(v);
+            double d     = static_cast<double>(val);
+            if (d < Lo || d > Hi) {
+                throw Napi::RangeError::New(info.Env(), std::string(Name.data) + " out of range");
+            }
+            inner().*MemPtr = val;
+        });
     }
 
     template <typename T, typename Tramp>
@@ -306,22 +366,28 @@ namespace rosetta {
     template <typename T, typename Tramp>
     template <auto MFP>
     Napi::Value Wrap<T, Tramp>::call_method(const Napi::CallbackInfo &info) {
-        return call_method_impl<MFP>(info,
-                                     std::make_index_sequence<fn_traits<decltype(MFP)>::arity>{});
+        return guard(info.Env(), [&] {
+            return call_method_impl<MFP>(
+                info, std::make_index_sequence<fn_traits<decltype(MFP)>::arity>{});
+        });
     }
 
     template <typename T, typename Tramp>
     template <auto FP>
     Napi::Value Wrap<T, Tramp>::ext_method(const Napi::CallbackInfo &info) {
-        return ext_method_impl<FP>(
-            info, std::make_index_sequence<fn_traits<decltype(FP)>::arity - 1>{});
+        return guard(info.Env(), [&] {
+            return ext_method_impl<FP>(
+                info, std::make_index_sequence<fn_traits<decltype(FP)>::arity - 1>{});
+        });
     }
 
     template <typename T, typename Tramp>
     template <auto FP>
     Napi::Value Wrap<T, Tramp>::call_static(const Napi::CallbackInfo &info) {
-        return call_static_impl<FP>(info,
-                                    std::make_index_sequence<fn_traits<decltype(FP)>::arity>{});
+        return guard(info.Env(), [&] {
+            return call_static_impl<FP>(
+                info, std::make_index_sequence<fn_traits<decltype(FP)>::arity>{});
+        });
     }
 
     template <typename T, typename Tramp>
@@ -378,8 +444,10 @@ namespace rosetta {
 
     template <typename T, typename Tramp>
     template <auto MFP> Napi::Value Wrap<T, Tramp>::call_method_alias(const Napi::CallbackInfo &info) {
-        using FT = fn_traits<decltype(MFP)>;
-        return call_method_alias_impl<MFP>(info, std::make_index_sequence<FT::arity>{});
+        return guard(info.Env(), [&] {
+            using FT = fn_traits<decltype(MFP)>;
+            return call_method_alias_impl<MFP>(info, std::make_index_sequence<FT::arity>{});
+        });
     }
 
     template <typename T, typename Tramp>
@@ -414,7 +482,10 @@ namespace rosetta {
     }
 
     template <auto FP> inline Napi::Value napi_free_entry(const Napi::CallbackInfo &info) {
-        return napi_free_call<FP>(info, std::make_index_sequence<fn_traits<decltype(FP)>::arity>{});
+        return guard(info.Env(), [&] {
+            return napi_free_call<FP>(
+                info, std::make_index_sequence<fn_traits<decltype(FP)>::arity>{});
+        });
     }
 
     // ---- Enum object from an explicit name/value list (no reflection) ----

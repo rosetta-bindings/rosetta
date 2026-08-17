@@ -1,0 +1,14 @@
+{
+    "preset": "scriptable",
+
+    "rosetta_include": "../../../../include",
+    "user_include": ["../lib", "../lib/bindings/dynamic"],
+    "user_sources": ["../lib/bindings/dynamic/auto_dynamic.cpp"],
+
+    "module_init": {
+        "headers": ["auto_dynamic.h"],
+        "statements": ["bank::register_all()"]
+    },
+
+    "targets": ["python", "lua", "node", "markdown"]
+}

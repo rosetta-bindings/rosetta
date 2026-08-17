@@ -59,6 +59,20 @@ namespace rosetta::dyn {
         static const TypeDesc t{Kind::string, "std::string"};
         return &t;
     }
+    /**
+     * @brief The descriptor an untyped list gets: "a sequence of something".
+     *
+     * `element` is deliberately left null, and that is not a gap. A host
+     * language hands over a heterogeneous sequence and there is no single C++
+     * element type to name — but nothing needs one: match()'s vector case
+     * recurses into each ELEMENT's own descriptor against the parameter's
+     * element, and never dereferences the argument's. What the argument must
+     * carry is Kind::vector, so that the case is reached at all.
+     */
+    inline const TypeDesc *builtin_list() {
+        static const TypeDesc t{Kind::vector, "vector<?>"};
+        return &t;
+    }
 
     inline bool same_type(const TypeDesc *a, const TypeDesc *b) {
         if (a == b) {
@@ -102,7 +116,15 @@ namespace rosetta::dyn {
     inline Any Any::enumeration(long long v, const TypeDesc *t) { return Any(t, std::any(v)); }
 
     inline Any Any::list(std::vector<Any> v, const TypeDesc *t) {
-        return Any(t, std::any(std::move(v)));
+        // Substitute a builtin the way integer() / real() / text() do. Without
+        // it a null `t` leaves kind() reading Kind::unknown — as it reads
+        // type_->kind — and match() then rejects the list against EVERY vector
+        // parameter, so a script's `[1, 2, 3]` could never reach a
+        // std::vector<int>. The two callers that pass a descriptor (make_any
+        // in dynamic_cast.hxx, and generated thunks) are unaffected; the ones
+        // that cannot are language wrappers boxing a host-language sequence,
+        // which is the case this whole header exists to serve.
+        return Any(t ? t : builtin_list(), std::any(std::move(v)));
     }
 
     inline Any Any::object(void *p, const MetaClass *c, std::shared_ptr<void> owner,

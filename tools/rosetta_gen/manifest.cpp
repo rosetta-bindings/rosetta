@@ -156,6 +156,63 @@ static std::vector<fs::path> expand_glob(const fs::path &base, const std::string
     return out;
 }
 
+// Fold an arbitrary directory name into something usable as a C++ / Python /
+// Lua identifier: every character outside [A-Za-z0-9_] becomes '_', and a
+// leading digit gains one. Used only where a name is DERIVED rather than
+// written down — see generator_name in load().
+static std::string identifier_from(const std::string &s) {
+    std::string out;
+    out.reserve(s.size());
+    for (const unsigned char c : s) {
+        out.push_back((std::isalnum(c) || c == '_') ? static_cast<char>(c) : '_');
+    }
+    if (out.empty()) {
+        return "bindings";
+    }
+    if (std::isdigit(static_cast<unsigned char>(out.front()))) {
+        out.insert(out.begin(), '_');
+    }
+    return out;
+}
+
+// Deep-merge a preset fragment into the manifest, with the MANIFEST winning
+// every conflict it can express:
+//
+//   * a key the manifest does not have  -> taken from the preset
+//   * arrays present in both            -> preset entries first, manifest's after
+//   * objects present in both           -> merged the same way, recursively
+//   * a scalar the manifest spells out  -> kept; the preset never overrides it
+//
+// The array rule is what makes "module_init" compose: the preset contributes
+// the caster include and the manifest keeps its own headers and statements,
+// rather than one silently replacing the other.
+//
+// `classes` and `functions` are deliberately NOT merged here — see the preset
+// block in load() for why they are parsed separately.
+static void merge_preset(json &dst, const json &src) {
+    for (auto it = src.begin(); it != src.end(); ++it) {
+        const std::string &k = it.key();
+        if (k.rfind("//", 0) == 0 || k == "classes" || k == "functions") {
+            continue;
+        }
+        if (!dst.contains(k)) {
+            dst[k] = it.value();
+            continue;
+        }
+        json &d = dst.at(k);
+        if (d.is_array() && it->is_array()) {
+            json merged = *it;
+            for (const auto &e : d) {
+                merged.push_back(e);
+            }
+            d = std::move(merged);
+        } else if (d.is_object() && it->is_object()) {
+            merge_preset(d, *it);
+        }
+        // else: the manifest said something concrete. It wins.
+    }
+}
+
 Manifest load(const fs::path &manifest_path) {
     std::ifstream in(manifest_path);
     if (!in) {
@@ -190,10 +247,65 @@ Manifest load(const fs::path &manifest_path) {
     m.rosetta_include =
         fs::weakly_canonical(base / fs::path(j.at("rosetta_include").get<std::string>()));
 
+    // `preset` (a name, or an array of them) pulls in a JSON fragment shipped
+    // under <rosetta_include>/rosetta/presets/<name>.json. A preset describes a
+    // FIXED binding surface — rosetta's own reflection API, say — so a manifest
+    // that uses one states only what is specific to its project: where its
+    // headers and sources live, which targets to emit, what to run at load.
+    //
+    // `classes` / `functions` are held aside rather than merged into `j`,
+    // because they must be parsed with a pristine EntryCtx: the manifest's own
+    // `namespace` and `header_dir` defaults describe the USER's tree and must
+    // not be prepended to a preset's headers. Everything else deep-merges,
+    // manifest-wins — see merge_preset above.
+    json preset = json::object();
+    if (j.contains("preset")) {
+        std::vector<std::string> names;
+        if (j.at("preset").is_array()) {
+            for (const auto &e : j.at("preset")) {
+                names.push_back(e.get<std::string>());
+            }
+        } else {
+            names.push_back(j.at("preset").get<std::string>());
+        }
+        for (const std::string &n : names) {
+            const fs::path p = m.rosetta_include / "rosetta" / "presets" / (n + ".json");
+            std::ifstream  pin(p);
+            if (!pin) {
+                throw std::runtime_error("unknown \"preset\": \"" + n + "\" (looked for " +
+                                         p.string() + ")");
+            }
+            json pj = json::parse(pin, /*cb=*/nullptr, /*allow_exceptions=*/true,
+                                  /*ignore_comments=*/true);
+            merge_preset(j, pj);
+            for (const char *key : {"classes", "functions"}) {
+                if (pj.contains(key)) {
+                    for (const auto &e : pj.at(key)) {
+                        preset[key].push_back(e);
+                    }
+                }
+            }
+        }
+        // A preset binds headers that live under rosetta_include, so it has to
+        // be on the TARGET's include path too — not just the generator's. Every
+        // other binding is reflection-free by construction and has no reason to
+        // see rosetta's headers, which is why this is not the default.
+        if (std::find(m.user_include.begin(), m.user_include.end(), m.rosetta_include) ==
+            m.user_include.end()) {
+            m.user_include.push_back(m.rosetta_include);
+        }
+    }
+
     // `generator_name` is optional; falls back to the manifest's parent
-    // directory name (the driver tool / CMake target name).
-    m.generator_name = j.contains("generator_name") ? j.at("generator_name").get<std::string>()
-                                                    : base.filename().string();
+    // directory name. It names the emitted driver source (<name>.cpp) and is
+    // the last-resort default for `module_name` — which is why the DERIVED form
+    // is sanitised and the explicit one is not. A directory called
+    // "my-cool-lib" would otherwise reach a backend as the module name and emit
+    // PYBIND11_MODULE(my-cool-lib, m), a syntax error a long way from its
+    // cause. An author who spells the key out gets what they wrote.
+    m.generator_name = j.contains("generator_name")
+                           ? j.at("generator_name").get<std::string>()
+                           : identifier_from(base.filename().string());
 
     // `module_name` is optional too; the default binding module name when a
     // target gives no `name`. Falls back to `generator_name`.
@@ -504,14 +616,21 @@ Manifest load(const fs::path &manifest_path) {
                 m.classes.push_back(std::move(e));
             }
         };
-    add_classes(j.at("classes"), top);
+    if (j.contains("classes")) {
+        add_classes(j.at("classes"), top);
+    } else if (!preset.contains("classes")) {
+        throw std::runtime_error("manifest has no \"classes\" (and no \"preset\" supplying any)");
+    }
+    if (preset.contains("classes")) {
+        add_classes(preset.at("classes"), EntryCtx{}); // pristine: see the preset block
+    }
 
     // `functions` is optional: free (non-member) functions to bind. Each entry
     // gives the (optionally qualified) function name and its declaring header;
     // `doc` is an optional description (free functions carry no in-source
     // annotation, keeping the user's headers untouched). Same group support
     // as "classes" — a shared-header group reads especially well here.
-    if (j.contains("functions")) {
+    if (j.contains("functions") || preset.contains("functions")) {
         std::function<void(const json &, const EntryCtx &)> add_functions =
             [&](const json &arr, const EntryCtx &ctx) {
                 for (const auto &f : arr) {
@@ -536,7 +655,12 @@ Manifest load(const fs::path &manifest_path) {
                     m.functions.push_back(std::move(e));
                 }
             };
-        add_functions(j.at("functions"), top);
+        if (j.contains("functions")) {
+            add_functions(j.at("functions"), top);
+        }
+        if (preset.contains("functions")) {
+            add_functions(preset.at("functions"), EntryCtx{}); // pristine: see the preset block
+        }
     }
 
     // `sequences` is optional: foreign sequence containers. A string entry is a
