@@ -14,8 +14,11 @@
 //
 // Members whose signature carries a type embind cannot marshal (e.g. a
 // std::function parameter) are skipped rather than emitted, matching rosetta's
-// "skip, don't fail" contract. std::vector<T> members/returns are supported via
-// emitted register_vector<T>() registrations.
+// "skip, don't fail" contract. std::vector<T> members/returns cross as plain JS
+// Arrays: the generated source specializes embind's BindingType to put them on
+// the emval wire and emits a register_type<std::vector<T>>() per element type,
+// rather than register_vector<T>, whose opaque M.vector_double handle class
+// would make this the one backend where a sequence is not the host's own array.
 //
 // Implementation in inline/wasm.hxx. Relies on Backend /
 // GenContext from <rosetta/generate.h> and on gen_detail::qualify_std() from

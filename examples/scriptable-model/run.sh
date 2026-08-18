@@ -4,6 +4,7 @@
 #   ./run.sh          # both stages, then the Python driver
 #   ./run.sh lua      # ...the Lua one
 #   ./run.sh node     # ...the Node one
+#   ./run.sh qt       # ...the Qt property editor (needs PyQt6 or PySide6)
 #   ./run.sh clean    # remove what THIS example generated (stage 2 only)
 #
 # Two stages, because they are two different jobs — and stage 1 lives in
@@ -48,5 +49,6 @@ echo
 case "${1:-}" in
     lua)  (cd bindings/lua && lua ../../drive.lua) ;;
     node) node drive.js ;;
+    qt)   python3 drive_qt.py ;;
     *)    PYTHONPATH=bindings/python python3 drive.py ;;
 esac

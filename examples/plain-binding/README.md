@@ -10,7 +10,7 @@ Serie.hxx          the bodies, included from Serie.h
 Serie.ann.json     the docs, out of line
 manifest.json      one class, one free function, four targets
 drive.{py,jl,js}   the same script in three languages
-drive.wasm.js      the fourth, unverified (no emsdk here)
+drive.wasm.js      the fourth — same script, embind's handle discipline
 ```
 
 ```bash
@@ -248,8 +248,20 @@ node   : TypeError - Serie::scalars: requires itemSize == 1
 
 ## Status
 
-`python`, `julia` and `node` are built and run above. **`wasm` is unverified** —
-there is no emsdk on the machine this was written on, so the target was skipped
-and `drive.wasm.js` has never executed. The generated `bindings/wasm/` project
-is complete; `emcmake cmake -S bindings/wasm -B bindings/wasm/build && cmake
---build bindings/wasm/build` is all it should need.
+All four targets are built and run above, `wasm` included (`emcmake cmake -S
+bindings/wasm -B bindings/wasm/build && cmake --build bindings/wasm/build`, then
+`node drive.wasm.js`).
+
+`drive.wasm.js` is `drive.js` line for line, and prints identical output, with
+exactly two edits:
+
+- every `Serie` gets an explicit `.delete()` — the trap above
+- the C++ `std::invalid_argument` is caught as an emscripten `CppException`
+  (still carrying `what()`) rather than as a `TypeError`
+
+Notably *not* on that list: `std::vector`. embind's usual `register_vector<T>`
+would make it an opaque `M.vector_double` you fill with `push_back`, which is
+what the other three backends spare you; the generated binding puts it on the
+emval wire instead, so `new M.Serie([0, 0, 0], 3)` and `v.raw() // -> Array`
+work as they do under N-API. A JS exception thrown inside a `map`/`forEach`
+callback also comes back out through wasm intact.

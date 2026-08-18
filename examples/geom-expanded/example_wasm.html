@@ -15,8 +15,8 @@
     # visit http://localhost:8000/example_wasm.html
 
   Same Model/Surface/Point/Triangle API as example_wasm.js — here we also draw
-  the surface on a <canvas>. embind exposes registered std::vector types
-  (vector_double / vector_int / ...) and JS-owned C++ objects must be .delete()'d.
+  the surface on a <canvas>. std::vector crosses as a plain JS Array; C++ objects
+  cross as handles that must be .delete()'d.
 -->
 <html lang="en">
 <head>
@@ -74,55 +74,36 @@
       })
       .catch((e) => setStatus("✗ Failed to load module: " + (e.message || e), "err"));
 
-    // Build an embind std::vector<T> from a JS array.
-    function toVector(VecType, values) {
-      const v = new VecType();
-      for (const x of values) v.push_back(x);
-      return v;
-    }
-
     function run(geom) {
-      // A unit triangle in the XY plane: positions (x,y,z)*3, indices.
-      const positions = toVector(geom.vector_double, [0, 0, 0, 1, 0, 0, 0, 1, 0]);
-      const indices = toVector(geom.vector_int, [0, 1, 2]);
-
-      const surface = new geom.Surface(positions, indices);
-      positions.delete();
-      indices.delete();
+      // A unit triangle in the XY plane: positions (x,y,z)*3, indices. Both
+      // std::vector parameters take a plain JS Array.
+      const surface = new geom.Surface([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 1, 2]);
 
       const model = new geom.Model();
       model.addSurface(surface);
 
       // Pull the geometry back across the boundary for display + drawing.
+      // getSurfaces() hands back an Array — but of Surface handles, each a copy
+      // that has to be released.
       const drawPoints = [];
       const drawTris = [];
-      const surfaces = model.getSurfaces();
-      for (let i = 0; i < surfaces.size(); ++i) {
-        const s = surfaces.get(i);
-
-        const pts = s.getPoints();
+      for (const s of model.getSurfaces()) {
         log("Surface points:");
-        for (let k = 0; k < pts.size(); ++k) {
-          const p = pts.get(k);
+        for (const p of s.getPoints()) {
           drawPoints.push([p.x, p.y, p.z]);
           log(`  (${p.x}, ${p.y}, ${p.z})`);
           p.delete();
         }
-        pts.delete();
 
-        const tris = s.getTriangles();
         log("Surface triangles:");
-        for (let k = 0; k < tris.size(); ++k) {
-          const t = tris.get(k);
+        for (const t of s.getTriangles()) {
           drawTris.push([t.a, t.b, t.c]);
           log(`  [${t.a}, ${t.b}, ${t.c}]`);
           t.delete();
         }
-        tris.delete();
 
         s.delete();
       }
-      surfaces.delete();
 
       // Free function bound from common.h: swizzle (x,y,z) -> (x*2, z*3, y*4).
       const p = new geom.Point(1, 2, 3);

@@ -68,8 +68,8 @@ The docstrings and the `range` validation on `Triangle::a/b/c` are baked into th
 generated source as literal C++ — even though the headers carry none — because
 reflection runs once on the **generation host**, not on the target. Members a
 backend can't marshal (e.g. `Surface::transform`, which takes a `std::function`)
-are skipped where unsupported; `std::vector` crosses the boundary in every target
-(embind via emitted `register_vector<T>()`).
+are skipped where unsupported; `std::vector` crosses the boundary as the host
+language's own array type in every target, embind included.
 
 ## Reproduce
 

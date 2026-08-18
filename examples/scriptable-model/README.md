@@ -1,5 +1,21 @@
 # Scriptable object model — bind the reflection API itself
 
+## Introduction
+Normally rosetta generates one binding per C++ class per language, so every time your library grows a class you regenerate and recompile everything; this example does the opposite — it points rosetta at rosetta's own reflection API (`rosetta::script`) and binds that once, so your library's classes stop being bound types and become data that scripts reach by string name at runtime (`meta.create("scene::Mesh")`, `m.set("opacity", 0.5)`, `m.call("describe", [])`, `k.fields()`), which is why nothing in manifest.json or the generated code ever mentions `scene::Mesh` — the drivers name it once, as a string. The power is that one binding then serves any rosetta-dynamic library and keeps working as that library grows, and because the annotations travel with the metadata (ranges, choices, docstrings, enum names) and are enforced in the C++ core rather than re-implemented per backend, you can write a property-panel or menu generator once, in the language whose UI it builds — Python for Tk, JS for web, Lua for a game editor — instead of hand-writing a C++ walker per toolkit, which is exactly the five duplicated walkers examples/dynamic needs and this one replaces (`drive.py`'s build_panel_spec is `qt/propertypanel.h`, in ~20 lines of Python). The cost is that every access is a name lookup plus overload scoring, so it's right for menus, panels and glue and wrong for an inner loop.
+
+Usage is one command, from `examples/scriptable-model`:
+
+```sh
+./run.sh          # generate + build, then the Python driver
+./run.sh lua      # ...the Lua one
+./run.sh node     # ...the Node one
+./run.sh qt       # ...a live Qt property editor, also in Python (drive_qt.py)
+```
+
+One caveat worth knowing before you run it: stage 1 lives in examples/dynamic, not here — that's where the scene library's metadata tables get generated, and they aren't checked in, so a fresh clone has to build that example first (run.sh handles it; the step-by-step section of the README spells it out). If you want the same idea without the two-example indirection, minimal/ rebuilds it from scratch on a 25-line library that has never heard of rosetta.
+
+## This example
+
 `examples/dynamic` shows the metadata driving a GUI. Every consumer there is C++: `interp.h`, `qt/propertypanel.h`, `qt/mainwindow.h`, and — elsewhere in the tree — `runtime/imgui.h` and `visitors/qml_reflected_object.h`. Five hand-written walkers over the same tables, one per toolkit.
 
 ## Build
@@ -20,6 +36,7 @@ include/rosetta/presets/scriptable.json  the binding surface, as manifest data
 examples/scriptable-model/manifest.json  the whole of the per-project work
 examples/scriptable-model/run.sh         both stages, then a driver
 examples/scriptable-model/drive.{py,lua,js}
+examples/scriptable-model/drive_qt.py    the same dispatch, wired to real widgets
 examples/scriptable-model/minimal/       the same, from scratch, on a 25-line
                                          library that never heard of rosetta
 ```
@@ -28,6 +45,7 @@ examples/scriptable-model/minimal/       the same, from scratch, on a 25-line
 ./run.sh          # both stages, then the Python driver
 ./run.sh lua      # ...the Lua one
 ./run.sh node     # ...the Node one
+./run.sh qt       # ...the Qt property editor (pip install PyQt6)
 ./run.sh clean
 ```
 
@@ -145,6 +163,7 @@ cd <rosetta>/examples/scriptable-model
 PYTHONPATH=bindings/python python3 drive.py
 node drive.js
 (cd bindings/lua && lua ../../drive.lua)
+python3 drive_qt.py            # the Qt editor; puts bindings/python on sys.path itself
 ```
 
 Both generation stages need clang-p2996; everything from step 3 on is a stock
@@ -222,17 +241,20 @@ The one skip is `Value::raw()`, returning `const dyn::Any &` — the deliberate 
 
 The same session, three languages, `scene::Mesh` named nowhere:
 
+Python:
 ```python                          # drive.py
 m.set("opacity", 0.5)             # -> 0.5
 m.set("weights", [0.25, 0.5, 1])  # -> [0.25, 0.5, 1.0]
 m.set("opacity", 99)              # -> "opacity = 99 is outside [0, 1]"
 cube.call("at", [0, 1]).value()   # -> 2.0
 ```
+Lua:
 ```lua                             -- drive.lua
 m:set("opacity", 0.5)
 m:set("weights", { 0.25, 0.5, 1 })
 cube:call("at", { 0, 1 }):value()
 ```
+JavaScript:
 ```javascript                      // drive.js
 m.set("opacity", 0.5);
 m.set("weights", [0.25, 0.5, 1]);
@@ -267,6 +289,28 @@ for f in inst.cls().fields():
 ```
 
 Ten lines, editable without recompiling anything, and `value` is a real Python object rather than a box.
+
+## The same thing, with real widgets
+
+[`drive_qt.py`](drive_qt.py) (`./run.sh qt`, needs `pip install PyQt6`) replaces the descriptors above with a live Qt editor — what [`examples/dynamic/qt/`](../dynamic/qt/) hand-wrote in C++, here in ~480 lines of Python that no C++ programmer had to touch:
+
+| what you see | where it comes from |
+|---|---|
+| row label | the `label` annotation, else `f.name()` |
+| slider / checkbox / colour swatch / radio row / text field | the `widget` annotation, else the field's `kind()` |
+| slider bounds | `has_range()` / `range_min()` / `range_max()` |
+| combo entries | `choices()`, or a `TypeInfo`'s `enumerator_names()` for an enum |
+| tooltip | `doc()` |
+| greyed out | `readonly()` / `writable()`, and `readable()` for what the type gate could not marshal |
+| `Origin` sub-panel | the field's `kind() == "object"` — the `Instance` it returns pins its parent, so those spin boxes write straight into the mesh |
+| Describe / Reset / Subdivide | methods carrying a `button` annotation |
+| the **New** menu | `classes()`, plus every static method whose `ret().kind()` is `"object"`; `sphere(rings, segments)` gets an argument dialog built from `params()` |
+| the **Call** menu | every instance method — including *both* `at()` overloads, numbered from `overload_index()` / `overload_count()`, and `onProgress` listed **disabled** with its `skip_reason()` as the tooltip |
+| the mesh itself | `positions()` and `triangles()`, invoked **by name** — the geometry is `private` in `scene.h`, so reflection never sees the arrays, only the accessors |
+
+Nothing in the file names a scene type, a field or a method. Point the manifest at a different library and it still runs: it is a generic editor for anything the `dynamic` backend has described — pick `scene::Vec3` from the **New** menu and you get its three spin boxes, no buttons (nothing annotated one) and "no geometry" in the viewport, from the same code path.
+
+Two things worth doing while it is open. Drag the viewport: the `Spin` slider follows, because the drag writes through `inst.set("spin", …)` and wraps into the range the *annotation* declared — the panel never hard-codes 360. And notice that the sliders cannot produce an out-of-range value at all: their bounds *are* `range_min()`/`range_max()`, so the check the core would perform (`opacity = 99 is outside [0, 1]`, which is what `drive.py` prints and what a script hitting the same field gets) is one the widget can no longer fail. That is the argument in miniature — the constraint is declared once, next to the field, and every consumer in every language derives its behaviour from it.
 
 ## Using it on your own library
 
@@ -314,15 +358,3 @@ No class list to maintain, no regeneration when your library grows a class.
 
 The next step, not done here, is dropping even the three keys: a `load(path)` function that `dlopen`s a shared library whose `register_*` self-registers, giving one prebuilt `rosetta_meta` wheel that reflects *any* rosetta-dynamic
 library.
-
-## Rough edges found by building it
-
-- **A core bug, caught by the casters — since fixed.** `Any::list()` did not substitute a builtin `TypeDesc` the way `Any::integer()` and friends do, and `Any::kind()` reads `type_->kind` — so a list built with a null descriptor reported `Kind::unknown` and `match()` rejected it against *every* vector parameter, making a script's `[1, 2, 3]` unable to reach a `std::vector<int>`. Fixed in `inline/dynamic.hxx` with a `builtin_list()` fallback (and `t` now defaults to `nullptr`, as on the scalar factories); regression test in `tests/dynamic.cpp`.
-- **`rosetta_include` is not on the target's include path** for `python` / `lua` (only `node` adds it). Every other binding is reflection-free by construction, so the backends have no reason to add it — but here the bound headers *are* rosetta headers. Applying a `preset` now adds it, which covers this case; a manifest that binds a rosetta header *without* a preset still has to list `include/` in `user_include` itself.
-- **Default arguments bind at fixed arity.** `create(name)` is a `TypeError`; `create(name, [])` works. Same for every `args = {}` parameter.
-- **Enums cross as integers**, matching `Any`'s canonical representation. A UI maps them back through `TypeInfo::enumerator_names()`, which is what the property sheet above does. Returning the enumerator *name* would be friendlier but would not round-trip through `set`.
-- **Cost.** Every access is a linear name lookup plus overload scoring (`dyn::resolve`'s own note). Right for menus, panels and glue; wrong for an inner loop — cache the `MethodInfo`, or keep an expanded binding for hot paths.
-
-## What was NOT worth factorising
-
-Making the casters generic over *any* type-erased value type — a `value_traits<T>` layer so somebody's own `Variant` could reuse them — buys nothing today: `rosetta::script::Value` is the only such type in the tree, and a traits indirection with one implementation is harder to read than the thing it abstracts. Worth revisiting the day a second one exists.

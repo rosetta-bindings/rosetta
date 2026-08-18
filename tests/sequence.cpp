@@ -133,9 +133,15 @@ TEST(Sequence, WasmEmitsAdapterAndRegistersBoundaryVector) {
     EXPECT_NE(s.find(".function(\"set_points\", +[](SeqGeom &self, std::vector<double> arg0"),
               std::string::npos);
     EXPECT_NE(s.find(".class_function(\"make\", +[]("), std::string::npos);
-    // The std::vector boundary types are registered.
-    EXPECT_NE(s.find("emscripten::register_vector<double>"), std::string::npos);
-    EXPECT_NE(s.find("emscripten::register_vector<int>"), std::string::npos);
+    // The std::vector boundary types are registered — as emval passthroughs
+    // (plain JS Arrays), not as opaque register_vector handle classes.
+    EXPECT_NE(s.find("emscripten::register_type<std::vector<double>>(\"Array<number>\")"),
+              std::string::npos);
+    EXPECT_NE(s.find("emscripten::register_type<std::vector<int>>(\"Array<number>\")"),
+              std::string::npos);
+    EXPECT_EQ(s.find("emscripten::register_vector<"), std::string::npos);
+    // ...which only works with the BindingType specialization alongside them.
+    EXPECT_NE(s.find("struct BindingType<std::vector<T>>"), std::string::npos);
     // Sequence field rides a copying property.
     EXPECT_NE(s.find(".property(\"weights\","), std::string::npos);
     EXPECT_EQ(s.find("&SeqGeom::set_points"), std::string::npos);

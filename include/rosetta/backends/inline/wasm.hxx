@@ -72,7 +72,66 @@ and exported (`M.FS`, `M.NODEFS`) so a demo can mount a real directory.
 ```sh
 node -e "require('./build/{{LIB}}.js')().then(M => console.log(Object.keys(M)))"
 ```
+
+`std::vector<T>` crosses as a plain JS `Array` in both directions — pass
+`[1, 2, 3]`, get an `Array` back — rather than as embind's opaque
+`register_vector` handle class. A C++ **object**, though, is still a handle onto
+wasm memory: anything you `new`, and anything a call returns by value (including
+the elements of a returned `Array` of objects), must be released with
+`.delete()`.
 )MD";
+
+        // Emitted verbatim into auto_emscripten.cpp, ahead of the rosetta_wx
+        // helper below.
+        //
+        // Out of the box embind gives std::vector<T> no conversion at all, and
+        // the usual remedy — register_vector<T> — makes it an OPAQUE BOUND
+        // CLASS: JS has to fill an M.vector_double by push_back, cannot pass a
+        // plain Array, and gets a handle (not an Array) back, one it must
+        // .delete(). That is a gratuitous difference from every other backend
+        // rosetta emits, all of which marshal a sequence as the host language's
+        // own array type.
+        //
+        // Specializing embind's own BindingType puts std::vector<T> on the
+        // emval wire instead — the same technique <emscripten/val.h> uses for
+        // std::optional<T>. Out is val::array(v), which memcpy's through a
+        // typed-array view for arithmetic T and walks element-wise otherwise;
+        // in is vecFromJSArray<T>. embind's BindingType<const T> and
+        // BindingType<T&> forwarders make this one specialization cover
+        // `const std::vector<T>&` parameters and returns too, so an ordinary
+        // member-function pointer still binds — no per-method adapter, and
+        // nested vector<vector<T>> falls out by recursion.
+        //
+        // The matching emscripten::register_type<std::vector<T>>() emitted into
+        // EMSCRIPTEN_BINDINGS is the other half: it tells the JS side to treat
+        // that type id as an emval passthrough. Without it the module aborts at
+        // the first call with "BindingError: Unbound type".
+        constexpr std::string_view WASMX_VECTOR_HELPER =
+            R"VEC(
+namespace emscripten {
+    namespace internal {
+        template <typename T> struct BindingType<std::vector<T>> {
+            using ValBinding = BindingType<val>;
+            using WireType   = ValBinding::WireType;
+            static WireType toWireType(const std::vector<T> &v, rvp::default_tag) {
+                // val::array(vec) reaches for vec.data() for every type it can
+                // memory-view, and std::vector<bool> — the bitset in a vector's
+                // clothing — has none. Fill that one element by element.
+                if constexpr (std::is_same_v<T, bool>) {
+                    val a = val::array();
+                    for (std::size_t i = 0; i < v.size(); ++i) a.set(i, val(static_cast<bool>(v[i])));
+                    return ValBinding::toWireType(std::move(a), rvp::default_tag{});
+                } else {
+                    return ValBinding::toWireType(val::array(v), rvp::default_tag{});
+                }
+            }
+            static std::vector<T> fromWireType(WireType w) {
+                return vecFromJSArray<T>(val::take_ownership(w));
+            }
+        };
+    }
+}
+)VEC";
 
         // Emitted verbatim into auto_emscripten.cpp: converts an emscripten::val
         // to/from C++ and wraps a JS function into a std::function of any
@@ -215,8 +274,10 @@ namespace rosetta_wx {
                 if (t.element.empty()) {
                     return true;
                 }
-                // A vector *of* raw pointers would need register_vector<T*>, which
-                // embind does not support — keep skipping those.
+                // A vector *of* raw pointers: val::array would need an
+                // allow_raw_pointers policy per element on the way out and
+                // vecFromJSArray the same on the way in, neither of which the
+                // BindingType hook can carry. Keep skipping those.
                 if (t.element.front().is_pointer) {
                     return false;
                 }
@@ -521,8 +582,8 @@ namespace rosetta_wx {
         }
 
         // Accumulate the distinct vector types reachable from the surface, so a
-        // register_vector<element>() can be emitted for each. Keyed by the
-        // element's C++ spelling to dedup (vector<int> vs vector<double>).
+        // register_type<std::vector<element>>() can be emitted for each. Keyed
+        // by the element's C++ spelling to dedup (vector<int> vs vector<double>).
         inline void wx_collect_vectors(const GenType &t, std::vector<GenType> &out) {
             if (t.is_callback) {
                 for (const auto &s : t.callback_sig) {
@@ -604,18 +665,35 @@ namespace rosetta_wx {
             return out;
         }
 
-        // A JS-visible registry name for a vector type: "vector_<element>" with
-        // non-identifier characters flattened to '_'.
-        inline std::string wx_vector_name(const GenType &vt) {
-            std::string s = "vector_" + wx_cpp_type(vt.element.front());
-            for (char &ch : s) {
-                const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-                                (ch >= '0' && ch <= '9') || ch == '_';
-                if (!ok) {
-                    ch = '_';
-                }
+        // The TypeScript spelling of an IR type, for the register_type name below.
+        inline std::string wx_ts_name(const GenType &t) {
+            if (t.kind == "vector" && !t.element.empty()) {
+                return "Array<" + wx_ts_name(t.element.front()) + ">";
             }
-            return s;
+            if (t.kind == "number") {
+                return "number";
+            }
+            if (t.kind == "string") {
+                return "string";
+            }
+            if (t.kind == "boolean") {
+                return "boolean";
+            }
+            if (t.kind == "object" || t.kind == "enum") {
+                return t.object.empty() ? std::string("any") : t.object;
+            }
+            return "any";
+        }
+
+        // The name a vector type is registered under. Nothing in JS ever types
+        // it — register_type's name is documentation (error messages, generated
+        // .d.ts), not a constructor the way register_vector's was — so it says
+        // what the value actually looks like on the JS side: Array<number>.
+        // Two distinct element types may well collide here (vector<int> and
+        // vector<double> are both Array<number>); that is fine, the registry is
+        // keyed by type id.
+        inline std::string wx_vector_name(const GenType &vt) {
+            return wx_ts_name(vt);
         }
 
         // One enum: emscripten::enum_<E>("E").value("A", E::A)...;
@@ -950,8 +1028,11 @@ namespace rosetta_wx {
                 body += wx_enum(e);
             }
             for (const auto &vt : wx_all_vectors(c)) {
-                body += "    emscripten::register_vector<" + wx_cpp_type(vt.element.front()) +
-                        ">(\"" + wx_vector_name(vt) + "\");\n";
+                // Not register_vector: see WASMX_VECTOR_HELPER. This registers
+                // the type id as an emval passthrough so the BindingType
+                // specialization emitted above can do the Array conversion.
+                body += "    emscripten::register_type<" + wx_cpp_type(vt) + ">(\"" +
+                        wx_vector_name(vt) + "\");\n";
             }
             for (const auto &k : c.classes) {
                 body += wx_class(k, c);
@@ -1018,6 +1099,7 @@ namespace rosetta_wx {
                 add(f.header);
             }
             out += using_namespaces_of(c); // `using namespace` for namespaced user types
+            out += WASMX_VECTOR_HELPER;    // std::vector<T> <-> JS Array on the emval wire
             out += WASMX_CALLBACK_HELPER;  // rosetta_wx::make_fn / to_val / from_val
             out += "\nEMSCRIPTEN_BINDINGS(" + c.lib + ") {\n";
             out += init_block(c);

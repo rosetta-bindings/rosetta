@@ -7,12 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **`std::vector<T>` crosses the wasm boundary as a plain JS `Array`** — the embind backend emitted `register_vector<T>`, which made it an *opaque bound class*: JS had to fill an `M.vector_double` with `push_back`, could not pass an array literal, and got a handle (not an `Array`) back, one it then had to `.delete()`. It was the one backend where a sequence was not the host language's own array type, contradicting what [docs/MANIFEST.md](docs/MANIFEST.md) already promised. The generated source now specializes embind's `BindingType<std::vector<T>>` onto the emval wire — `val::array` out (a typed-array memcpy for arithmetic `T`), `vecFromJSArray` in — and registers each element type with `register_type` instead. embind's own `const T` / `T&` forwarders carry it to `const std::vector<T>&` parameters and returns, so plain member-function pointers still bind and nested `vector<vector<T>>` falls out by recursion. **Breaking for hand-written JS**: `M.vector_double` and friends no longer exist; pass and expect arrays. `examples/plain-binding/drive.wasm.js` is now `drive.js` line for line, printing identical output.
 - **The IR accessors are public** — `qualified_of` / `exposed_of` / `exposed_object_of` / `names_type` moved from `rosetta::gen_detail` to `rosetta::`, where the rest of the backend API already was, with the old spelling kept as `using`-declarations onto the same functions.
 - **The header-only runtimes moved to `include/rosetta/runtime/`** — the five reflection-free headers the *generated* project compiles (`node`, `csharp`, `java`, `qt_widgets`, `imgui`) left `backends/` and `visitors/`, neither of which described them.
 - **Backends dropped the `_backend` suffix and moved to `rosetta::backend`** — `backends/python_backend.h` → `backends/python.h` and `gen_detail::PythonBackend` → `backend::Python` across all 19, with `visitors/*_visitor.{h,hxx}` → `visitors/*.{h,hxx}` to match.
 - **The last four `-expanded` names are gone** — `lua`, `qt`, `qml` and `imgui` dropped a suffix that had never distinguished them from a thin twin they never had, with the old spellings still resolving as deprecated aliases.
 
-## 2026-08-14
+## 2026-08-15
 
 ### Removed
 - **The seven *thin* backends are gone** — `python`, `nanobind`, `node`, `wasm`, `julia`, `csharp` and `java` now mean what `*-expanded` meant, deleting 14 backend files and the 14 reflection visitors only they used (~4800 lines).
@@ -35,7 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Overload support — a class's whole overload set now reaches the binding** — the walk deduplicated member functions by identifier alone, silently dropping every overload but one.
 - **`coverage.json` — a machine-readable account of what bound and what did not** — written on every run, recording reflection-stage drops, per-target skips with a reason, and what did bind, so a method that stops binding is a reviewable diff ([docs/COVERAGE.md](docs/COVERAGE.md)).
 
-## 2026-08-10
+## 2026-08-09
 
 ### Fixed
 - **A bound class template specialization was spelled with its template arguments stripped of every namespace** — `display_string_of` is a *display* rendering rather than a C++ spelling, so the template-id is now composed structurally from `template_of` + `template_arguments_of`.
