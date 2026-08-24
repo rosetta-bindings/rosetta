@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<!--
+  A three.js property editor that has never heard of scene::Mesh.
+
+      ./run.sh web         # builds the wasm target, then serves this file
+
+  This is drive_qt.py, in the browser. Same dispatch, same metadata, a different
+  toolkit — which is the argument the example exists to make: binding rosetta's
+  reflection API once means the UI generator gets written in the language of the
+  UI, not in C++. drive_qt.py is ~480 lines of Python over PyQt; this is ~470
+  lines of JavaScript over three.js. No C++ was recompiled to get from one to
+  the other, and nothing here is generated.
+
+  Nothing in the property panel names a scene type, a field or a method. Every
+  label, every widget choice, every slider bound, every button and every menu
+  entry is read at runtime from the metadata:
+
+      label      <- the "label" annotation, falling back to the field name
+      widget     <- the "widget" annotation (slider / checkbox / color / radio
+                    / textfield), falling back to the field's KIND
+      bounds     <- has_range() / range_min() / range_max()
+      choices    <- choices(), or a TypeInfo's enumerator_names() for an enum
+      tooltip    <- doc()
+      enabled    <- readonly() / writable()
+      buttons    <- methods carrying a "button" annotation
+      New menu   <- classes() plus every static method returning an object
+      geometry   <- positions() / triangles(), invoked by name
+
+  The VIEWPORT is the one part that names things, and drive_qt.py's does too: a
+  renderer has to decide what "colour" and "spin" mean to it. Every one of those
+  names is looked up defensively — a library without them still draws.
+
+  Two things a Python driver does not have to think about:
+
+    * HANDLES. A C++ object crosses as a handle onto wasm memory and must be
+      released with .delete(); JS has no destructor to hang that on. The three
+      wrappers under "the wasm boundary" below own the short-lived ones, and
+      keep()/dropAll() owns the metadata for as long as a class is on screen.
+
+    * VALUES. rosetta::script::Value crosses as a plain JS value — a number, a
+      string, an Array — because the manifest turns the embind caster on:
+          "compile_definitions": ["ROSETTA_EMBIND_VALUE_CASTER"]
+      Without that line, Value is another handle class and every read is
+      .value().as_number() and every write is Module.Value.number(x).
+
+  three.js is loaded from a CDN. To work offline, drop three.module.js next to
+  this file and point the import map at "./three.module.js".
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>rosetta — a generic editor over reflected metadata</title>
+<style>
+  :root { color-scheme: light dark; --line: #8886; }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column;
+         font: 13px/1.45 system-ui, sans-serif; }
+
+  header { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+           padding: .5rem .75rem; border-bottom: 1px solid var(--line); }
+  header select, header button { font: inherit; padding: .25rem .5rem; }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  #view { flex: 1; min-width: 0; background: #20242c; display: block; }
+  aside { width: 400px; border-left: 1px solid var(--line); padding: .75rem;
+          overflow: auto; display: flex; flex-direction: column; gap: .5rem; }
+
+  #heading { font-weight: 600; }
+  #heading span { font-weight: 400; opacity: .7; }
+  #sheet { flex: 1; }
+  #buttons { display: flex; gap: .4rem; flex-wrap: wrap;
+             border-top: 1px solid var(--line); padding-top: .5rem; }
+  #buttons button { font: inherit; padding: .3rem .6rem; }
+
+  footer { padding: .35rem .75rem; border-top: 1px solid var(--line);
+           font-family: ui-monospace, monospace; font-size: 12px;
+           white-space: pre-wrap; min-height: 2.2em; }
+  footer.err { background: #f8d7da; color: #842029; }
+
+  /* One row per field: label, then editor. */
+  .row { display: grid; grid-template-columns: 8.5rem 1fr; gap: .4rem;
+         align-items: center; margin-bottom: .35rem; }
+  .row > label { text-align: right; opacity: .85; }
+  .row input, .row select { font: inherit; width: 100%; }
+  .row input[type=checkbox], .row input[type=radio] { width: auto; }
+  .row .slider { display: flex; gap: .5rem; align-items: center; }
+  .row .slider output { min-width: 3.2rem; font-family: ui-monospace, monospace; }
+  .row .radios { display: flex; gap: .75rem; flex-wrap: wrap; }
+  .row .radios label { display: flex; gap: .25rem; align-items: center; }
+  fieldset { border: 1px solid var(--line); border-radius: 5px; margin: 0 0 .5rem;
+             grid-column: 1 / -1; }
+  legend { padding: 0 .35rem; opacity: .85; }
+  [disabled], .disabled { opacity: .55; }
+
+  dialog { border: 1px solid var(--line); border-radius: 6px; padding: 1rem; }
+  dialog h3 { margin: 0 0 .75rem; font-size: 1rem; font-family: ui-monospace, monospace; }
+  dialog menu { display: flex; gap: .5rem; justify-content: flex-end;
+                margin: .75rem 0 0; padding: 0; }
+</style>
+</head>
+<body>
+  <header>
+    <select id="new-menu"><option value="">New…</option></select>
+    <select id="call-menu"><option value="">Call…</option></select>
+  </header>
+
+  <main>
+    <canvas id="view"></canvas>
+    <aside>
+      <div id="heading"></div>
+      <div id="sheet"></div>
+      <div id="buttons"></div>
+    </aside>
+  </main>
+
+  <footer id="status">Loading WebAssembly module…</footer>
+
+  <dialog id="args"><form method="dialog">
+    <h3></h3><div class="fields"></div>
+    <menu><button value="cancel">Cancel</button><button value="ok">OK</button></menu>
+  </form></dialog>
+
+  <!-- The MODULARIZE'd factory: loading this defines window.createModule. -->
+  <script src="bindings/wasm/build/rosetta_meta.js"></script>
+
+  <script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+  </script>
+
+  <script type="module">
+  import * as THREE from "three";
+
+  const $ = (sel) => document.querySelector(sel);
+  const statusEl = $("#status");
+
+  function report(text, isError = true) {
+      statusEl.textContent = text;
+      statusEl.className = text && isError ? "err" : "";
+  }
+
+  // =====================================================================
+  // The wasm boundary
+  //
+  // Every C++ object that crosses is a handle onto linear memory, and JS will
+  // not free it for you. Three flavours of ownership here:
+  //
+  //   get/set/invoke  own the Outcome they unwrap, and delete it immediately.
+  //                   They also flatten Outcome into a plain JS return, so the
+  //                   rest of this file reads like the Python.
+  //   keep()          parks a metadata handle (FieldInfo, MethodInfo, TypeInfo)
+  //                   for as long as the current class is on screen.
+  //   ann()           needs two strings out of each Annotation and nothing
+  //                   else, so it deletes as it goes.
+  //
+  // The values themselves are NOT handles: the embind Value caster (manifest
+  // "compile_definitions") makes a number arrive as a number. The exception is
+  // a field of object kind, whose value IS an Instance handle — see makeEditor.
+  // =====================================================================
+
+  let meta = null;              // the module, once it has loaded
+  let held = [];                // metadata handles owned by the current class
+
+  const keep = (h) => { Array.isArray(h) ? held.push(...h) : held.push(h); return h; };
+  const dropAll = () => { for (const h of held.splice(0)) h.delete(); };
+
+  /** Read a field. Returns undefined if the read failed. */
+  function get(inst, name) {
+      const out = inst.get(name);
+      try { return out.ok() ? out.value() : undefined; } finally { out.delete(); }
+  }
+
+  /** Write a field. Returns null on success, or the CORE's error message. */
+  function set(inst, name, value) {
+      const out = inst.set(name, value);
+      try { return out.ok() ? null : out.error(); } finally { out.delete(); }
+  }
+
+  /** Call a method. Returns {ok, value, error}. */
+  function invoke(inst, name, args) {
+      const out = inst.call(name, args);
+      try { return { ok: out.ok(), value: out.value(), error: out.error() }; }
+      finally { out.delete(); }
+  }
+
+  /** The free-form annotations, as an object. The core does not interpret
+      these; a UI generator is exactly who they are for. */
+  function ann(member) {
+      const out = {};
+      for (const a of member.annotations()) { out[a.key()] = a.value(); a.delete(); }
+      return out;
+  }
+
+  const labelOf = (field) => ann(field).label || field.name();
+
+  /** A std::vector<long long> arrives as BigInts, because that is how
+      emscripten maps i64 — while the same integer read through the Value
+      caster arrives as an ordinary Number. Two spellings that no comparison
+      in JS will match, so every long long is normalised on arrival. */
+  const ints = (v) => v.map(Number);
+
+  // =====================================================================
+  // One field -> one editor
+  // =====================================================================
+
+  /**
+   * Return {el, refresh} for one FieldInfo, or null to skip it.
+   *
+   * `refresh` re-reads the live value into the widget — the model can also be
+   * changed by a button (reset / subdivide) or by another editor.
+   *
+   * The dispatch order is the point: an explicit `widget` annotation wins, then
+   * choices, then the structural kind. A library that annotates nothing still
+   * gets a usable sheet from kind alone.
+   */
+  function makeEditor(inst, field, onEdit) {
+      const name = field.name();
+      const hint = ann(field).widget || "";
+      const type = keep(field.type());
+      const kind = type.kind();
+
+      const read = () => get(inst, name);
+      const write = (value) => {
+          // Range and choice violations are rejected by the CORE, not by this
+          // panel — the same check the Lua and Node drivers hit. Show the
+          // reason and put the widget back where the model actually is.
+          const err = set(inst, name, value);
+          if (err) { report(err); return false; }
+          report("");
+          onEdit();
+          return true;
+      };
+
+      // ---- explicit widget hints ---------------------------------------
+      if (hint === "color") {
+          const el = document.createElement("input");
+          el.type = "color";
+          el.addEventListener("input", () => write(el.value));
+          return { el, refresh: () => { el.value = read() ?? "#000000"; } };
+      }
+
+      if (hint === "radio" && field.choices().length) {
+          const el = document.createElement("div");
+          el.className = "radios";
+          const inputs = field.choices().map((choice) => {
+              const box = document.createElement("label");
+              const b = document.createElement("input");
+              b.type = "radio";
+              b.name = `radio-${name}`;
+              b.value = choice;
+              b.addEventListener("change", () => b.checked && write(choice));
+              box.append(b, choice);
+              el.append(box);
+              return b;
+          });
+          return { el, refresh: () => {
+              const v = read();
+              for (const b of inputs) b.checked = b.value === v;
+          } };
+      }
+
+      if (hint === "slider" && field.has_range()) {
+          // 1000 steps across whatever the annotation declared.
+          const lo = field.range_min(), hi = field.range_max();
+          const el = document.createElement("div");
+          el.className = "slider";
+          const s = document.createElement("input");
+          s.type = "range"; s.min = 0; s.max = 1000; s.step = 1;
+          const out = document.createElement("output");
+          el.append(s, out);
+          s.addEventListener("input", () => {
+              const v = lo + (hi - lo) * s.valueAsNumber / 1000;
+              out.textContent = fmt(v);
+              write(v);
+          });
+          return { el, refresh: () => {
+              const v = read() ?? 0;
+              s.value = hi > lo ? Math.round((v - lo) / (hi - lo) * 1000) : 0;
+              out.textContent = fmt(v);
+          } };
+      }
+
+      // ---- choices, from an annotation or from the enum itself ----------
+      let options = field.choices();
+      let values = null;
+      if (kind === "enum") {
+          options = type.enumerator_names();
+          values = ints(type.enumerator_values());
+      }
+
+      if (options.length) {
+          const el = document.createElement("select");
+          for (const o of options) el.add(new Option(o, o));
+          el.addEventListener("change", () =>
+              write(values ? values[el.selectedIndex] : options[el.selectedIndex]));
+          return { el, refresh: () => {
+              const v = read();
+              el.selectedIndex = values ? values.indexOf(v) : options.indexOf(v);
+          } };
+      }
+
+      // ---- structural kinds ---------------------------------------------
+      if (kind === "boolean") {
+          const el = document.createElement("input");
+          el.type = "checkbox";
+          el.addEventListener("change", () => write(el.checked));
+          return { el, refresh: () => { el.checked = !!read(); } };
+      }
+
+      if (kind === "number") {
+          const el = document.createElement("input");
+          el.type = "number";
+          if (field.has_range()) { el.min = field.range_min(); el.max = field.range_max(); }
+          el.step = type.is_integral() ? 1 : 0.1;
+          el.addEventListener("change", () => write(
+              type.is_integral() ? Math.round(el.valueAsNumber) : el.valueAsNumber));
+          return { el, refresh: () => { el.value = read() ?? 0; } };
+      }
+
+      if (kind === "vector") {
+          // A list edited as text. element() is why TypeInfo is structural and
+          // not just a type name: the panel needs to know what is INSIDE.
+          const elemType = keep(type.element());
+          const numeric = elemType.kind() === "number";
+          const el = document.createElement("input");
+          el.type = "text";
+          el.placeholder = "comma separated " + elemType.spelling();
+          el.addEventListener("change", () => {
+              const parts = el.value.split(",").map((p) => p.trim()).filter(Boolean);
+              if (!numeric) return write(parts);
+              const nums = parts.map(Number);
+              if (nums.some(Number.isNaN)) return report(`${name}: not a list of numbers`);
+              write(nums);
+          });
+          return { el, refresh: () => {
+              el.value = (read() ?? []).map((v) => numeric ? fmt(v) : v).join(", ");
+          } };
+      }
+
+      if (kind === "object") {
+          // A sub-object comes back as an Instance that PINS its parent, so
+          // editing these rows writes straight through into the mesh. It is
+          // also the one value that is a handle — keep() frees it with the
+          // rest when the class changes.
+          const sub = read();
+          if (!sub) return null;
+          return buildSheet(keep(sub), onEdit, labelOf(field));
+      }
+
+      // string, and anything else that renders
+      const el = document.createElement("input");
+      el.type = "text";
+      el.addEventListener("change", () => write(el.value));
+      return { el, refresh: () => { el.value = read() ?? ""; } };
+  }
+
+  const fmt = (v) => Number.isInteger(v) ? String(v) : Number(v).toPrecision(3).replace(/\.?0+$/, "");
+
+  // =====================================================================
+  // One class -> one sheet
+  // =====================================================================
+
+  /** Every editable field of an Instance, in declaration order.
+      Returns {el, refresh}, so a nested sheet is just another editor. */
+  function buildSheet(inst, onEdit, groupLabel = null) {
+      const el = document.createElement(groupLabel ? "fieldset" : "div");
+      if (groupLabel) {
+          const legend = document.createElement("legend");
+          legend.textContent = groupLabel;
+          el.append(legend);
+      }
+      const refreshers = [];
+
+      for (const f of keep(inst.cls().fields())) {
+          const row = document.createElement("div");
+          row.className = "row";
+
+          if (!f.readable()) {
+              // Described, not deleted: the type gate could not marshal it, so
+              // it shows up greyed rather than silently vanishing.
+              row.innerHTML = `<label>${labelOf(f)}:</label><span class="disabled">&lt;unreadable&gt;</span>`;
+              el.append(row);
+              continue;
+          }
+
+          const editor = makeEditor(inst, f, onEdit);
+          if (!editor) continue;
+
+          if (editor.el.tagName === "FIELDSET") {   // a nested sheet
+              el.append(editor.el);
+              refreshers.push(editor.refresh);
+              continue;
+          }
+
+          if (f.readonly() || !f.writable()) {
+              editor.el.setAttribute("disabled", "");
+              for (const c of editor.el.querySelectorAll("input,select")) c.disabled = true;
+          }
+          if (f.doc()) { row.title = f.doc(); editor.el.title = f.doc(); }
+
+          const label = document.createElement("label");
+          label.textContent = labelOf(f) + ":";
+          row.append(label, editor.el);
+          el.append(row);
+          refreshers.push(editor.refresh);
+      }
+
+      const refresh = () => { for (const r of refreshers) r(); };
+      refresh();
+      return { el, refresh };
+  }
+
+  // =====================================================================
+  // positions() / triangles(), invoked by name
+  // =====================================================================
+
+  /**
+   * The geometry is PRIVATE in scene.h — reflection only reaches the public
+   * surface, so the drawing comes from calling positions() and triangles()
+   * dynamically, exactly as the C++ viewer in examples/dynamic/qt/ does.
+   *
+   * Every field name below is a GUESS about meaning, checked before it is
+   * used: a class without `colour` draws in the default colour, a class
+   * without `spin` simply does not spin. That is the honest boundary — the
+   * panel above needs no names at all, a renderer needs a few.
+   */
+  class Viewport {
+      static TILT = 22 * Math.PI / 180;   // a fixed 3/4 view
+
+      // Material parameters per `preset` choice. Keyed by the lowercased
+      // choice string, so the keys come from the annotation — add "brushed" to
+      // Mesh.ann.json's combobox list and the radio row grows a fourth button
+      // with no code change here; it just renders as `default` until it gets
+      // an entry. `opacity` multiplies the field of that name.
+      static PRESETS = {
+          default: { roughness: 0.55, metalness: 0.05, opacity: 1,    transmission: 0 },
+          matte:   { roughness: 1.0,  metalness: 0.0,  opacity: 1,    transmission: 0 },
+          glossy:  { roughness: 0.08, metalness: 0.45, opacity: 1,    transmission: 0 },
+          glass:   { roughness: 0.05, metalness: 0.0,  opacity: 0.35, transmission: 0.85 },
+      };
+
+      constructor(canvas) {
+          this.canvas = canvas;
+          this.inst = null;
+          this.cls = null;      // borrowed: freed by the next dropAll()
+          this.onSpin = () => {};
+
+          this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+          this.renderer.setPixelRatio(devicePixelRatio);
+          this.scene = new THREE.Scene();
+          this.scene.background = new THREE.Color("#20242c");
+          this.camera = new THREE.PerspectiveCamera(40, 1, 0.01, 1000);
+
+          this.scene.add(new THREE.AmbientLight(0xffffff, 1.1));
+          const key = new THREE.DirectionalLight(0xffffff, 2.2);
+          key.position.set(0.6, 1.0, 1.6);
+          this.scene.add(key);
+
+          // Physical rather than Standard: `glass` below wants transmission.
+          this.material = new THREE.MeshPhysicalMaterial({
+              roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide,
+              thickness: 0.5, ior: 1.45 });
+          this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.material);
+          this.scene.add(this.mesh);
+
+          this.radius = 1;
+          new ResizeObserver(() => this.resize()).observe(canvas);
+          this.bindDrag();
+      }
+
+      setInstance(inst, cls) { this.inst = inst; this.cls = cls; this.reload(); }
+
+      /** A field's value, or `fallback` if this class has no such field. */
+      field(name, fallback) {
+          if (!this.inst) return fallback;
+          const f = this.cls.field(name);
+          try { if (!f.valid()) return fallback; } finally { f.delete(); }
+          return get(this.inst, name) ?? fallback;
+      }
+
+      /** Rebuild the BufferGeometry from a dynamic call. Only after an edit
+          that can change the geometry — a name lookup plus overload scoring is
+          the wrong thing to put in a render loop. */
+      reload() {
+          let pos = [], tri = [];
+          if (this.inst) {
+              const mp = this.cls.method("positions"), mt = this.cls.method("triangles");
+              const has = mp.valid() && mt.valid();
+              mp.delete(); mt.delete();
+              if (has) {
+                  // `[]` is not optional: default arguments bind at fixed
+                  // arity, so call("positions") is an arity error.
+                  pos = invoke(this.inst, "positions", []).value ?? [];
+                  tri = invoke(this.inst, "triangles", []).value ?? [];
+              }
+          }
+          // A FRESH BufferGeometry, not new attributes on the old one: three.js
+          // caches per-geometry GPU bindings, and swapping the index buffer
+          // under a geometry it has already drawn leaves that cache stale — the
+          // mesh silently stops appearing. dispose() releases the old buffers.
+          const g = new THREE.BufferGeometry();
+          g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+          if (tri.length) g.setIndex(tri);
+          g.computeVertexNormals();
+          g.computeBoundingSphere();
+          this.mesh.geometry.dispose();
+          this.mesh.geometry = g;
+          this.radius = Math.max(g.boundingSphere?.radius ?? 1, 1e-3);
+          this.frame();
+          this.draw();
+      }
+
+      /** Push the model's state onto the three.js scene. Nothing is cached:
+          the metadata is the single source of truth for all of it. */
+      draw() {
+          const m = this.mesh;
+          m.visible = !!this.inst && this.field("visible", true);
+
+          const scale = this.field("size", 1);
+          m.scale.setScalar(scale);
+          m.rotation.set(0, this.field("spin", 0) * Math.PI / 180, 0);
+
+          this.material.color.set(this.field("colour", "#4488ee"));
+
+          // `preset` is a plain string on the C++ side — the library stores it
+          // and nothing reads it, and unlike a range the core does not even
+          // reject a value outside choices(). So the only thing that can give
+          // it a meaning is a renderer, and this is one: match the choice by
+          // name, fall back to PRESETS.default for anything unrecognised.
+          const preset = Viewport.PRESETS[String(this.field("preset", "")).toLowerCase()]
+                      ?? Viewport.PRESETS.default;
+          Object.assign(this.material, preset);
+
+          const opacity = this.field("opacity", 1) * preset.opacity;
+          this.material.opacity = opacity;
+          this.material.transparent = opacity < 1;
+
+          // The other place this file guesses at MEANING rather than structure:
+          // the shading modes are matched by enumerator NAME, so an enum that
+          // spells them differently falls back to smooth.
+          const mode = this.shadingName();
+          this.material.wireframe = mode.startsWith("wire");
+          this.material.flatShading = mode.startsWith("flat");
+          this.material.needsUpdate = true;
+          this.renderer.render(this.scene, this.camera);
+      }
+
+      /** A fixed 3/4 view, framed on the GEOMETRY — deliberately not on the
+          scaled object, or `size` would move the camera by exactly as much as
+          it moves the mesh and the slider would appear to do nothing. */
+      frame() {
+          const d = this.radius * 3.6;
+          this.camera.position.set(0, d * Math.sin(Viewport.TILT), d * Math.cos(Viewport.TILT));
+          this.camera.lookAt(0, 0, 0);
+      }
+
+      shadingName() {
+          if (!this.inst) return "";
+          const f = this.cls.field("shading");
+          try {
+              if (!f.valid()) return "";
+              const t = f.type();
+              try {
+                  if (t.kind() !== "enum") return "";
+                  const names = t.enumerator_names();
+                  const i = ints(t.enumerator_values()).indexOf(get(this.inst, "shading"));
+                  return i < 0 ? "" : names[i].toLowerCase();
+              } finally { t.delete(); }
+          } finally { f.delete(); }
+      }
+
+      resize() {
+          const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
+          if (!w || !h) return;
+          this.renderer.setSize(w, h, false);
+          this.camera.aspect = w / h;
+          this.camera.updateProjectionMatrix();
+          this.draw();
+      }
+
+      /** Drag to spin — and the drag goes THROUGH the model, wrapped into
+          whatever range the metadata declared, so a spin from the mouse and a
+          spin from the slider are the same write. */
+      bindDrag() {
+          let last = null;
+          this.canvas.addEventListener("pointerdown", (e) => {
+              last = e.clientX;
+              this.canvas.setPointerCapture(e.pointerId);
+          });
+          this.canvas.addEventListener("pointerup", () => { last = null; });
+          this.canvas.addEventListener("pointermove", (e) => {
+              if (last === null || !this.inst) return;
+              const f = this.cls.field("spin");
+              try {
+                  if (!f.valid() || !f.writable()) return;
+                  const lo = f.has_range() ? f.range_min() : 0;
+                  const hi = f.has_range() ? f.range_max() : 360;
+                  const v = lo + mod(get(this.inst, "spin") - lo + (e.clientX - last), hi - lo);
+                  last = e.clientX;
+                  if (!set(this.inst, "spin", v)) {
+                      this.onSpin();  // geometry unchanged — only the sheet needs telling
+                      this.draw();
+                  }
+              } finally { f.delete(); }
+          });
+      }
+  }
+
+  const mod = (a, n) => ((a % n) + n) % n;
+
+  // =====================================================================
+  // The window: menus and buttons, also from metadata
+  // =====================================================================
+
+  let inst = null;                 // the Instance on screen
+  let cls = null;                  // its ClassInfo, kept for as long as it is
+  let sheet = null;
+  let viewport = null;
+
+  /** Every constructible class, plus every static method that returns an
+      object — the New-menu scan drive.py does in one comprehension. */
+  function buildNewMenu() {
+      const menu = $("#new-menu");
+      const actions = [];
+      for (const k of meta.classes()) {
+          const group = document.createElement("optgroup");
+          group.label = k.qualified();
+          const ctors = k.ctors();
+          const constructible = !k.is_abstract() && ctors.length > 0;
+          for (const c of ctors) c.delete();
+          if (constructible) {
+              group.append(new Option(`${k.qualified()}()`, actions.length));
+              actions.push({ k, m: null, doc: k.doc() });
+          }
+          for (const m of k.methods()) {
+              const ret = m.ret();
+              const factory = m.is_static() && ret.kind() === "object" && m.callable();
+              ret.delete();
+              if (!factory) { m.delete(); continue; }
+              group.append(new Option(`${k.qualified()}::${m.name()}()`, actions.length));
+              actions.push({ k, m, doc: m.doc() });
+          }
+          if (group.children.length) menu.append(group);
+      }
+      menu.addEventListener("change", async () => {
+          const a = actions[menu.value];
+          menu.selectedIndex = 0;
+          if (!a) return;
+          if (!a.m) return adopt(a.k.create([]), `${a.k.qualified()}()`);
+          const args = await askArgs(a.m.name(), a.m.params());
+          if (!args) return;
+          adopt(a.k.call_static(a.m.name(), args), `${a.k.qualified()}::${a.m.name()}()`);
+      });
+      return actions;
+  }
+
+  /**
+   * Every instance method, callable or not.
+   *
+   * The dynamic model keeps the WHOLE overload set, unlike the name-keyed
+   * backends which bind the first and drop the siblings at generation time —
+   * so `at()` shows up twice, numbered. And a method the type gate could not
+   * marshal is listed disabled, carrying its skip_reason, rather than being
+   * silently absent.
+   */
+  function buildCallMenu(cls) {
+      const menu = $("#call-menu");
+      menu.replaceChildren(new Option("Call…", ""));
+      const methods = [];
+      for (const m of keep(cls.methods())) {
+          if (m.is_static()) continue;
+          const params = m.params();
+          let text = m.name() + "(" +
+              params.map((p) => { const t = p.type(); const s = t.spelling(); t.delete(); return s; })
+                    .join(", ") + ")";
+          for (const p of params) p.delete();
+          const [i, n] = ints([m.overload_index(), m.overload_count()]);
+          if (n > 1) text += `   [${i + 1} of ${n}]`;
+
+          const opt = new Option(text, methods.length);
+          opt.title = m.callable() ? m.doc() : m.skip_reason();
+          opt.disabled = !m.callable();
+          menu.append(opt);
+          methods.push(m);
+      }
+      menu.onchange = async () => {
+          const m = methods[menu.value];
+          menu.selectedIndex = 0;
+          if (m) await callMethod(m);
+      };
+  }
+
+  /** A dialog built from params() — names, kinds and all. */
+  function askArgs(name, params) {
+      const wanted = params.filter((p) => !p.is_out());
+      if (!wanted.length) { for (const p of params) p.delete(); return Promise.resolve([]); }
+
+      const dlg = $("#args");
+      dlg.querySelector("h3").textContent = name;
+      const host = dlg.querySelector(".fields");
+      host.replaceChildren();
+
+      const editors = [];
+      for (const [i, p] of wanted.entries()) {
+          const t = p.type();
+          if (t.kind() !== "number") {
+              const spelling = t.spelling();
+              t.delete();
+              for (const q of params) q.delete();
+              report(`${name}: no editor for a ${spelling} argument`);
+              return Promise.resolve(null);
+          }
+          const integral = t.is_integral();
+          t.delete();
+
+          const row = document.createElement("div");
+          row.className = "row";
+          const label = document.createElement("label");
+          // "argN" until parameter names are reflected — fall back to position.
+          label.textContent = (p.name().startsWith("arg") ? `#${i}` : p.name()) + ":";
+          const el = document.createElement("input");
+          el.type = "number";
+          el.step = integral ? 1 : 0.1;
+          el.value = integral ? 16 : 1;
+          row.append(label, el);
+          host.append(row);
+          editors.push({ el, integral });
+      }
+      for (const p of params) p.delete();
+
+      return new Promise((resolve) => {
+          dlg.addEventListener("close", () => resolve(
+              dlg.returnValue === "ok"
+                  ? editors.map(({ el, integral }) =>
+                        integral ? Math.round(el.valueAsNumber) : el.valueAsNumber)
+                  : null), { once: true });
+          dlg.showModal();
+      });
+  }
+
+  async function callMethod(m) {
+      const args = await askArgs(m.name(), m.params());
+      if (!args) return;
+      const out = invoke(inst, m.name(), args);
+      if (!out.ok) {
+          // A failed call names every candidate overload and why it lost — the
+          // diagnostic a name-keyed binding structurally cannot produce, having
+          // thrown the siblings away at generation time.
+          const why = cls.why_no_match(m.name(), args);
+          report(`${m.name()}: ${out.error}` + (why ? `\n${why}` : ""));
+          return;
+      }
+      const ret = m.ret();
+      const isVoid = ret.kind() === "void";
+      ret.delete();
+      report(isVoid ? `${m.name()}()` : `${m.name()}() -> ${out.value}`, false);
+      onEdit();
+  }
+
+  function adopt(outcome, what) {
+      try {
+          if (!outcome.ok()) return report(`${what}: ${outcome.error()}`);
+          if (inst) inst.delete();
+          inst = outcome.value();
+          rebuild();
+          report(what, false);
+      } finally { outcome.delete(); }
+  }
+
+  function rebuild() {
+      dropAll();                   // last class's metadata handles
+      cls = keep(inst.cls());
+      $("#heading").innerHTML = cls.qualified() +
+          (cls.doc() ? ` <span>— ${cls.doc()}</span>` : "");
+
+      sheet = buildSheet(inst, onEdit);
+      $("#sheet").replaceChildren(sheet.el);
+
+      // Methods the library ASKED to be a button. A method with arguments gets
+      // the same dialog the factories use.
+      const bar = $("#buttons");
+      bar.replaceChildren();
+      for (const m of keep(cls.methods())) {
+          const text = ann(m).button;
+          if (!text || !m.callable()) continue;
+          const b = document.createElement("button");
+          b.textContent = text;
+          b.title = m.doc();
+          b.addEventListener("click", () => callMethod(m));
+          bar.append(b);
+      }
+
+      buildCallMenu(cls);
+      viewport.setInstance(inst, cls);
+  }
+
+  /** Any write may have moved anything: re-read the sheet and the mesh. */
+  function onEdit() {
+      sheet.refresh();
+      viewport.reload();
+  }
+
+  // =====================================================================
+  // Boot
+  // =====================================================================
+
+  createModule({ locateFile: (p) => "bindings/wasm/build/" + p })
+      .then((M) => {
+          meta = M;
+          viewport = new Viewport($("#view"));
+          viewport.onSpin = () => sheet.refresh();
+          buildNewMenu();
+
+          // Pick something to start on, without naming it: the first class that
+          // has geometry to show, else the first class at all.
+          for (const k of meta.classes()) {
+              const probe = k.method("positions");
+              const geometric = probe.valid();
+              probe.delete();
+              if (!geometric) continue;
+              for (const m of k.methods()) {
+                  if (m.is_static() && !m.params().length) {
+                      const ret = m.ret();
+                      const factory = ret.kind() === "object";
+                      ret.delete();
+                      if (factory) {
+                          adopt(k.call_static(m.name(), []), `${k.qualified()}::${m.name()}()`);
+                          break;
+                      }
+                  }
+              }
+              break;
+          }
+          if (!inst && meta.classes().length) adopt(meta.classes()[0].create([]), "");
+          if (!inst) report("no constructible class in the metadata");
+          viewport.resize();
+      })
+      .catch((e) => report("failed to load rosetta_meta.wasm: " + (e.message || e)));
+  </script>
+</body>
+</html>

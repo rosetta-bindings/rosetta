@@ -7,5 +7,9 @@
         "headers": ["auto_dynamic.h"],
         "statements": ["scene::register_all()"]
     },
-    "targets": ["python", "lua", "node", "wasm", "typescript", "markdown"]
+    "compile_definitions": ["ROSETTA_EMBIND_VALUE_CASTER"],
+    "targets": [
+        "python", "lua", "node", "typescript", "markdown",
+        { "lang": "wasm", "link_options": ["-sGROWABLE_ARRAYBUFFERS=0"] }
+    ]
 }

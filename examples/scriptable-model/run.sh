@@ -5,6 +5,7 @@
 #   ./run.sh lua      # ...the Lua one
 #   ./run.sh node     # ...the Node one
 #   ./run.sh qt       # ...the Qt property editor (needs PyQt6 or PySide6)
+#   ./run.sh web      # ...the same editor in a browser (needs an active emsdk)
 #   ./run.sh clean    # remove what THIS example generated (stage 2 only)
 #
 # Two stages, because they are two different jobs — and stage 1 lives in
@@ -50,5 +51,14 @@ case "${1:-}" in
     lua)  (cd bindings/lua && lua ../../drive.lua) ;;
     node) node drive.js ;;
     qt)   python3 drive_qt.py ;;
+    web)
+        # A browser cannot fetch .wasm from file://, so this needs a server.
+        if [ ! -f bindings/wasm/build/rosetta_meta.wasm ]; then
+            echo "bindings/wasm/build/rosetta_meta.wasm missing — activate an emsdk and re-run" >&2
+            exit 1
+        fi
+        echo "serving http://localhost:8000/drive_web.html  (ctrl-c to stop)"
+        python3 -m http.server 8000
+        ;;
     *)    PYTHONPATH=bindings/python python3 drive.py ;;
 esac

@@ -10,6 +10,7 @@ Usage is one command, from `examples/scriptable-model`:
 ./run.sh lua      # ...the Lua one
 ./run.sh node     # ...the Node one
 ./run.sh qt       # ...a live Qt property editor, also in Python (drive_qt.py)
+./run.sh web      # ...the same editor over three.js and wasm (drive_web.html)
 ```
 
 One caveat worth knowing before you run it: stage 1 lives in examples/dynamic, not here — that's where the scene library's metadata tables get generated, and they aren't checked in, so a fresh clone has to build that example first (run.sh handles it; the step-by-step section of the README spells it out). If you want the same idea without the two-example indirection, minimal/ rebuilds it from scratch on a 25-line library that has never heard of rosetta.
@@ -24,7 +25,7 @@ One-time bootstrap: fetch `rosetta` into `extern/` and build `rosetta_gen`:
 
 This example does the Graphite/GOM move instead: it runs rosetta on **rosetta's own reflection API**, so the walker can be written in Python, Lua or JS. One UI generator per toolkit, written once, in the language whose UI it builds.
 
-The machinery ships in `include/rosetta`; this directory is only the manifest that wires it to a library, plus three drivers that prove it works.
+The machinery ships in `include/rosetta`; this directory is only the manifest that wires it to a library, plus four drivers that prove it works.
 
 ```
 include/rosetta/script.h                 the bindable facade over dynamic.h
@@ -37,6 +38,7 @@ examples/scriptable-model/manifest.json  the whole of the per-project work
 examples/scriptable-model/run.sh         both stages, then a driver
 examples/scriptable-model/drive.{py,lua,js}
 examples/scriptable-model/drive_qt.py    the same dispatch, wired to real widgets
+examples/scriptable-model/drive_web.html the same dispatch again, three.js + wasm
 examples/scriptable-model/minimal/       the same, from scratch, on a 25-line
                                          library that never heard of rosetta
 ```
@@ -46,6 +48,7 @@ examples/scriptable-model/minimal/       the same, from scratch, on a 25-line
 ./run.sh lua      # ...the Lua one
 ./run.sh node     # ...the Node one
 ./run.sh qt       # ...the Qt property editor (pip install PyQt6)
+./run.sh web      # ...the three.js editor in a browser (needs an emsdk)
 ./run.sh clean
 ```
 
@@ -164,6 +167,7 @@ PYTHONPATH=bindings/python python3 drive.py
 node drive.js
 (cd bindings/lua && lua ../../drive.lua)
 python3 drive_qt.py            # the Qt editor; puts bindings/python on sys.path itself
+python3 -m http.server 8000    # then open drive_web.html — the three.js editor
 ```
 
 Both generation stages need clang-p2996; everything from step 3 on is a stock
@@ -311,6 +315,29 @@ Ten lines, editable without recompiling anything, and `value` is a real Python o
 Nothing in the file names a scene type, a field or a method. Point the manifest at a different library and it still runs: it is a generic editor for anything the `dynamic` backend has described — pick `scene::Vec3` from the **New** menu and you get its three spin boxes, no buttons (nothing annotated one) and "no geometry" in the viewport, from the same code path.
 
 Two things worth doing while it is open. Drag the viewport: the `Spin` slider follows, because the drag writes through `inst.set("spin", …)` and wraps into the range the *annotation* declared — the panel never hard-codes 360. And notice that the sliders cannot produce an out-of-range value at all: their bounds *are* `range_min()`/`range_max()`, so the check the core would perform (`opacity = 99 is outside [0, 1]`, which is what `drive.py` prints and what a script hitting the same field gets) is one the widget can no longer fail. That is the argument in miniature — the constraint is declared once, next to the field, and every consumer in every language derives its behaviour from it.
+
+## And again, in a browser
+
+[`drive_web.html`](drive_web.html) (`./run.sh web`) is that same editor over **three.js** and the `wasm` target — every row of the table above, produced by the same dispatch, in ~470 lines of JavaScript. This is the claim being tested: a second toolkit, a second language, and *no C++ was recompiled to get there* — the wasm module is the same generic binding of `<rosetta/script.h>`, and it has still never heard of `scene::Mesh`.
+
+```sh
+./run.sh web        # needs an activated emsdk for the build; serves on :8000
+```
+
+One thing the Qt driver leaves inert: `Preset`. It is a plain `std::string` field that `scene.h` stores and never reads, so only a renderer can give it a meaning — here it maps onto three.js material parameters (`glossy` gets a specular highlight, `glass` gets transmission), keyed by the lowercased `choices()` string with an unrecognised value falling back to `default`. Add an entry to `Mesh.ann.json`'s combobox list and the radio row grows a button with no change to the driver; it renders as `default` until `PRESETS` learns it. Worth knowing while you are there: unlike `range`, a `combobox` is **not** enforced by the core — `inst.set("preset", "nope")` succeeds. It is a UI hint, and the widget is the only thing constraining it.
+
+Two wrinkles are the browser's, not the model's, and both are commented at the point they bite:
+
+- **Handles.** A C++ object crosses as a handle into wasm memory and JS has no destructor to free it on. `get` / `set` / `invoke` at the top of the file own the short-lived `Outcome`s and delete them on the way out — which also flattens `Outcome` away, so the body reads like the Python — and `keep()` / `dropAll()` hold the metadata for as long as one class is on screen.
+- **`long long` is a BigInt.** `enumerator_values()` comes back as BigInts while the enum's *value*, read through the caster, is a Number. Nothing in JS compares the two, so every `long long` is normalised on arrival (`ints()`).
+
+Values themselves are plain JS — `m.get("opacity").value()` is a number, `m.set("weights", [0.25, 0.5, 1])` takes an Array — because the manifest turns the embind caster on:
+
+```json
+"compile_definitions": ["ROSETTA_EMBIND_VALUE_CASTER"]
+```
+
+Without that line `Value` is one more handle class and every read becomes `.value().as_number()`, every write `Module.Value.number(x)`. The caster is [`include/rosetta/runtime/script/wasm.h`](../../include/rosetta/runtime/script/wasm.h); switching it on also retracts the generated `class_<Value>` registration, since a caster and a handle class cannot both own the type.
 
 ## Using it on your own library
 
