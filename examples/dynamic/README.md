@@ -42,7 +42,7 @@ The Stanford bunny in that screenshot arrived by adding **one static factory to
 the library**:
 
 ```cpp
-static Mesh bunny();   // scene.h, reading the tables in BunnyMesh.h
+static Mesh bunny();   // scene.h, reading the tables in bunny.h
 ```
 
 Nothing in `qt/` changed. It appears in the Add toolbar because that menu is

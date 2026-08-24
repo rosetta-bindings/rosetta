@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 
-#include "BunnyMesh.h" // constexpr vertex/index tables for Mesh::bunny()
+#include "bunny.h" // constexpr vertex/index tables for Mesh::bunny()
 
 namespace scene {
 
@@ -173,7 +173,7 @@ namespace scene {
         }
 
         /**
-         * @brief The Stanford bunny, from the constexpr tables in BunnyMesh.h.
+         * @brief The Stanford bunny, from the constexpr tables in bunny.h.
          *
          * Nothing about this factory is special: it is a static method
          * returning a Mesh, so the dynamic model picks it up like cube() or
