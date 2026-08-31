@@ -1,0 +1,220 @@
+{
+  "frame": {
+    "entities": 166,
+    "nameable": 120,
+    "kinds": {
+      "class": 19,
+      "function": 99,
+      "function_template": 39,
+      "enum": 2,
+      "class_template": 7
+    }
+  },
+  "overloads": {
+    "names": 91,
+    "declarations": 99,
+    "distribution": {
+      "1": 87,
+      "2": 3,
+      "6": 1
+    },
+    "first_only_loss": 8
+  },
+  "arms": {
+    "exhaustive": {
+      "python": {
+        "members_bound": 123,
+        "members_skipped": 34,
+        "fn_bound": 64,
+        "fn_skipped": 27,
+        "reasons": {
+          "unmarshalable_signature": 61
+        }
+      },
+      "nanobind": {
+        "members_bound": 123,
+        "members_skipped": 34,
+        "fn_bound": 64,
+        "fn_skipped": 27,
+        "reasons": {
+          "unmarshalable_signature": 61
+        }
+      },
+      "julia": {
+        "members_bound": 123,
+        "members_skipped": 34,
+        "fn_bound": 64,
+        "fn_skipped": 27,
+        "reasons": {
+          "unmarshalable_signature": 61
+        }
+      },
+      "lua": {
+        "members_bound": 104,
+        "members_skipped": 53,
+        "fn_bound": 64,
+        "fn_skipped": 27,
+        "reasons": {
+          "unmarshalable_signature": 53,
+          "overload_not_expressible": 27
+        }
+      },
+      "node": {
+        "members_bound": 106,
+        "members_skipped": 51,
+        "fn_bound": 82,
+        "fn_skipped": 9,
+        "reasons": {
+          "unmarshalable_signature": 33,
+          "overload_not_expressible": 27
+        }
+      },
+      "wasm": {
+        "members_bound": 104,
+        "members_skipped": 53,
+        "fn_bound": 64,
+        "fn_skipped": 27,
+        "reasons": {
+          "unmarshalable_signature": 53,
+          "overload_not_expressible": 27
+        }
+      },
+      "csharp": {
+        "members_bound": 61,
+        "members_skipped": 96,
+        "fn_bound": 2,
+        "fn_skipped": 89,
+        "reasons": {
+          "unmarshalable_signature": 158,
+          "overload_not_expressible": 27
+        }
+      },
+      "java": {
+        "members_bound": 61,
+        "members_skipped": 96,
+        "fn_bound": 2,
+        "fn_skipped": 89,
+        "reasons": {
+          "unmarshalable_signature": 158,
+          "overload_not_expressible": 27
+        }
+      },
+      "typescript": {
+        "members_bound": 148,
+        "members_skipped": 27,
+        "fn_bound": 90,
+        "fn_skipped": 1,
+        "reasons": {
+          "overload_not_expressible": 27,
+          "unmarshalable_signature": 1
+        }
+      },
+      "dynamic": {
+        "members_bound": 141,
+        "members_skipped": 34,
+        "fn_bound": 54,
+        "fn_skipped": 37,
+        "reasons": {
+          "unmarshalable_type": 71
+        }
+      }
+    },
+    "curated": {
+      "python": {
+        "members_bound": 100,
+        "members_skipped": 28,
+        "fn_bound": 49,
+        "fn_skipped": 10,
+        "reasons": {
+          "unmarshalable_signature": 38
+        }
+      },
+      "nanobind": {
+        "members_bound": 100,
+        "members_skipped": 28,
+        "fn_bound": 49,
+        "fn_skipped": 10,
+        "reasons": {
+          "unmarshalable_signature": 38
+        }
+      },
+      "julia": {
+        "members_bound": 100,
+        "members_skipped": 28,
+        "fn_bound": 49,
+        "fn_skipped": 10,
+        "reasons": {
+          "unmarshalable_signature": 38
+        }
+      },
+      "lua": {
+        "members_bound": 81,
+        "members_skipped": 47,
+        "fn_bound": 49,
+        "fn_skipped": 10,
+        "reasons": {
+          "unmarshalable_signature": 30,
+          "overload_not_expressible": 27
+        }
+      },
+      "node": {
+        "members_bound": 84,
+        "members_skipped": 44,
+        "fn_bound": 53,
+        "fn_skipped": 6,
+        "reasons": {
+          "unmarshalable_signature": 23,
+          "overload_not_expressible": 27
+        }
+      },
+      "wasm": {
+        "members_bound": 81,
+        "members_skipped": 47,
+        "fn_bound": 49,
+        "fn_skipped": 10,
+        "reasons": {
+          "unmarshalable_signature": 30,
+          "overload_not_expressible": 27
+        }
+      },
+      "csharp": {
+        "members_bound": 40,
+        "members_skipped": 88,
+        "fn_bound": 0,
+        "fn_skipped": 59,
+        "reasons": {
+          "unmarshalable_signature": 120,
+          "overload_not_expressible": 27
+        }
+      },
+      "java": {
+        "members_bound": 40,
+        "members_skipped": 88,
+        "fn_bound": 0,
+        "fn_skipped": 59,
+        "reasons": {
+          "unmarshalable_signature": 120,
+          "overload_not_expressible": 27
+        }
+      },
+      "typescript": {
+        "members_bound": 101,
+        "members_skipped": 27,
+        "fn_bound": 59,
+        "fn_skipped": 0,
+        "reasons": {
+          "overload_not_expressible": 27
+        }
+      },
+      "dynamic": {
+        "members_bound": 100,
+        "members_skipped": 28,
+        "fn_bound": 49,
+        "fn_skipped": 10,
+        "reasons": {
+          "unmarshalable_type": 38
+        }
+      }
+    }
+  }
+}

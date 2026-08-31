@@ -153,6 +153,11 @@ def main():
                    r["fn_bound"], r["fn_skipped"],
                    ", ".join(f"`{k}` {v}" for k, v in r["reasons"].most_common(3))]
                   for t in TARGET_ORDER if (r := rows.get(t))])
+        md += ["_`typescript` and `dynamic` count bound FIELDS in the member "
+               "column; the language backends record methods only. Their member "
+               "totals therefore sit over a larger denominator and are not "
+               "directly comparable with the rows above — compare the function "
+               "columns, which every backend records identically._", ""]
 
     # ---------------- the two arms side by side ---------------------------
     if len(covs) > 1:

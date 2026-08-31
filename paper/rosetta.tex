@@ -3,7 +3,7 @@
 %  Build:  pdflatex rosetta && bibtex rosetta && pdflatex rosetta && pdflatex rosetta
 %
 %  Status: sections 1-9 and 12 are drafted from the implementation.
-%  Section 10 reports E1-E4, all measured; E5 is a scaffold.
+%  Section 10 reports E1-E5, all measured.
 %  Sections 11 (case study), 13 (related work) and 14 remain to write.
 %  Every \todo{} marks something that does not exist in the repo yet;
 %  `make todo` lists them. See OUTLINE.md for the plan.
@@ -98,8 +98,12 @@ member that is not exposed is recorded, with a machine-readable reason, in a
 \code{coverage.json} that can be diffed across revisions. On a controlled
 288-method API, the five name-keyed targets bind 96 methods however many
 overloads are declared, while the late-bound projection reaches all 288 ---
-two thirds of the interface recovered by deferring resolution alone.
-\todo{extend this headline with the E5 real-library coverage figure}
+two thirds of the interface recovered by deferring resolution alone. Pointed at
+an unmodified third-party mesh library and asked to bind its entire public
+namespace unattended, the pipeline reaches 75\% of what it is given, and the
+reason the rest fails is concentrated rather than diffuse: a quarter of that
+library's declared surface is templates, and 85\% of those sit in its vector and
+matrix value types rather than in the algorithms a caller invokes.
 \end{abstract}
 
 \noindent\textbf{Keywords:} static reflection, C++26, language bindings,
@@ -872,9 +876,9 @@ choose a target with knowledge of what they are giving up.
 \section{Experimental evaluation}
 \label{sec:eval}
 
-\gap{E1--E4 are run and reported below; E5 is a scaffold. The harness lives in
+All five experiments below are run and reported. The harness lives in
 \code{paper/experimental-eval/}, one directory per experiment, each reproducible
-with a single \code{run.sh}.}
+with a single \code{run.sh}.
 
 \subsection{E1 --- Overload recovery}
 \label{sec:e1}
@@ -1324,9 +1328,129 @@ a bare float; that allocation is part of the API and is deliberately included
 rather than subtracted.
 
 \subsection{E5 --- Coverage on a real library}
-\todo{An unmodified third-party scientific C++ library. Bound/skipped per target
-with a reason histogram. Answers: what fraction of a realistic C++ API can be
-exposed automatically, and why does the remainder fail?}
+\label{sec:e5}
+
+E1--E4 measure synthetic libraries, which are built to isolate one variable and
+therefore cannot answer what a real API contains. E5 points the pipeline at one
+that was never written with binding in mind.
+
+\paragraph{Subject.} PMP, the Polygon Mesh Processing
+library~\cite{pmp}, unmodified. It is not a library either author wrote --- the
+relevant objection to using \code{geogram} here --- and it is small enough to
+bind \emph{exhaustively}, which is the property that matters: at this size the
+experiment can bind everything and publish the breakdown, rather than choosing a
+subset and inviting the reader to trust the choice.
+
+\paragraph{Design: the denominator is the difficulty.} ``What fraction of an API
+binds'' is a measurement only if somebody other than the experimenter decides
+what the API \emph{is}. The frame is therefore read from clang's own AST: every
+class, class template, enum and free function declared in namespace \code{pmp}
+by a header under \code{src/pmp/}, excluding the OpenGL viewers. Templates stay
+\emph{in} the frame --- a template cannot be named in a manifest, so filtering
+them out would raise every percentage below without changing a fact.
+
+Two arms differ in one variable, who chose the entries:
+\emph{exhaustive}, generated mechanically from that frame, and \emph{curated},
+a real hand-written manifest for the same library, retargeted so both emit the
+same ten backends. The exhaustive arm makes exactly two mechanical concessions,
+both to the manifest format rather than to taste: an overloaded name carries a
+signature (\code{\^{}\^{}pmp::centroid} is ill-formed once the name is declared
+twice), and classes are topologically sorted so a base precedes its derived
+classes.
+
+\paragraph{Result: it works, unattended.} Nineteen classes, two enums and 91
+free functions from an unmodified third-party library reach a driver that
+compiles and runs with no hand-tuning at all. The build is not error-tolerant by
+construction: compiling the emitted generator is exactly where a class the walk
+mishandles would surface as a build failure, which is the outcome
+Section~\ref{sec:coverage} claims cannot happen, so the harness treats a
+non-zero exit there as the finding rather than swallowing it. It did not occur.
+
+\paragraph{Result: a quarter of the surface is templates, and they are not
+spread out.} Of 166 declared entities, 120 are nameable and 46 are templates ---
+28\% out of reach before any backend is consulted. But 39 of those 46 are in a
+single header, \code{mat\_vec.h}, the library's vector and matrix value types;
+the algorithm headers contribute exactly one. The useful form of the finding is
+therefore not ``templates block a quarter of the API'' but that
+\emph{the templates sit in the value types and the property system, while the
+algorithm surface a script user actually calls is essentially template-free}.
+That is a claim about where a reflection-based binder loses, and it is more
+actionable than the aggregate.
+
+\paragraph{Result: real overload multiplicity is far below E1's sweep.}
+Section~\ref{sec:e1} sweeps overloads-per-name because a synthetic library has
+no opinion about it. Here the value is measured: PMP's 91 free-function names
+carry 99 declarations, so a first-only policy costs \textbf{8 of 99 (8\%)} of the
+free-function surface, against the two thirds E1 reports at its worst swept
+case. The mechanism E1 isolates is real and the recovery is real; at
+free-function scope \emph{this} library barely exercises it. Class members are
+where the multiplicity actually lives --- every first-only target drops 27
+members to \code{overload\_not\_expressible} --- which is the honest shape of
+E1's result on a real API: significant, and an order of magnitude below the
+headline the sweep's endpoint suggests.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+target & members & functions & fns skipped & bound/req. \\
+\midrule
+\code{python} / \code{nanobind} / \code{julia} & 123 & 64 & 27 & 75\% \\
+\code{node}       & 106 & 82 & 9  & 76\% \\
+\code{lua} / \code{wasm} & 104 & 64 & 27 & 68\% \\
+\code{csharp} / \code{java} & 61 & 2 & 89 & 25\% \\
+\code{dynamic} (late-bound) & 141 & 54 & 37 & 73\% \\
+\bottomrule
+\end{tabular}
+\caption{E5, exhaustive arm. \code{typescript} is omitted: it records bound
+fields where the language backends record methods only, so its member column is
+over a different denominator. The C\#/Java collapse is one cause --- their
+boundary is JSON, and 89 of 91 free functions name a type with no JSON
+marshalling.}
+\label{tab:e5}
+\end{table}
+
+\paragraph{Result: curation subtracts reach rather than adding it.} The
+exhaustive arm binds strictly more than the curated one on every target, by 23
+to 78 entities. This is worth stating carefully, because the intuitive
+expectation is the reverse --- that a hand-written manifest exists to rescue
+what automation cannot manage. It does not: it exists to choose. The curated
+manifest omits property containers, handles and iterators that bind perfectly
+well and that no script user would call, and in exchange its \code{out\_params}
+and \code{sequences} give nicer signatures to the members it does keep. E5
+measures reach; the two arms point in opposite directions on reach and quality,
+and only the first is a number.
+
+\paragraph{A limit that sits above the backends.} Eight free-function
+declarations never reached any backend: two manifest entries binding under one
+exposed name are a \code{rosetta\_gen} error, so only one overload of a
+free-function name can be requested at all. This is stricter than the per-target
+policy of Section~\ref{sec:overloads} and it applies to \emph{every} target,
+including pybind11 and jlcxx, which would have taken the whole set. It is a
+limitation of the manifest format, not of any target language, and E5 is what
+surfaced it.
+
+\paragraph{Two instruments this experiment repaired.} E5 was not measurable as
+designed until both were fixed, and both say something about
+\code{coverage.json} rather than about PMP. First, \emph{no backend recorded
+free functions at all} --- the report covered class members only, which on a
+library whose algorithms are free functions over one data structure meant 99 of
+120 nameable entities were invisible to it. Second, the \code{typescript}
+backend emitted free-function declarations through no visibility gate,
+promising callers functions the N-API module does not bind. Both are fixed;
+the free-function counts above are cross-validated against emitted output (the
+pybind11 module contains exactly the 64 \code{m.def} calls the report claims).
+Section~\ref{sec:coverage} asserts that every unexposed member is recorded with
+a reason. Before E5 that was true of methods and false of free functions.
+
+\paragraph{Threats to validity.} One library, and a well-behaved one: PMP is
+modern, clean C++17, and a template-heavy or macro-heavy API would give
+different constants and possibly a different shape. The frame excludes
+\code{viewers/}, which needs an OpenGL context --- the one judgement in it, and
+recorded in the output. Coverage counts entities rather than usefulness, which
+is what makes the curation comparison a statement about reach only. And the
+member column is not comparable across all targets, for the field-recording
+asymmetry noted under Table~\ref{tab:e5}.
 
 % =====================================================================
 \section{Case study: one geophysical library, four interfaces}
