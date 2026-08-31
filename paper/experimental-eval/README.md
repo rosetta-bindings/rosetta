@@ -11,6 +11,7 @@ analysis, and a `results/` directory holding what the paper cites.
 | [E3](E3-generation-cost/) | Generation cost and scalability — where the time goes, and how it scales | ✅ done | `clang-p2996` + a system C++ compiler |
 | [E4](E4-runtime-overhead/) | Runtime overhead — what late binding costs per call | ✅ done | + C++ compiler, Python, pybind11 |
 | [E5](E5-real-library/) | Coverage on a real third-party library (PMP) — exhaustive vs curated | ✅ done | `clang-p2996` + a system C++ compiler |
+| [E6](E6-case-study/) | Case study — one library grows a class, no binding moves | ✅ done | `clang-p2996` only |
 
 ## Conventions
 

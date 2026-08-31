@@ -31,5 +31,6 @@
   "plane":         { "doc": "Build a unit plane in XZ" },
   "sphere":        { "doc": "Build a UV sphere with rings x segments" },
   "bunny":         { "doc": "The Stanford bunny, recentred into a unit box" },
-  "onProgress":    { "doc": "Register a progress callback" }
+  "onProgress":    { "doc": "Register a progress callback" },
+  "setPositions":  { "doc": "Replace the vertex positions; ignored unless the count matches" }
 }

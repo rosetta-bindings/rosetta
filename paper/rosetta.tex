@@ -4,7 +4,7 @@
 %
 %  Status: sections 1-9 and 12 are drafted from the implementation.
 %  Section 10 reports E1-E5, all measured.
-%  Sections 11 (case study), 13 (related work) and 14 remain to write.
+%  Section 11 (case study) is written from E6; 13 (related work) and 14 remain.
 %  Every \todo{} marks something that does not exist in the repo yet;
 %  `make todo` lists them. See OUTLINE.md for the plan.
 % =====================================================================
@@ -841,9 +841,16 @@ reviewable line in a pull request.
 
 \subsection{What it already shows}
 
-Table~\ref{tab:coverage} reports the coverage of the examples shipped with the
-system. \todo{replace with E5, a real third-party library; keep this as the
-smaller worked table.}
+The artifact is only worth the claim if it survives an API nobody prepared for
+it. Section~\ref{sec:e5} does that: pointed at the entire public namespace of an
+unmodified third-party mesh library, with no manifest author involved, the
+report accounts for 248 requested entities per target and shows 75\% of them
+binding under pybind11 --- and 25\% under C\# and Java. Nothing about that
+spread is visible from the generated code, which compiles either way. It is
+visible because the reasons were written down.
+
+Table~\ref{tab:coverage} is the same instrument at a size a reader can check by
+hand, on the examples shipped with the system.
 
 \begin{table}[h]
 \centering\small
@@ -851,26 +858,46 @@ smaller worked table.}
 \toprule
 example & target & bound & skipped \\
 \midrule
-plain-binding  & python / node / wasm & 13 & 0 \\
-plain-binding  & julia                & 10 & 3 \\
-geom-expanded  & python / nanobind / wasm / lua & 8 & 0 \\
-geom-expanded  & node                 & 7 & 1 \\
-geom-expanded  & julia                & 7 & 1 \\
-geom-expanded  & \textbf{csharp / java} & \textbf{2} & \textbf{6} \\
-scriptable-model & python / lua / node / wasm & 108 & 1 \\
+plain-binding  & python / node / wasm & 14 & 0 \\
+plain-binding  & julia                & 11 & 3 \\
+geom-expanded  & python / nanobind / wasm / lua & 9 & 0 \\
+geom-expanded  & node                 & 8 & 1 \\
+geom-expanded  & julia                & 8 & 1 \\
+geom-expanded  & \textbf{csharp / java} & \textbf{2} & \textbf{7} \\
+scriptable-model & python / lua / node / wasm & 116 & 1 \\
+scriptable-model & typescript          & 117 & 0 \\
 \bottomrule
 \end{tabular}
-\caption{Measured coverage, from the checked-in \code{coverage.json} files.}
+\caption{Measured coverage, from the checked-in \code{coverage.json} files.
+Counts include free functions as well as class members.}
 \label{tab:coverage}
 \end{table}
 
 The most informative row is the worst one. On \code{geom-expanded}, the C\# and
-Java backends express two members of eight: their marshalling goes through JSON
-and a name-keyed operation table, and six members do not survive that. A
-generator that reported only its successes would show the same green as Python's
-8-of-8. Making the failure legible, per target and per member, is what turns
+Java backends express two entities of nine: their marshalling goes through JSON
+and a name-keyed operation table, and seven do not survive that. A generator
+that reported only its successes would show the same green as Python's 9-of-9.
+Making the failure legible, per target and per member, is what turns
 ``multi-target'' from a claim into a measurement --- and it is what lets a user
-choose a target with knowledge of what they are giving up.
+choose a target with knowledge of what they are giving up. That the same two
+backends are also the floor on a real library, for the same reason, is the
+strongest evidence that the small table is measuring something real rather than
+an artifact of a toy.
+
+\paragraph{The claim, tested.} This section asserts that every member which is
+not exposed is recorded. That is a falsifiable claim about the implementation,
+and putting it in front of a real library falsified two parts of it. No backend
+recorded \emph{free functions} at all --- so on a library whose algorithms are
+free functions over one data structure, the report covered a fifth of the API
+and silently omitted the rest, bound and skipped alike. And the
+\code{typescript} backend recorded nothing it bound, which is why it is absent
+from earlier versions of Table~\ref{tab:coverage} entirely: a target that logs
+only skips does not appear in a report keyed by what recorded something. Both
+are fixed, and the counts above are the post-fix ones. The general point is
+uncomfortable but is the reason to build the artifact in the first place: a
+coverage report is itself a measurement instrument, and an instrument nobody
+tests against an adversarial input records what its author expected rather than
+what happened.
 
 % =====================================================================
 \section{Experimental evaluation}
@@ -1453,16 +1480,131 @@ member column is not comparable across all targets, for the field-recording
 asymmetry noted under Table~\ref{tab:e5}.
 
 % =====================================================================
-\section{Case study: one geophysical library, four interfaces}
+\section{Case study: one library, six consumers, one new class}
 \label{sec:case}
 
-\gap{Scaffold --- E6.}
+Sections~\ref{sec:eval}'s experiments each isolate one variable. This section
+does the opposite: it takes the whole pipeline as a user meets it, and asks what
+happens when the library moves.
 
-\todo{A \code{Mesh}/\code{Field}/\code{Solver} library driven from Python
-(analysis), Julia (numerics), Qt (an interactive property editor generated by
-query over \code{fields()}) and WebAssembly (a browser demo). Then evolve the
-library and show the interface acquiring the new properties with no change to
-any binding --- the concrete payoff of Section~\ref{sec:dynamic}.}
+\subsection{The library and its consumers}
+
+\code{scene.h} is 233 lines of ordinary C++ --- no \rosetta{} header, no
+attribute, no base class. Every \code{doc}, \code{range}, \code{combobox} and
+\code{readonly} hint lives out of line in JSON side-cars named by the manifest,
+so the header is what an unmodified third-party library looks like. It declares
+a value type (\code{Vec3}), a document (\code{Mesh}, carrying real geometry
+behind \code{positions()}/\code{triangles()}), and an enum.
+
+One \code{dynamic} projection of it feeds six consumers, none of which is
+compiled against \code{scene.h} and none of which names a bound type:
+
+\begin{itemize}\setlength{\itemsep}{1pt}
+  \item a terminal interpreter and a registry inspector, both in C++;
+  \item a Qt viewer --- 3D view, generated property panel, completing console;
+  \item Python, Lua and Node drivers, and a \code{three.js} browser editor over
+        WebAssembly, all going through the \emph{scriptable} projection: a
+        binding of \code{rosetta::script} itself, which names no library class
+        at all (Section~\ref{sec:dynamic}).
+\end{itemize}
+
+\paragraph{Why that second group matters.} The C++ consumers each contain a
+hand-written walker over the metadata --- \code{interp.h}, the property panel,
+the Add menu, and elsewhere in the tree an ImGui and a QML one: five walkers,
+one per toolkit, all traversing the same tables. Binding the reflection API
+instead moves that walk into the language whose interface it builds, so the Qt
+panel's dispatch is written in Python where the Qt binding already lives. We
+resist the tempting line count here: the Python spec-builder is 27 lines against
+the C++ panel's 401, but the C++ file also constructs and wires the widgets,
+which the Python one hands to PyQt. The defensible statement is structural, not
+a ratio --- \emph{one walker per toolkit becomes one walker per toolkit in that
+toolkit's own language}, and the walker stops being C++.
+
+\subsection{Growing the library}
+
+The library then gains a third kind of thing: a \emph{solver}.
+\code{scene::Relaxer} improves the shape of a triangle mesh by tangential
+Laplacian relaxation --- each pass moves every vertex a fraction \code{step}
+toward the centroid of its one-ring, which equalises edge lengths and so drives
+triangles toward equilateral. The displacement is projected onto the vertex
+tangent plane, which is what stops the classic collapse of naive Laplacian
+smoothing: on the Stanford bunny at 40 passes, the bounding-box diagonal loses
+$1.05\%$ with that projection off and $0.01\%$ with it on, for the same quality
+gain.
+
+A solver is the interesting case for this projection because it is mostly
+\emph{tuning}: four public parameters with declared ranges, three read-only
+outputs, and one method that runs for a while and mutates something else. That
+is exactly a property sheet, and nobody writes one.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{lrrr}
+\toprule
+ & mean quality & worst triangle & bbox diagonal \\
+\midrule
+bunny, before      & 0.834 & 0.014 & 1.6072 \\
+bunny, after 25 passes & \textbf{0.912} & \textbf{0.102} & 1.6076 \\
+\bottomrule
+\end{tabular}
+\caption{The solver, driven through the dynamic model. Quality is
+$4\sqrt{3}A/(a^2{+}b^2{+}c^2)$, which is 1 for an equilateral triangle. The
+worst triangle improves by $7\times$ while the silhouette does not move.
+Identical figures are produced from the C++ console and from Python, because
+both call the same tables.}
+\label{tab:e6}
+\end{table}
+
+\paragraph{What it cost downstream: nothing.} Adding the solver touched three
+files, all of them the library's own --- \code{scene.h}, one annotation
+side-car, and one line of the manifest naming the new class. No consumer
+changed: not the Qt viewer, not the property panel, not the console, not the
+terminal interpreter, and none of the five scriptable drivers. Yet the generated
+inspector lists the solver's fields with their ranges and read-only flags, the
+console runs it (Figure~\ref{fig:e6}), and the Python driver's property sheet
+grows its rows.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/e6-viewer.png}
+\caption{The Qt viewer after the library grew a solver. The console session
+creates a \code{scene::Relaxer}, sets its parameters and calls \code{run} on the
+bunny; the object list gains \code{r}; the view redraws from the mutated mesh.
+Nothing in \code{qt/} was recompiled against the solver, and nothing in it
+mentions one --- the window is built by querying metadata that grew.}
+\label{fig:e6}
+\end{figure}
+
+\subsection{The claim, checked rather than asserted}
+
+A case study can assert anything, so this one is also a test
+(\code{E6-case-study/}). The same library goes through the pipeline twice,
+differing only in whether the manifest lists \code{Relaxer}, and the generated
+artifacts are compared. The prediction is deliberately two-sided, because a
+byte-identity test invites a vacuous pass:
+
+\begin{itemize}\setlength{\itemsep}{1pt}
+  \item the \emph{metadata} must differ --- 4 stage-1 files change, and
+        \code{Relaxer} is present in the ``after'' tables and absent from
+        ``before'';
+  \item the \emph{binding} must not --- and 0 of 18 stage-2 files change,
+        across 4\,173 generated lines.
+\end{itemize}
+
+Both hold. That second number is the point of Section~\ref{sec:dynamic} stated
+as an artifact: the binding a host imports is a binding of the reflection API,
+so the library grew and the thing every consumer depends on did not move a byte.
+E2 measures the same property as a file-count across a $13\times$ growth; this
+measures it as byte-identity across one concrete, human-sized change, and fails
+the run if it ever stops being true.
+
+\paragraph{What this does not show.} The harness compares generated artifacts;
+that the hand-written consumers still work rests on the version-control evidence
+above, which is weaker. The library is ours --- a demonstration library small
+enough for a reader to hold in their head --- so the third-party evidence stays
+in Section~\ref{sec:e5}. And the outline for this section once promised a Julia
+arm; the \emph{scriptable} projection ships value casters for Python, Lua, Node
+and WebAssembly but not Julia, so that arm does not exist and is not claimed.
 
 % =====================================================================
 \section{Limitations}

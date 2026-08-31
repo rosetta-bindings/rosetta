@@ -1,0 +1,22 @@
+{
+  "iterations":    { "doc": "Relaxation passes to run", "range": [1, 200],
+                     "label": "Iterations", "widget": "slider" },
+  "step":          { "doc": "Fraction of the way to the one-ring centroid each pass; 0 does nothing, 1 jumps the whole way",
+                     "range": [0, 1], "label": "Step", "widget": "slider" },
+  "pinBoundary":   { "doc": "Hold vertices on a boundary edge still, so the rim does not erode inward",
+                     "label": "Pin boundary", "widget": "checkbox" },
+  "preserveShape": { "doc": "Project each displacement onto the tangent plane, so the surface slides rather than shrinks",
+                     "label": "Preserve shape", "widget": "checkbox" },
+
+  "meanQuality":   { "doc": "Mean triangle quality after the last run; 1 is equilateral",
+                     "readonly": true, "label": "Mean quality" },
+  "worstQuality":  { "doc": "Quality of the worst triangle after the last run",
+                     "readonly": true, "label": "Worst quality" },
+  "lastPasses":    { "doc": "Passes actually run, after clamping", "readonly": true,
+                     "label": "Passes run" },
+
+  "run":           { "doc": "Relax the mesh in place", "button": "Relax" },
+  "report":        { "doc": "One line describing the last run", "button": "Report" },
+  "quality":       { "doc": "Mean triangle quality of a mesh, in [0,1]" },
+  "minQuality":    { "doc": "Quality of the worst triangle in a mesh" }
+}

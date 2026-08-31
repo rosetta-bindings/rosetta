@@ -1,0 +1,23 @@
+{
+  "new_class": "scene::Relaxer",
+  "metadata": {
+    "changed": [
+      "coverage.json",
+      "dynamic/README.md",
+      "dynamic/auto_dynamic.cpp",
+      "markdown/scene.md"
+    ],
+    "added": [],
+    "removed": [],
+    "present_after": true,
+    "present_before": false
+  },
+  "scriptable": {
+    "changed": [],
+    "added": [],
+    "removed": [],
+    "files": 18,
+    "lines": 4173
+  },
+  "pass": true
+}
