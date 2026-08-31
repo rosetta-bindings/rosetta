@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // TypeScript generation backend — declaration. Part of the generate pipeline
 // (included by inline/generate.hxx after the shared render helpers); the emit()

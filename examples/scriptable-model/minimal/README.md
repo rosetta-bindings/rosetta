@@ -83,4 +83,4 @@ Deliberate, and worth knowing before you try this on your own header. `auto_dyna
 rosetta/annotations.h:16: fatal error: 'experimental/meta' file not found
 ```
 
-The reflection-free promise covers the *generated* code, not a bound header that itself requires reflection. If you want annotations *and* a stock-compiler target build, put them **out of line** in a `.ann.json` side-car — which is exactly what `examples/dynamic/scene.h` does with `Mesh.ann.json` and `Vec3.ann.json`, and why `..` gets ranges, choices and tooltips while this example gets none.
+The reflection-free promise covers the *generated* code, not a bound header that itself requires reflection. If you want annotations *and* an off-the-shelf-compiler target build, put them **out of line** in a `.ann.json` side-car — which is exactly what `examples/dynamic/scene.h` does with `Mesh.ann.json` and `Vec3.ann.json`, and why `..` gets ranges, choices and tooltips while this example gets none.

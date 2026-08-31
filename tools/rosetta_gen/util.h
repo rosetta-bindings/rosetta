@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Small shared helpers: file I/O and portable command running (std::system +
 // std::filesystem only, so the same code drives sh on POSIX and cmd on

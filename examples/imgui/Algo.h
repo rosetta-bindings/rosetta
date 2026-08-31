@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Stock C++ — no annotations, no rosetta include (compare with ../Algo.h,
 // the inline-annotated original). Every doc / range / combobox lives out of

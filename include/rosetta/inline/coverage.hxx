@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Definitions for <rosetta/coverage.h>. Not a standalone header — it relies on
 // the declarations and includes that coverage.h sets up, and is included at its
@@ -119,6 +119,33 @@ namespace rosetta::coverage {
                                    reason, std::move(detail)});
     }
 
+    namespace cov_detail {
+        // A free function's C++ type, in the same shape signature_of() gives a
+        // method. When the manifest picked one overload by spelling it, that
+        // spelling IS the signature and is used verbatim.
+        inline std::string signature_of(const GenFunction &f) {
+            if (!f.sig_cpp.empty()) {
+                return f.sig_cpp;
+            }
+            std::string s = f.ret.spelling + " (";
+            for (std::size_t i = 0; i < f.params.size(); ++i) {
+                s += i ? ", " : "";
+                s += f.params[i].type.spelling;
+            }
+            return s + ")";
+        }
+    } // namespace cov_detail
+
+    inline void note_bound_function(const char *target, const GenFunction &f) {
+        log().bound.push_back(Bound{target, "", f.name, cov_detail::signature_of(f)});
+    }
+
+    inline void note_skip_function(const char *target, const GenFunction &f, const char *reason,
+                                   std::string detail) {
+        log().skips.push_back(
+            Skip{target, "", f.name, cov_detail::signature_of(f), reason, std::move(detail)});
+    }
+
     inline bool emit_overload(overloads policy, const char *target, const GenClass &k,
                               const GenMethod &m) {
         if (m.overload_count <= 1 || policy == overloads::native) {
@@ -204,13 +231,15 @@ namespace rosetta::coverage {
                 }
                 scopes.push_back(sc);
             };
+            // An empty scope is a FREE function; those get their own array
+            // below rather than a class entry named "".
             for (const auto &b : log().bound) {
-                if (b.target == target) {
+                if (b.target == target && !b.scope.empty()) {
                     remember_scope(b.scope);
                 }
             }
             for (const auto &sk : log().skips) {
-                if (sk.target == target) {
+                if (sk.target == target && !sk.scope.empty()) {
                     remember_scope(sk.scope);
                 }
             }
@@ -254,7 +283,36 @@ namespace rosetta::coverage {
 
                 s += "\n        }";
             }
-            s += scopes.empty() ? "]\n    }" : "\n      ]\n    }";
+            s += scopes.empty() ? "]," : "\n      ],";
+
+            // ---- free functions: the same two lists, no owning class ----
+            s += "\n      \"functions\": {\n        \"bound\": [";
+            bool first_fn = true;
+            for (const auto &b : log().bound) {
+                if (b.target != target || !b.scope.empty()) {
+                    continue;
+                }
+                s += first_fn ? "\n" : ",\n";
+                first_fn = false;
+                s += "          {" + field("member", b.member) + ", " +
+                     field("signature", b.signature) + "}";
+            }
+            s += first_fn ? "]," : "\n        ],";
+
+            s += "\n        \"skipped\": [";
+            first_fn = true;
+            for (const auto &sk : log().skips) {
+                if (sk.target != target || !sk.scope.empty()) {
+                    continue;
+                }
+                s += first_fn ? "\n" : ",\n";
+                first_fn = false;
+                s += "          {" + field("member", sk.member) + ", " +
+                     field("signature", sk.signature) + ", " + field("reason", sk.reason) + ", " +
+                     field("detail", sk.detail) + "}";
+            }
+            s += first_fn ? "]" : "\n        ]";
+            s += "\n      }\n    }";
         }
         s += targets.empty() ? "]\n}\n" : "\n  ]\n}\n";
 

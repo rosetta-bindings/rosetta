@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Google Test suite for the two gaps that kept a factory API off the
 // caster-less backends: **std::filesystem::path** and **std::shared_ptr<T>**.

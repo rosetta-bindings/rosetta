@@ -2,7 +2,7 @@
 
 Every other rosetta backend turns your classes into calls into some framework: pybind11 `class_` registrations, N-API property descriptors, sol2 usertypes, Qt property tables. The **`dynamic`** backend turns them back into the IR — a `rosetta::dyn::MetaClass` per bound type, plus one thunk per member — so a program can ask *what exists* and *call it by name*, with no code generated for the caller.
 
-This example binds a small stock-C++ library ([`scene.h`](scene.h)) and then drives it from front-ends that **never name a single bound type**.
+This example binds a small plain-C++ library ([`scene.h`](scene.h)) and then drives it from front-ends that **never name a single bound type**.
 
 There are **three consumers over one set of generated tables**, and none of them includes `scene.h`:
 
@@ -13,7 +13,7 @@ There are **three consumers over one set of generated tables**, and none of them
 ./run.sh viewer     # Qt window: 3D view + generated property panel + console
 ```
 
-Stage 1 needs clang-p2996. Stage 2 — every consumer and the generated metadata — builds with a **stock C++20 compiler**, because the metadata is emitted as *data*, not as splices. The Qt target is skipped automatically if Qt 6 is not found; point at it with `-DQT_DIR=/path/to/Qt/6.x/<platform>`.
+Stage 1 needs clang-p2996. Stage 2 — every consumer and the generated metadata — builds with an **off-the-shelf C++20 compiler**, because the metadata is emitted as *data*, not as splices. The Qt target is skipped automatically if Qt 6 is not found; point at it with `-DQT_DIR=/path/to/Qt/6.x/<platform>`.
 
 ## The Qt viewer
 
@@ -165,8 +165,8 @@ Every other backend makes such a member vanish, which looks identical to never h
 
 | File | |
 |---|---|
-| [`scene.h`](scene.h) | the "existing library" — stock C++, never modified |
-| [`Mesh.ann.json`](Mesh.ann.json), [`Vec3.ann.json`](Vec3.ann.json) | annotations, out of line, so the header stays stock ([details](../../docs/OUT_OF_LINE_ANNOTATIONS.md)) |
+| [`scene.h`](scene.h) | the "existing library" — plain C++, never modified |
+| [`Mesh.ann.json`](Mesh.ann.json), [`Vec3.ann.json`](Vec3.ann.json) | annotations, out of line, so the header stays plain ([details](../../docs/OUT_OF_LINE_ANNOTATIONS.md)) |
 | [`manifest.json`](manifest.json) | targets `dynamic` (and `markdown`, for contrast) |
 | [`interp.h`](interp.h) | the interpreter + the metadata queries a UI needs — **shared verbatim** by both front-ends |
 | [`demo.cpp`](demo.cpp) | terminal front-end |

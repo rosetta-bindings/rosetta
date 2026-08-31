@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // TypeScript generation backend — emits a `.d.ts` ambient module describing
 // the bound classes (a companion to the node / wasm runtime bindings). This
@@ -122,6 +122,10 @@ namespace rosetta {
 
                 for (const auto &f : k.fields) {
                     if (is_adapted(f.type) && !adapt_ok(f.type)) {
+                        coverage::note_skip_field("typescript", k, f, "sequence_not_adaptable",
+                                                  "a registered sequence with no std::vector "
+                                                  "boundary adapter — the runtime backends skip "
+                                                  "it, so this declaration would over-promise");
                         continue; // not adaptable — the runtime backends skip it
                     }
                     if (f.type.kind == "object" &&
@@ -145,6 +149,13 @@ namespace rosetta {
                                 out += "        /** " + f.doc + " */\n";
                             }
                             out += "        readonly " + f.name + ": " + ts_type(f.type, c) + ";\n";
+                            coverage::note_bound_field("typescript", k, f);
+                        } else {
+                            coverage::note_skip_field(
+                                "typescript", k, f, "unmarshalable_type",
+                                bound ? "a non-copyable member object whose name collides with a "
+                                        "method"
+                                      : "a non-copyable member object of an unbound class");
                         }
                         continue;
                     }
@@ -153,6 +164,7 @@ namespace rosetta {
                     }
                     out += "        " + std::string(f.is_readonly ? "readonly " : "") + f.name +
                            ": " + ts_type(f.type, c) + ";\n";
+                    coverage::note_bound_field("typescript", k, f);
                 }
 
                 for (const auto &m : k.methods) {
@@ -174,7 +186,12 @@ namespace rosetta {
                         continue;
                     }
                     bool visible;
-                    if (seq_touches(m)) {
+                    // Which of the two gates rejected it, so the coverage
+                    // report distinguishes "the sequence has no adapter" from
+                    // "the signature names a type that cannot cross" -- the
+                    // same two reasons the runtime backends record.
+                    const bool seq = seq_touches(m);
+                    if (seq) {
                         visible = seq_adaptable(m);
                     } else {
                         visible = !(m.ret.kind == "object" && !m.ret.copy_constructible);
@@ -184,6 +201,17 @@ namespace rosetta {
                                                !p.type.copy_constructible);
                     }
                     if (!visible) {
+                        if (seq) {
+                            coverage::note_skip("typescript", k, m, "sequence_not_adaptable",
+                                                "a registered sequence in the signature has no "
+                                                "std::vector boundary adapter for the runtime "
+                                                "backend this .d.ts describes");
+                        } else {
+                            coverage::note_skip("typescript", k, m, "unmarshalable_signature",
+                                                "a non-copyable class by value in the signature; "
+                                                "the runtime backend skips it, so declaring it "
+                                                "would promise a method that is not there");
+                        }
                         continue;
                     }
                     if (!m.doc.empty()) {
@@ -191,17 +219,49 @@ namespace rosetta {
                     }
                     out += "        " + std::string(m.is_static ? "static " : "") + m.name + "(" +
                            ts_params(m.params, c) + "): " + ts_return(m.ret, m.params, c) + ";\n";
+                    coverage::note_bound("typescript", k, m);
                 }
 
                 out += "    }\n";
             }
 
             for (const auto &f : c.functions) {
+                // Free functions get the SAME visibility rule as methods above.
+                // They had none, which made this the one place the .d.ts could
+                // over-promise: a function the N-API module skips for an
+                // unmarshalable type was still declared here, so the caller got
+                // a compile-time green light for something not in the module.
+                GenMethod probe;
+                probe.ret    = f.ret;
+                probe.params = f.params;
+                bool visible;
+                const bool seq = seq_touches(probe);
+                if (seq) {
+                    visible = seq_adaptable(probe);
+                } else {
+                    visible = !(f.ret.kind == "object" && !f.ret.copy_constructible);
+                }
+                for (const auto &p : f.params) {
+                    visible = visible && !(p.type.kind == "object" && !p.is_ref &&
+                                           !p.type.copy_constructible);
+                }
+                if (!visible) {
+                    coverage::note_skip_function(
+                        "typescript", f,
+                        seq ? "sequence_not_adaptable" : "unmarshalable_signature",
+                        seq ? "a registered sequence in the signature has no std::vector "
+                              "boundary adapter for the runtime backend this .d.ts describes"
+                            : "a non-copyable class by value in the signature; the runtime "
+                              "backend skips it, so declaring it would promise a function "
+                              "that is not there");
+                    continue;
+                }
                 if (!f.doc.empty()) {
                     out += "    /** " + f.doc + " */\n";
                 }
                 out += "    export function " + f.name + "(" + ts_params(f.params, c) +
                        "): " + ts_return(f.ret, f.params, c) + ";\n";
+                coverage::note_bound_function("typescript", f);
             }
 
             out += "}\n";

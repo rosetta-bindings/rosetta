@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Emits the ParaView Server Manager XML for the annotated Threshold spec
 // (threshold.h) via rosetta::to_paraview_xml<T>(). The XML goes to stdout, so:

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // A tiny polymorphic library — your existing, unmodified code. Because `area`
 // and `describe` are virtual, the Node backend emits an N-API trampoline so a

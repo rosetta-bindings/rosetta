@@ -1,38 +1,37 @@
 # geom-expanded — reflection-free bindings
 
-A variant of [`../geom-lib`](../geom-lib) whose generated bindings **build with a
-stock toolchain** — no clang-p2996, no reflection, (almost) no rosetta headers on
+A variant of [`../geom-lib`](../geom-lib) whose generated bindings **build with an off-the-shelf toolchain** — no clang-p2996, no reflection, (almost) no rosetta headers on
 the machine that compiles the binding. It ships eleven such targets:
 
-- **`python`** → a pybind11 module that builds with a stock **C++17** compiler.
+- **`python`** → a pybind11 module that builds with an off-the-shelf **C++17** compiler.
 - **`nanobind`** → a [nanobind](https://github.com/wjakob/nanobind) module
-  (leaner/faster pybind11 successor) — stock **C++17**, smallest binary of the set.
-- **`node`** → an N-API addon that builds with a stock **C++20** compiler
+  (leaner/faster pybind11 successor) — off-the-shelf **C++17**, smallest binary of the set.
+- **`node`** → an N-API addon that builds with an off-the-shelf **C++20** compiler
   (uses the header-only, reflection-free `runtime/node.h`).
-- **`wasm`** → an emscripten/embind module that builds with a **stock emsdk**
+- **`wasm`** → an emscripten/embind module that builds with an **off-the-shelf emsdk**
   (no reflection-aware fork — the limitation noted for the plain `wasm` target).
-- **`qt`** → a Qt Widgets inspector window (stock **C++17** + Qt 6) via the
+- **`qt`** → a Qt Widgets inspector window (off-the-shelf **C++17** + Qt 6) via the
   header-only, reflection-free `runtime/qt_widgets.h`; no moc on the generated code.
-- **`qml`** → a QtQuick inspector (stock **C++17** + Qt 6) that fills the generic
+- **`qml`** → a QtQuick inspector (off-the-shelf **C++17** + Qt 6) that fills the generic
   `ReflectedObject` bridge; moc runs only on that bridge, never per type.
-- **`csharp`** → a native shared library (stock **C++20**) exposing a flat
+- **`csharp`** → a native shared library (off-the-shelf **C++20**) exposing a flat
   C ABI, plus idiomatic handle-backed C# wrappers that reach it through P/Invoke
   (values marshalled as JSON via `System.Text.Json`); ships a `.csproj`. The native
   shim registers every field/method/constructor by *member pointer*, so the runtime
   deduces the marshalled types — no reflection. Out-of-line `range`/`readonly`/`doc`
   flow straight in (e.g. `Triangle.a` rejects an out-of-range value at run time).
-- **`java`** → the same C-ABI shim (stock **C++20**) plus handle-backed
+- **`java`** → the same C-ABI shim (off-the-shelf **C++20**) plus handle-backed
   Java wrappers reaching it through the FFM API (`java.lang.foreign`).
-- **`lua`** → a [sol2](https://github.com/ThePhD/sol2) module (stock **C++17** +
+- **`lua`** → a [sol2](https://github.com/ThePhD/sol2) module (off-the-shelf **C++17** +
   Lua 5.1–5.4 / LuaJIT; sol2 fetched automatically) built as a plain
   `require`-able C module (`luaopen_luageom` in `luageom.so`). Vector parameters
   accept plain Lua tables (a second `sol::nested` overload is generated beside
   the exact one), a Lua function converts natively into a `std::function`
   callback parameter, and the out-of-line `range` on `Triangle.a/b/c` validates
   at run time.
-- **`julia`** → a CxxWrap / jlcxx module (stock **C++20** + Julia with
+- **`julia`** → a CxxWrap / jlcxx module (off-the-shelf **C++20** + Julia with
   the CxxWrap package) loaded via a generated `jlgeom.jl` wrapper. Because it
-  builds against the stock libc++ — not the fork's — `<jlcxx/stl.hpp>` compiles
+  builds against the off-the-shelf libc++ — not the fork's — `<jlcxx/stl.hpp>` compiles
   and **`std::vector` crosses the boundary** (members, parameters, returns,
   including vectors of bound classes), which the thin `julia` target must skip.
   A plain Julia `Vector` works wherever C++ wants a vector (a zero-copy
@@ -40,27 +39,27 @@ the machine that compiles the binding. It ships eleven such targets:
   convention (`x(p)` / `x!(p, v)`), and the `range` annotation validates in the
   generated setter.
 
-- **`imgui`** → a Dear ImGui inspector app (stock **C++20**; ImGui and GLFW are
+- **`imgui`** → a Dear ImGui inspector app (off-the-shelf **C++20**; ImGui and GLFW are
   fetched automatically at configure time) — the immediate-mode counterpart of
   `qt`. One tab per class; ranged fields become clamping sliders
   (`Triangle.a/b/c`), enums become combos, docs become "(?)" tooltips, and
   scalar methods get a call button. `ROSETTA_IMGUI_FRAMES=N` auto-exits after N
   frames (smoke tests).
 
-Two things make the stock-toolchain targets possible:
+Two things make the off-the-shelf-toolchain targets possible:
 
 1. **Out-of-line annotations.** The headers in [`geom/`](geom) are plain C++:
    no `[[ = rosetta::doc{...} ]]`, no rosetta include. Every doc/range lives in a
    `*.ann.json` side-car ([`Point.ann.json`](Point.ann.json),
    [`Triangle.ann.json`](Triangle.ann.json), [`Model.ann.json`](Model.ann.json)),
    wired in by the manifest's `"annotations"` field. So the bound headers
-   themselves are stock C++ and parse under any compiler.
+   themselves are plain C++ and parse under any compiler.
 
 2. **Expansion.** Rather than emit a binding that re-runs the reflection walk at
    the target's compile time, every backend fully expands each field, method,
    constructor and enumerator into explicit pybind11 / nanobind / N-API / embind
    calls. The generated TU includes only the binding-framework headers plus the
-   (stock) user headers. (Until 2026-08 this was the distinguishing half of a
+   (plain) user headers. (Until 2026-08 this was the distinguishing half of a
    `*-expanded` target; the thin variants are gone and every target works this
    way, so the suffix no longer appears in a manifest.)
 
@@ -84,31 +83,31 @@ cmake -S gen -B gen/build && cmake --build gen/build -j
 ./generator bindings
 ```
 
-### 3a. Python / pybind11 — stock C++17
+### 3a. Python / pybind11 — off-the-shelf C++17
 ```sh
 cmake -S bindings/python -B bindings/python/build
 cmake --build bindings/python/build -j
 ```
 
-### 3b. Python / nanobind — stock C++17 (needs the pip `nanobind` package)
+### 3b. Python / nanobind — off-the-shelf C++17 (needs the pip `nanobind` package)
 ```sh
 cmake -S bindings/nanobind -B bindings/nanobind/build
 cmake --build bindings/nanobind/build -j
 ```
 
-### 3c. Node / N-API — stock C++20
+### 3c. Node / N-API — off-the-shelf C++20
 ```sh
 ( cd bindings/node && npm install && npm run build )
 ```
 
-### 3d. WASM / embind — stock emsdk (no fork)
+### 3d. WASM / embind — off-the-shelf emsdk (no fork)
 ```sh
 emcmake cmake -S bindings/wasm -B bindings/wasm/build
 cmake --build bindings/wasm/build -j
 #   -> bindings/wasm/build/geom.js + geom.wasm, loadable in node/web
 ```
 
-### 3e. Qt Widgets / QML — stock C++17 + Qt 6
+### 3e. Qt Widgets / QML — off-the-shelf C++17 + Qt 6
 ```sh
 # Qt prefix defaults to ~/Qt/6.8.3/macos; set it per-project with "qt_dir" in
 # manifest.json, or override at configure time with -DQT_DIR=...
@@ -118,13 +117,13 @@ cmake -S bindings/qml -B bindings/qml/build && cmake --build bindings/qml/build 
 #   -> ./bindings/qml/build/geom_qml  (QtQuick inspector via the generic ReflectedObject)
 ```
 
-`qt` includes only Qt + the (stock) user headers — no moc on the generated code.
+`qt` includes only Qt + the (plain) user headers — no moc on the generated code.
 `qml` reuses rosetta's generic `ReflectedObject` + `qml/Inspector.qml`, so moc
 runs on that bridge only, never on per-type reflection.
 
-### 3f. C# — native library (stock C++20) + .NET assembly
+### 3f. C# — native library (off-the-shelf C++20) + .NET assembly
 ```sh
-# reflection-free shim — builds with a stock compiler, no clang-p2996
+# reflection-free shim — builds with an off-the-shelf compiler, no clang-p2996
 cmake -S bindings/csharp -B bindings/csharp/build
 cmake --build bindings/csharp/build -j
 #   -> bindings/csharp/build/libcsgeom.{dylib,so}
@@ -144,7 +143,7 @@ System.Console.WriteLine(t.kind);   // enum, marshalled as its integer value
 At run time the .NET loader must find `libcsgeom.*` (e.g.
 `DYLD_LIBRARY_PATH=bindings/csharp/build` on macOS, `LD_LIBRARY_PATH=…` on Linux).
 
-### 3g. Dear ImGui — inspector app (stock C++20, deps auto-fetched)
+### 3g. Dear ImGui — inspector app (off-the-shelf C++20, deps auto-fetched)
 ```sh
 cmake -S bindings/imgui -B bindings/imgui/build
 cmake --build bindings/imgui/build -j
@@ -152,7 +151,7 @@ cmake --build bindings/imgui/build -j
 ROSETTA_IMGUI_FRAMES=5 ./bindings/imgui/build/geom_imgui  # smoke test
 ```
 
-### 3h. Julia — jlcxx module (stock C++20 + CxxWrap.jl)
+### 3h. Julia — jlcxx module (off-the-shelf C++20 + CxxWrap.jl)
 ```sh
 # needs Julia with CxxWrap installed:  julia -e 'using Pkg; Pkg.add("CxxWrap")'
 cmake -S bindings/julia -B bindings/julia/build
@@ -164,7 +163,7 @@ julia example_julia.jl
 Unlike the thin `julia` target, `std::vector` is fully bound here (`getPoints`,
 `getSurfaces`, vector-taking constructors — see the note in the main README).
 
-### 3i. Lua — sol2 module (stock C++17 + Lua 5.1–5.4 / LuaJIT)
+### 3i. Lua — sol2 module (off-the-shelf C++17 + Lua 5.1–5.4 / LuaJIT)
 ```sh
 # sol2 is fetched automatically at configure time; on macOS `brew install lua@5.4`
 # (sol2 does not support Lua 5.5 yet — the generated CMake prefers a 5.4 install)

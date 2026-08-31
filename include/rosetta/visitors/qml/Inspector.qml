@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Generic inspector. Every field/method row is rendered from the
 // metadata produced by rosetta::QmlVisitor — no per-Person markup.

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // mini_moc example: a Thermostat model wired to two independent receivers
 // (a Display and a Heater controller) via reflection-driven signals/slots.

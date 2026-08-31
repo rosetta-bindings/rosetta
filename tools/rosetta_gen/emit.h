@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Emission of the generator project tree (bindings.h + <generator_name>.cpp +
 // CMakeLists.txt) — shared by the plain generate mode and --build.

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Expanded (reflection-free) CxxWrap / jlcxx backend. Included by
 // inline/generate.hxx after backends/python.h (whose qualify_std() it
@@ -545,8 +545,12 @@ using .{{LIB}}
                 probe.params     = f.params;
                 probe.ret_is_ref = false; // GenFunction doesn't carry it; by-value assumed
                 if (!jx_method_ok(probe, c)) {
+                    coverage::note_skip_function("julia", f, "unmarshalable_signature",
+                                                 "no jlcxx conversion for a type in this "
+                                                 "signature");
                     continue;
                 }
+                coverage::note_bound_function("julia", f);
                 body += "    mod.method(\"" + f.name + "\", " + fn_addr(f) + ");\n";
                 if (jx_wants_arrayref_overload(f.params)) {
                     const JxAdapterParams ap = jx_arrayref_params(f.params, {});

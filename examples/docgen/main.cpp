@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Auto-docgen demo: renders reflection-driven documentation for the annotated
 // Algo struct (../Algo.h) in Markdown or HTML, via rosetta::to_markdown<T>() /

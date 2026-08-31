@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // load(): manifest.json -> Manifest (structs and field docs in manifest.h),
 // plus the shell-glob expansion `user_sources` patterns go through.

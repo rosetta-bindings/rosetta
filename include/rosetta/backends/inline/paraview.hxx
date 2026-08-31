@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // ParaView backend — implementation. A *pure-data* backend: it renders ParaView
 // Server Manager XML from the erased IR (GenClass fields + annotations).

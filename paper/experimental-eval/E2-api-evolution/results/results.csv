@@ -1,0 +1,10 @@
+version,classes,methods,arm,manifest_loc,src_files,src_loc,all_files,all_loc,src_files_changed,src_files_added,src_files_removed,driver_compile_s,generate_s
+v1,10,40,static,53,4,763,13,1868,,,,3,1
+v1,10,40,dyn,54,4,1106,6,1379,,,,3,0
+v1,10,40,meta,25,4,1208,13,2580,,,,5,0
+v2,30,120,static,133,4,2103,13,4468,4,0,0,4,1
+v2,30,120,dyn,134,4,3006,6,3699,2,0,0,5,0
+v2,30,120,meta,25,4,1208,13,2580,0,0,0,5,0
+v3,130,520,static,533,4,8803,13,17468,4,0,0,14,1
+v3,130,520,dyn,534,4,12506,6,15299,2,0,0,14,0
+v3,130,520,meta,25,4,1208,13,2580,0,0,0,4,1

@@ -2,7 +2,7 @@
 
 Binds the `Algo` demo class to the **`imgui`** backend: a self-contained
 desktop app (Dear ImGui + GLFW + OpenGL 3, both fetched automatically by CMake)
-that builds with a **stock C++20 compiler**. The same manifest also emits the
+that builds with an **off-the-shelf C++20 compiler**. The same manifest also emits the
 **`qt`** and **`qml`** inspectors, so the three UI backends can be compared on
 the identical annotated surface:
 
@@ -16,7 +16,7 @@ cmake -S bindings/qml -B bindings/qml/build && cmake --build bindings/qml/build 
 > found`. Configure with `-DQT_DIR=$HOME/Qt/6.5.3/macos` (or any Qt build made
 > for the newer SDK).
 
-[`Algo.h`](Algo.h) here is the stock-C++ variant of the inline-annotated
+[`Algo.h`](Algo.h) here is the plain-C++ variant of the inline-annotated
 [`../Algo.h`](../Algo.h): the header never mentions rosetta — every `doc`,
 `range` and `combobox` lives out of line in [`Algo.ann.json`](Algo.ann.json),
 wired in by the manifest's `"annotations"` field:
@@ -45,7 +45,7 @@ ROSETTA_IMGUI_FRAMES=5 ./run.sh   # smoke test: render 5 frames, then exit
 ```
 
 Only stage 1 (running the generator) needs the clang-p2996 toolchain; the
-inspector itself compiles with any stock C++20 compiler.
+inspector itself compiles with any off-the-shelf C++20 compiler.
 
 ## Inline annotations instead?
 
@@ -53,7 +53,7 @@ The side-car carries the **full** annotation set — `doc`, `range`, `readonly`,
 `combobox`, `label`, `button` and the `widget` hints — so this example's UI is
 pixel-identical to what the inline-annotated original (`../Algo.h`) produces.
 If you prefer inline annotations anyway, note that a header carrying them
-can't be parsed by a stock compiler, since the generated inspector
+can't be parsed by an off-the-shelf compiler, since the generated inspector
 `#include`s it; configure the generated project with
 `-DROSETTA_IMGUI_CPP26=ON` to switch it to the clang-p2996 toolchain
 (`-fannotation-attributes`). The generated binding code is identical either

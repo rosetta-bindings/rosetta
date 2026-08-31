@@ -24,9 +24,9 @@ Silent skipping needs an audit artifact. The skip-don't-emit-a-throwing-binding 
 
 # 4. Toolchain and validation
 
-Generation requires parsing your whole header closure in C++26 mode under an experimental fork. The expanded backends are a genuinely strong mitigation — generate once, build anywhere with stock toolchains — but the generation host still has to get clang-p2996 through every transitive include. Heavy TMP, boost, CUDA, MSVC-isms, or PCH-dependent headers block generation, and diagnostics inside a consteval walk are famously poor. P2996 is also still moving; annotation and splice spelling can shift before C++26 ships, which is real churn on walk.hxx / generate.hxx.
+Generation requires parsing your whole header closure in C++26 mode under an experimental fork. The expanded backends are a genuinely strong mitigation — generate once, build anywhere with off-the-shelf toolchains — but the generation host still has to get clang-p2996 through every transitive include. Heavy TMP, boost, CUDA, MSVC-isms, or PCH-dependent headers block generation, and diagnostics inside a consteval walk are famously poor. P2996 is also still moving; annotation and splice spelling can shift before C++26 ships, which is real churn on walk.hxx / generate.hxx.
 
-Validation is the weakest link relative to the claim. 18 test files, macOS-only, and the only GitHub workflow is marp.yml (slides) — nothing runs the test suite, and nothing verifies that a generated Python/Node/Wasm module imports and runs on Linux or Windows. The headline promise is "ship the generated sources anywhere with a stock toolchain"; that's precisely the axis with no automated evidence behind it.
+Validation is the weakest link relative to the claim. 18 test files, macOS-only, and the only GitHub workflow is marp.yml (slides) — nothing runs the test suite, and nothing verifies that a generated Python/Node/Wasm module imports and runs on Linux or Windows. The headline promise is "ship the generated sources anywhere with an off-the-shelf toolchain"; that's precisely the axis with no automated evidence behind it.
 
 If I had to pick three
 

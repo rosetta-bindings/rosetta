@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 //
 // N-API type caster for rosetta::script::Value — target `node`.
 // See <rosetta/runtime/script_casters.h> for what this is and how it gets in.

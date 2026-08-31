@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Header-only, reflection-free Dear ImGui widget kit used by the generated
 // imgui inspector (the ImGui counterpart of runtime/qt_widgets.h).

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // The generator-project emitters: bindings.h (binding_info specializations +
 // baked-in annotations), <generator_name>.cpp (the reflection driver's main)

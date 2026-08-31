@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Google Test suite for out-of-line annotations: metadata supplied through the
 // ann_json_source<T> customization point (the same point rosetta_gen bakes a

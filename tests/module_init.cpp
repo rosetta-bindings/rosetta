@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Google Test suite for the two manifest fields that cover what is NOT a
 // binding: **`module_init`** (statements the module runs when it loads) and

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Markdown documentation backend — implementation. A *pure-data* backend: it
 // consumes the reflection IR that `generate` erases into GenClass and renders a

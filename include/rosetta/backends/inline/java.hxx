@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Expanded (reflection-free) Java backend. Included by inline/generate.hxx after
 // backends/java.h (reuses java_native / java_runtime_src / java_class / java_enum
@@ -842,8 +842,13 @@ final class Rt {
             }
             for (const auto &f : c.functions) {
                 if (jsonable_function(f)) {
+                    coverage::note_bound_function("java", f);
                     s += "    rosetta::jvm::functions()[\"" + f.name +
                          "\"] = &rosetta::jvm::call_function<" + fn_addr(f) + ">;\n";
+                } else {
+                    coverage::note_skip_function("java", f, "unmarshalable_signature",
+                                                 "a type in this signature has no JSON "
+                                                 "marshalling");
                 }
             }
             return s;

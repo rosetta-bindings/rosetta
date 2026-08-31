@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // OpenAPI 3.1 generation backend — emits `openapi.json` describing the *same*
 // HTTP surface the REST backend serves (it reuses the shared jsonable_* filters

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Expanded (reflection-free) Qt Widgets backend. Included by inline/generate.hxx
 // after backends/python.h (reuses py_lit) and the shared render helpers

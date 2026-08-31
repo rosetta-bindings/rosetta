@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Backend-agnostic QObject adapter populated by rosetta::QmlVisitor<T>.
 // Exposes a reflected struct to QML as two list models plus generic

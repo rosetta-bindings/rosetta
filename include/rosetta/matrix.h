@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Opt-in registration of FOREIGN 2-D MATRIX types (Eigen::MatrixXd, a library's
 // own dense grid) so they cross the binding boundary as an array of rows:

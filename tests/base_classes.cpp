@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Google Test suite for REGISTERING the inheritance relationship in the
 // emitted bindings — GenClass::bases reaching py::class_<T, Base> and

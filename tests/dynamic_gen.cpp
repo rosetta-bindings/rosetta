@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Google Test suite for the `dynamic` backend — the emitter that turns the IR
 // into runtime metadata (see include/rosetta/backends/dynamic.h).

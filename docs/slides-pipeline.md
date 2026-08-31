@@ -127,7 +127,7 @@ import my_lib          # done
 The consequence worth remembering:
 
 - annotations **inline** → `<experimental/meta>` in your header → pass 2 needs
-  the fork too, and the stock-compiler promise is gone
+  the fork too, and the "no reflection on the target" promise is gone
 - annotations **out of line** (`.ann.json`) → your header stays plain C++
 
 ---
@@ -266,13 +266,12 @@ item(self: serie.Serie, arg0: ...) -> list[float]
 The i-th item, as a copy of itemSize consecutive scalars
 ```
 
-The reason is mechanical: the bindings `#include serie.h` and are built by a
-**stock** toolchain, so an inline annotation would need the C++26 fork twice.
+The reason is mechanical: the bindings `#include serie.h` and are built by an **off-the-shelf** toolchain, so an inline annotation would need the C++26 fork twice.
 
 | annotations | pass 1 (describe) | pass 2 (call) |
 |---|---|---|
 | inline | C++26 fork | **C++26 fork too** |
-| out of line | C++26 fork | stock compiler |
+| out of line | C++26 fork | off-the-shelf compiler |
 
 ---
 

@@ -11,7 +11,7 @@ Annotations are rosetta's **opt-in enrichment layer**: small, declarative tags a
 3. **UI** — `label`, `button`, `combobox` and the `widget::*` hints drive the
    generated Qt / QML / Dear ImGui inspectors.
 
-Every annotation can be written **inline** (P2996/P3394 attributes in the header) or **out of line** (a JSON side-car; the header stays stock C++) — the two forms produce identical bindings and can be mixed.
+Every annotation can be written **inline** (P2996/P3394 attributes in the header) or **out of line** (a JSON side-car; the header stays plain C++) — the two forms produce identical bindings and can be mixed.
 
 ---
 
@@ -106,8 +106,8 @@ An annotation a backend has no use for is simply ignored — never an error.
 
 | | Inline `[[= …]]` | Side-car `.ann.json` |
 |---|---|---|
-| Header stays stock C++ | ✗ (needs the P2996 fork to *parse*) | ✅ |
-| Generated binding builds on a stock compiler | ✗ (the generated binding `#include`s the header) | ✅ |
+| Header stays plain C++ | ✗ (needs the P2996 fork to *parse*) | ✅ |
+| Generated binding builds on an off-the-shelf compiler | ✗ (the generated binding `#include`s the header) | ✅ |
 | Third-party headers you can't edit | ✗ | ✅ |
 | Expressiveness | full set | full set (parity) |
 
@@ -131,7 +131,7 @@ The side-car is **baked into `bindings.h` when `rosetta_gen` runs** — after ed
 
 ## Common gotchas
 
-- **Inline annotations make the header C++26-only.** Every TU that includes it — including the generated `-expanded` bindings — must build with the fork and `-fannotation-attributes`. Use the side-car when you want stock builds (the [`examples/imgui`](../examples/imgui) / [`examples/geom-expanded`](../examples/geom-expanded) pattern).
+- **Inline annotations make the header C++26-only.** Every TU that includes it — including the generated `-expanded` bindings — must build with the fork and `-fannotation-attributes`. Use the side-car when you want off-the-shelf builds (the [`examples/imgui`](../examples/imgui) / [`examples/geom-expanded`](../examples/geom-expanded) pattern).
 - **Side-car edits need a regeneration**, not just a rebuild (the JSON is baked at `rosetta_gen` time).
 - `widget::slider` without a `range` falls back to the default editor — a slider needs bounds.
 - `widget::radio` does nothing without a `combobox` — it restyles the choices, it doesn't define them.

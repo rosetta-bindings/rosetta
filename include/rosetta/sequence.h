@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Opt-in registration of FOREIGN sequence containers (a library's own
 // vector type — GEO::vector<T>, an aligned/pooled vector, …) so they cross

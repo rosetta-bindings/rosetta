@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Definitions for <rosetta/runtime/node.h>. Not a standalone header —
 // it relies on the declarations and includes that runtime/node.h sets up, and

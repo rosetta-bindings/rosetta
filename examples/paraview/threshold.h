@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // A rosetta "spec" for VTK's vtkThreshold filter. This struct is NOT the filter
 // itself — it is the annotated description rosetta reflects to emit the ParaView

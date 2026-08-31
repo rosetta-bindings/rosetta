@@ -170,8 +170,7 @@ python3 drive_qt.py            # the Qt editor; puts bindings/python on sys.path
 python3 -m http.server 8000    # then open drive_web.html — the three.js editor
 ```
 
-Both generation stages need clang-p2996; everything from step 3 on is a stock
-toolchain.
+Both generation stages need clang-p2996; everything from step 3 on is an off-the-shelf toolchain.
 
 ## Why a facade
 
@@ -341,7 +340,7 @@ Without that line `Value` is one more handle class and every read becomes `.valu
 
 ## Using it on your own library
 
-The facade is generic; the *tables* are not. See [`minimal/`](minimal/) for the whole thing done from scratch on a 25-line stock-C++ library that has never heard of rosetta — it exists so this claim can be checked rather than believed.
+The facade is generic; the *tables* are not. See [`minimal/`](minimal/) for the whole thing done from scratch on a 25-line plain-C++ library that has never heard of rosetta — it exists so this claim can be checked rather than believed.
 
 **Three files.** Two of them generated:
 
@@ -381,7 +380,7 @@ Plus your `.cpp` / `.a` if the library is not header-only (`user_sources` or `us
 
 No class list to maintain, no regeneration when your library grows a class.
 
-**One constraint.** `auto_dynamic.cpp` includes your header, so a header carrying **inline** annotations (`[[ = rosetta::doc{...} ]]`) drags `<experimental/meta>` into it and needs the C++26 toolchain to build the *target*, not just the generator. Put annotations **out of line** in a `.ann.json` side-car — as `examples/dynamic/scene.h` does — if you want them and a stock-compiler build.
+**One constraint.** `auto_dynamic.cpp` includes your header, so a header carrying **inline** annotations (`[[ = rosetta::doc{...} ]]`) drags `<experimental/meta>` into it and needs the C++26 toolchain to build the *target*, not just the generator. Put annotations **out of line** in a `.ann.json` side-car — as `examples/dynamic/scene.h` does — if you want them and an off-the-shelf-compiler build.
 
 The next step, not done here, is dropping even the three keys: a `load(path)` function that `dlopen`s a shared library whose `register_*` self-registers, giving one prebuilt `rosetta_meta` wheel that reflects *any* rosetta-dynamic
 library.

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Opt-in interoperability with a FOREIGN MATH/CONTAINER LIBRARY whose types the
 // target language's binding framework can already marshal on its own:

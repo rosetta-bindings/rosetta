@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // HTML documentation backend — declaration. Emits a single self-contained
 // `.html` API reference for the bound classes (an HTML companion to the Markdown

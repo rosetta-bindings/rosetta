@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // JSON serialization backend. Unlike the other "pure-data" backends, this one
 // emits no per-type code: serialization is done at runtime by the reflection

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // A machine-readable account of what rosetta actually bound, and what it did
 // not.
@@ -103,6 +103,18 @@ namespace rosetta::coverage {
                    std::string detail = {});
     void note_skip_field(const char *target, const GenClass &k, const GenField &f,
                          const char *reason, std::string detail = {});
+
+    /**
+     * @brief The same, for a FREE function — recorded with an empty `scope`.
+     *
+     * A manifest's `functions` are half the surface of a library whose algorithms
+     * are free functions over a data structure rather than methods on it, so a
+     * report that covers only class members answers "what bound?" for the wrong
+     * half. These land in a per-target `"functions"` array beside `"classes"`.
+     */
+    void note_bound_function(const char *target, const GenFunction &f);
+    void note_skip_function(const char *target, const GenFunction &f, const char *reason,
+                            std::string detail = {});
 
     // ---------------------------------------------------------------------
     // Overload policy

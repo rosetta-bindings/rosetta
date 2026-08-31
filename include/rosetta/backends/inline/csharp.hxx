@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Expanded (reflection-free) C# backend. Included by inline/generate.hxx after
 // backends/csharp.h (reuses csharp_wrapper / cs_ident / CS_CSPROJ / CS_README)
@@ -623,8 +623,13 @@ those. Members using any other type are omitted from both sides.
             }
             for (const auto &f : c.functions) {
                 if (jsonable_function(f)) {
+                    coverage::note_bound_function("csharp", f);
                     s += "    rosetta::cs::functions()[\"" + f.name +
                          "\"] = &rosetta::cs::call_function<" + fn_addr(f) + ">;\n";
+                } else {
+                    coverage::note_skip_function("csharp", f, "unmarshalable_signature",
+                                                 "a type in this signature has no JSON "
+                                                 "marshalling");
                 }
             }
             return s;

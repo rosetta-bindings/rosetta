@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Reflection-driven binding scaffolder. `rosetta::generate<T>(...)` reads
 // the `rosetta::binding_info<T>` trait specialization and emits a
@@ -690,9 +690,16 @@ namespace rosetta {
         //
         //   build_type   — default CMAKE_BUILD_TYPE ("Debug", "Release",
         //                  "RelWithDebInfo", "MinSizeRel"), emitted inside
-        //                  if(NOT CMAKE_BUILD_TYPE) so -DCMAKE_BUILD_TYPE=...
-        //                  at configure time still wins. Empty ⇒ not emitted
-        //                  (CMake's usual no-build-type default applies).
+        //                  if(NOT CMAKE_BUILD_TYPE AND NOT
+        //                  CMAKE_CONFIGURATION_TYPES) so -DCMAKE_BUILD_TYPE=...
+        //                  at configure time still wins and multi-config
+        //                  generators are left alone. Empty ⇒ RELEASE. It used
+        //                  to mean "emit nothing", which left CMake with no
+        //                  build type and therefore no -O at all: the
+        //                  documented two-line build shipped an unoptimized
+        //                  module (measured 8x slower on a pybind11 call).
+        //                  A binding is a redistributable artifact, so the
+        //                  no-op default was a footgun rather than neutral.
         //   optimization — explicit optimization flag ("-O0".."-O3", "-Os",
         //                  "-Oz", "-Og", "-Ofast") added via
         //                  add_compile_options / add_link_options, which land
@@ -741,7 +748,7 @@ namespace rosetta {
         std::vector<std::string> user_sources;    // user .cpp/.c files compiled into the binding target (abs paths)
         std::vector<std::string> compile_definitions; // "NAME"/"NAME=VALUE" defs for the binding target
         std::vector<std::string> link_options;    // extra linker flags for THIS target (TargetSpec::link_options)
-        std::string              build_type;      // default CMAKE_BUILD_TYPE ("" ⇒ not emitted)
+        std::string              build_type;      // default CMAKE_BUILD_TYPE ("" ⇒ Release)
         std::string              optimization;    // explicit -O flag overriding the build type's ("" ⇒ not emitted)
         std::string              cxx_standard;    // per-source -std for the user sources ("" or "20" ⇒ none)
         std::string              version;         // distribution version for packaging ("" ⇒ DEFAULT_DIST_VERSION)

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Expanded (reflection-free) Java generation backend — declaration. Included by
 // inline/generate.hxx after backends/java.h (reuses the shared Java wrapper /

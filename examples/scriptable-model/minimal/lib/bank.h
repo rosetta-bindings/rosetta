@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 //
 // A library that has never heard of rosetta: no annotations, no rosetta
 // include, nothing to opt in. This is the whole of what a project must supply

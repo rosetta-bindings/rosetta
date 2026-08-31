@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Expanded (reflection-free) N-API backend. Included by inline/generate.hxx
 // after backends/node.h (reuses node_trampolines_of / node_virtual_methods) and
@@ -828,6 +828,11 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                                 "\", Napi::Function::New(env, "
                                 "&rosetta::napi_free_entry<&rosetta_nx_seq::" + an +
                                 ">, \"" + f.name + "\"));\n";
+                        coverage::note_bound_function("node", f);
+                    } else {
+                        coverage::note_skip_function("node", f, "sequence_not_adaptable",
+                                                     "a registered sequence in the signature has "
+                                                     "no std::vector boundary adapter");
                     }
                     continue;
                 }
@@ -839,6 +844,11 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     body += "    exports.Set(\"" + f.name +
                             "\", Napi::Function::New(env, &rosetta::napi_free_entry<" + fn_addr(f) +
                             ">, \"" + f.name + "\"));\n";
+                    coverage::note_bound_function("node", f);
+                } else {
+                    coverage::note_skip_function("node", f, "unmarshalable_signature",
+                                                 "no N-API conversion for a type in this "
+                                                 "signature");
                 }
             }
 

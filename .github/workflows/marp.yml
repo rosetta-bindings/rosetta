@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'docs/slides.md'
+      - 'docs/slides-pipeline.md'
       - 'media/**'
       - '.github/workflows/marp.yml'
   workflow_dispatch:
@@ -27,19 +27,19 @@ jobs:
       - name: Stage media assets alongside the HTML
         run: mkdir -p site && cp -R media site/media
 
-      - name: Render docs/slides.md with Marp
+      - name: Render docs/slides-pipeline.md with Marp
         uses: docker://marpteam/marp-cli:latest
         env:
           MARP_USER: root:root
         with:
-          args: docs/slides.md --html --allow-local-files -o site/index.html
+          args: docs/slides-pipeline.md --html --allow-local-files -o site/index.html
 
       - name: Also render a PDF
         uses: docker://marpteam/marp-cli:latest
         env:
           MARP_USER: root:root
         with:
-          args: docs/slides.md --pdf --allow-local-files -o site/slides.pdf
+          args: docs/slides-pipeline.md --pdf --allow-local-files -o site/slides-pipeline.pdf
 
       - uses: actions/configure-pages@v5
 

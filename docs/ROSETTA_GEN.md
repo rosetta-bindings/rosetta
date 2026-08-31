@@ -2,7 +2,7 @@
 
 `rosetta_gen` is the single binary that drives the whole rosetta pipeline. It reads a [`manifest.json`](MANIFEST.md) and can take you from "a folder of C++ headers" to "compiled bindings for every declared language" in one command — or one step at a time, when you want to inspect what each stage produces.
 
-The tool itself uses **no reflection** — only JSON parsing and text templating — so it builds with a stock C++17 compiler. Only the *generator* it emits (and the `rest` target) needs the clang-p2996 toolchain.
+The tool itself uses **no reflection** — only JSON parsing and text templating — so it builds with an off-the-shelf C++17 compiler. Only the *generator* it emits (and the `rest` and `json` targets) needs the clang-p2996 toolchain.
 
 ---
 

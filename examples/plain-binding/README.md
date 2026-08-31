@@ -1,6 +1,6 @@
 # Plain binding — one library, one pipeline, four languages
 
-The base case. A stock-C++ class goes in; a Python module, a Julia module, a Node addon and a WebAssembly module come out. No `dynamic` target, no reflection API, no preset — this is what binding a class with rosetta normally looks like.
+The base case. A plain-C++ class goes in; a Python module, a Julia module, a Node addon and a WebAssembly module come out. No `dynamic` target, no reflection API, no preset — this is what binding a class with rosetta normally looks like.
 
 Read it before [`../scriptable-model`](../scriptable-model), which chains *two* pipelines to avoid generating a binding per class at all. This one is the thing that does.
 
@@ -207,7 +207,7 @@ The i-th item, as a copy of itemSize consecutive scalars
 ```
 
 The reason to keep them out of line is mechanical, not stylistic. The generated
-bindings `#include Serie.h` and are compiled by a **stock** toolchain, so an
+bindings `#include Serie.h` and are compiled by an **off-the-shelf** toolchain, so an
 inline annotation would drag `<experimental/meta>` into every target and the
 C++26 fork would be needed twice instead of once. See
 [OUT_OF_LINE_ANNOTATIONS.md](../../docs/OUT_OF_LINE_ANNOTATIONS.md) and

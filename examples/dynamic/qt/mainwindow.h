@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // The window: a 3D view, a generated property panel, an object list, and a
 // console — all driven by the same dynui::Interp over the same metadata.

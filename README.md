@@ -40,7 +40,7 @@
 
 A C++26 reflection playground with **19 generator backends** — Python (pybind11 / nanobind), Node, WebAssembly, Qt, QML, Dear ImGui, REST, Julia, Lua, OpenAPI, JSON, TypeScript, C#, Java, Markdown, HTML, ParaView, a runtime object model... bindings for **your existing classes — without modifying them**. Point rosetta at a header via a small [manifest.json](./docs/MANIFEST.md), run one tool, get per-language binding projects out.
 
-> **Your target compiler doesn't support reflection?** Generate the expanded binding once on a Linux or macOS host with a C++26 / P2996 compiler — e.g. the [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) fork — then ship and build the generated sources anywhere with a stock toolchain (plain Clang / GCC / MSVC, or a stock emsdk for WebAssembly). No reflection is needed on the target (see **Reflection-free by construction** below).
+> **Your target compiler doesn't support reflection?** Generate the expanded binding once on a Linux or macOS host with a C++26 / P2996 compiler — e.g. the [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) fork — then ship and build the generated sources anywhere with an off-the-shelf toolchain (plain Clang / GCC / MSVC, or an off-the-shelf emsdk for WebAssembly). No reflection is needed on the target (see **Reflection-free by construction** below).
 
 Annotations (`doc`, `range`, `readonly`, …) are an *opt-in* enrichment, not a requirement: add them where you want docstrings, validation, or UI hints; leave the rest of the class alone. Reflection does the work either way.
 
@@ -96,7 +96,7 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 | 3 | **Node** (`node`) — N-API native addon | ✅ |
 | 4 | **Julia** (`julia`) — CxxWrap.jl / jlcxx shared module, `std::vector` included | ✅ |
 | 5 | **WebAssembly** (`wasm`) — Emscripten/embind module | ✅ |
-| 6 | **Lua** (`lua`) — sol2 module, `require`-able (stock C++17) | ✅ |
+| 6 | **Lua** (`lua`) — sol2 module, `require`-able (off-the-shelf C++17) | ✅ |
 | 7 | **C#** (`csharp`) — native C-ABI shared library + handle-backed P/Invoke wrappers | ✅ |
 | 8 | **Java** (`java`) — native C-ABI + handle-backed FFM wrappers | ✅ |
 | 9 | **Qt Widgets** (`qt`) — generated property/method inspector via `runtime/qt_widgets.h` | ✅ |
@@ -113,7 +113,7 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 
 > New backends register without touching the generator, thanks to the visitor pattern — see [EXTENDING_BACKEND](docs/EXTENDING_BACKEND.md).
 > **C++26** = targets generated against the reflection toolchain.
-> **C++20** = target builds on a stock (no reflection needed on the target).
+> **C++20** = target builds with an off-the-shelf compiler (no reflection needed on the target).
 >
 > Notes:
 > **Qt/QML** targets need Qt 6 but no moc on the generated code; 
@@ -121,7 +121,7 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 > **REST** is the one target whose generated code still splices reflections, so it alone needs the C++26 toolchain to build.  
 > **dynamic** is not a language binding: it emits the metadata itself, for a caller that discovers types at run time — see below.
 
-**Reflection-free by construction.** Every binding target **fully expands** each field, method, constructor and enumerator into explicit pybind11 / nanobind / N-API / embind / Qt / sol2 / jlcxx / member-pointer calls (the `dynamic` backend expands them into aggregate-initialized tables and thunks instead — data rather than framework calls, but the same once-on-the-host rule). Reflection runs once, on the generation host; the generated binding is ordinary C++ that builds with a stock compiler — a plain C++17/20 compiler, a stock emsdk, or stock Qt 6 (the host still needs C++26 to *run the generator*, the target does not). This pairs naturally with [out-of-line annotations](docs/OUT_OF_LINE_ANNOTATIONS.md) so the bound headers stay stock C++ too.
+**Reflection-free by construction.** Every binding target **fully expands** each field, method, constructor and enumerator into explicit pybind11 / nanobind / N-API / embind / Qt / sol2 / jlcxx / member-pointer calls (the `dynamic` backend expands them into aggregate-initialized tables and thunks instead — data rather than framework calls, but the same once-on-the-host rule). Reflection runs once, on the generation host; the generated binding is ordinary C++ that builds with an off-the-shelf toolchain — a plain C++17/20 compiler, emsdk, or Qt 6 (the host still needs C++26 to *run the generator*, the target does not). This pairs naturally with [out-of-line annotations](docs/OUT_OF_LINE_ANNOTATIONS.md) so the bound headers stay plain C++ too.
 
 > Until 2026-08 seven of these languages shipped a second, *thin* backend whose generated code re-ran the reflection walk at the target's compile time. It has been removed: the short name (`python`, `nanobind`, `node`, `wasm`, `julia`, `csharp`, `java`) now means what `-expanded` used to. `qt`, `qml`, `imgui` and `lua` never had a thin twin at all, and have since dropped the suffix too. No target spells `-expanded` any more — but every old spelling still resolves, so existing manifests keep working.
 
@@ -135,7 +135,7 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 Every other backend turns your classes into calls into some framework. The **`dynamic`** backend turns them back into the IR — a `rosetta::dyn::MetaClass` per bound type plus one captureless-lambda thunk per member — so a program can ask *what exists* and *call it by name*, with no code generated for the caller (see [this example](./examples/dynamic/README.md)):
 
 ```cpp
-#include <rosetta/dynamic.h>     // the runtime — stock C++20
+#include <rosetta/dynamic.h>     // the runtime — ordinary C++20
 #include "auto_dynamic.h"        // the generated tables (scene.h is NOT included)
 
 scene::register_all();           // publish the tables into the registry, once
@@ -153,7 +153,7 @@ What that buys, relative to the language backends:
 - **What can't be marshalled is described, not deleted** — a `std::function` parameter stays in the metadata with the reason it is unavailable, so a UI can grey it out.
 - **Lifetime is explicit** — a `T&` return crosses without a copy and *pins* its parent, so a sub-object handle cannot outlive the object it points into.
 
-The generated tables are aggregate initializers, so like the other targets they build with a **stock C++20 compiler**. The per-call cost (name lookup, overload scoring, `Any` marshalling) makes this the right tool for control — properties, commands, menus, scripting glue — and it wants a cache in front of it for bulk data; [`examples/dynamic`](examples/dynamic) measures both and shows a terminal interpreter and a Qt viewer (3D view, property panel, console) driving one set of tables without naming a single bound type.
+The generated tables are aggregate initializers, so like the other targets they build with an **off-the-shelf C++20 compiler**. The per-call cost (name lookup, overload scoring, `Any` marshalling) makes this the right tool for control — properties, commands, menus, scripting glue — and it wants a cache in front of it for bulk data; [`examples/dynamic`](examples/dynamic) measures both and shows a terminal interpreter and a Qt viewer (3D view, property panel, console) driving one set of tables without naming a single bound type.
 
 </details>
 
@@ -332,7 +332,7 @@ The full walkthrough is in [`docs/QUICKSTART.md`](./docs/QUICKSTART.md); every m
 <details>
 <summary>Add a hand-written registration block <b>beside</b> the generated source — regeneration never clobbers your extensions <i>(expand)</i></summary>
 
-Everything under `bindings/` is regenerated output — never edit it. When the stock binding misses something you need (a helper the walker skips, such as an overloaded free function; a custom view over a type that isn't bound; a typed-array export for a renderer), add it in a **separate hand-written C++ file** and compile it *alongside* the generated source, from a small build of your own that lives outside `bindings/`. The binding frameworks accept several registration blocks per module, so your file simply contributes a second one — nothing generated is touched, and regenerating the bindings never clobbers your extensions.
+Everything under `bindings/` is regenerated output — never edit it. When the generated binding misses something you need (a helper the walker skips, such as an overloaded free function; a custom view over a type that isn't bound; a typed-array export for a renderer), add it in a **separate hand-written C++ file** and compile it *alongside* the generated source, from a small build of your own that lives outside `bindings/`. The binding frameworks accept several registration blocks per module, so your file simply contributes a second one — nothing generated is touched, and regenerating the bindings never clobbers your extensions.
 
 A complete worked example is [`pmp-rosetta/wasm-viz`](https://github.com/rosetta-bindings/pmp-rosetta/tree/main/wasm-viz): a stand-alone WebAssembly build for a three.js viewer that compiles the generated `bindings/wasm/auto_emscripten.cpp` verbatim plus one hand-written `viz_helpers.cpp`, which adds what the auto-generated binding does not expose — flat vertex/index buffers as JS typed arrays, and a wrapper for an overloaded function the generator skips — in its own `EMSCRIPTEN_BINDINGS` block:
 
@@ -363,7 +363,7 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 | `examples/manifest`        | Manifest-driven generation for `Person` (no class modification) |
 | `examples/annotate-manifest`| Out-of-line annotations from an external JSON file, wired by the manifest's `annotations` field ([details](docs/OUT_OF_LINE_ANNOTATIONS.md)) |
 | `examples/geom-lib`        | Manifest-driven bindings for a small geometry library (nested types, vectors) |
-| `examples/geom-expanded`   | Reflection-free `python` / `nanobind` / `node` / `wasm` / `qt` / `qml` / `csharp` / `java` / `lua` / `julia` bindings (stock compiler, stock emsdk, stock Qt, any Lua 5.1–5.4, CxxWrap.jl) with out-of-line annotations |
+| `examples/geom-expanded`   | Reflection-free `python` / `nanobind` / `node` / `wasm` / `qt` / `qml` / `csharp` / `java` / `lua` / `julia` bindings (off-the-shelf compiler, emsdk and Qt, any Lua 5.1–5.4, CxxWrap.jl) with out-of-line annotations |
 | `examples/dynamic`         | The `dynamic` backend end to end: one set of generated metadata driving a terminal interpreter *and* a Qt viewer (3D view + property panel + console), neither naming a bound type |
 | `examples/trampoline-python` | Overriding C++ virtuals from Python — generated pybind11 trampolines from `virtual_spec` |
 | `examples/trampoline-node` | Overriding C++ virtuals from JavaScript — generated N-API trampolines from `virtual_spec` |
@@ -372,7 +372,7 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 | `examples/paraview`        | ParaView plugin property-panel XML from an annotated `vtkThreshold` spec (every backend feature) |
 | `examples/qt`              | Building a Qt widget form from a reflected struct   |
 | `examples/qml`             | Exposing a reflected C++ object to QML              |
-| `examples/imgui`           | Dear ImGui inspector for `Algo` with out-of-line annotations (`Algo.ann.json`: `doc` / `range` / `combobox`) — builds with a stock C++20 compiler, deps auto-fetched |
+| `examples/imgui`           | Dear ImGui inspector for `Algo` with out-of-line annotations (`Algo.ann.json`: `doc` / `range` / `combobox`) — builds with an off-the-shelf C++20 compiler, deps auto-fetched |
 | `examples/bindings/python` | Hand-written pybind11 backend (reference)           |
 | `examples/bindings/node`   | Hand-written N-API backend (reference)              |
 | `examples/bindings/julia`  | Hand-written CxxWrap/jlcxx backend (reference, requires CxxWrap.jl) |

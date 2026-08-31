@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Public ParaView annotations. Annotate a class with these to describe the
 // ParaView plugin proxy the `paraview` backend should emit. They live here, not

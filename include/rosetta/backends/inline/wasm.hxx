@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Expanded (reflection-free) embind backend. Included by inline/generate.hxx
 // after backends/wasm.h and after backends/python.h (whose qualify_std()
@@ -1048,6 +1048,11 @@ namespace rosetta_wx {
                         body += "    emscripten::function(\"" + f.name + "\", +[](" +
                                 sig.decls + ") {\n" + wx_seq_body(probe, sig, call) +
                                 "        });\n";
+                        coverage::note_bound_function("wasm", f);
+                    } else {
+                        coverage::note_skip_function("wasm", f, "sequence_not_adaptable",
+                                                     "a registered sequence in the signature has "
+                                                     "no std::vector boundary adapter");
                     }
                     continue;
                 }
@@ -1066,6 +1071,11 @@ namespace rosetta_wx {
                         raw_ptr ? ", emscripten::allow_raw_pointers()" : "";
                     body += "    emscripten::function(\"" + f.name + "\", " + fn_addr(f) +
                             policy + ");\n";
+                    coverage::note_bound_function("wasm", f);
+                } else {
+                    coverage::note_skip_function("wasm", f, "unmarshalable_signature",
+                                                 "no embind conversion for a type in this "
+                                                 "signature");
                 }
             }
 

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // ParaView backend — declaration. Emits a ParaView *Server Manager XML* proxy
 // definition for each class: the property panel (one <…VectorProperty> per

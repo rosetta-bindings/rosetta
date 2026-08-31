@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Google Test suite for the flat-array ESCAPE HATCH on top of foreign-library
 // interop: a concrete foreign type registered as a rosetta::is_sequence while

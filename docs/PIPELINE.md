@@ -10,7 +10,7 @@ So to learn the shape of your types, something has to **compile**. To turn those
 
 ## Step 0 — build `rosetta_gen`
 
-**What it is.** A JSON-to-C++ text templater. It does no reflection at all and builds with a stock C++17 compiler.
+**What it is.** A JSON-to-C++ text templater. It does no reflection at all and builds with an off-the-shelf C++17 compiler.
 
 **Why it exists.** So that what you write is a *manifest*, not a driver program. Given `manifest.json` it emits three files — `<name>.cpp` (a `main()` that reflects), `bindings.h` (your types, plus any out-of-line annotations, baked in) and a `CMakeLists.txt` that knows where the reflection toolchain is.
 
@@ -42,7 +42,7 @@ One self-contained project per target, plus `coverage.json` — a machine-readab
 
 The generated code is **fully expanded**: explicit pybind11 / N-API / sol2 / embind calls, or (for the `dynamic` target) aggregate-initialised tables. No splices, no `<experimental/meta>`, no trace that reflection was ever involved.
 
-**Why it matters.** The expansion happened once, on a host with the fork. The machine that *builds* the binding never needs reflection — a stock Clang, GCC, MSVC or emsdk is enough. That is what makes the generated tree shippable.
+**Why it matters.** The expansion happened once, on a host with the fork. The machine that *builds* the binding never needs reflection — an off-the-shelf Clang, GCC, MSVC or emsdk is enough. That is what makes the generated tree shippable.
 
 ## Step 3 — compile a backend
 
@@ -61,7 +61,7 @@ Ordinary CMake (or npm, or emcmake) over an ordinary C++ project.
 | step 1 | the reflection driver | **describe** your types | yes |
 | step 3 | the generated binding | **call** them | no |
 
-The one consequence worth remembering: annotations written **inline** (`[[ = rosetta::doc{...} ]]`) pull `<experimental/meta>` into your header, so pass 2 needs the C++26 toolchain as well and the "stock compiler" promise is lost. Out-of-line annotations (a `.ann.json` side-car) keep your header plain C++ and pass 2 stock. See [OUT_OF_LINE_ANNOTATIONS.md](OUT_OF_LINE_ANNOTATIONS.md).
+The one consequence worth remembering: annotations written **inline** (`[[ = rosetta::doc{...} ]]`) pull `<experimental/meta>` into your header, so pass 2 needs the C++26 toolchain as well and the "no reflection on the target" promise is lost. Out-of-line annotations (a `.ann.json` side-car) keep your header plain C++ and pass 2 reflection-free. See [OUT_OF_LINE_ANNOTATIONS.md](OUT_OF_LINE_ANNOTATIONS.md).
 
 ## The `dynamic` backend — the IR as data
 
@@ -78,7 +78,7 @@ bindings/dynamic/inspect.cpp        a registry walker, for free
 bindings/dynamic/CMakeLists.txt     a static library, <lib>_dynamic
 ```
 
-`auto_dynamic.cpp` is the only file that includes your header. It is stock C++20: the metadata is data, so nothing here needs reflection to compile.
+`auto_dynamic.cpp` is the only file that includes your header. It is ordinary C++20: the metadata is data, so nothing here needs reflection to compile.
 
 ### What the tables look like
 

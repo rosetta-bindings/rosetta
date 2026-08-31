@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Auto-QML demo: a generic QtQuick inspector window driven by one
 // rosetta::walk over Person. Field rows and method rows in the generic

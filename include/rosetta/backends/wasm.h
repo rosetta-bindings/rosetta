@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // WebAssembly (emscripten/embind) generation backend — *expanded* /
 // self-contained variant, registered under the "wasm" target.

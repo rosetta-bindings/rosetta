@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 //
 // A BINDABLE facade over <rosetta/dynamic.h> — the reflection API reshaped so
 // that rosetta's own backends can bind it.

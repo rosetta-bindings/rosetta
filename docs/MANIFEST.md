@@ -98,7 +98,7 @@ cmake -B build && cmake --build build
 | `user_lib` | — | — | Link the generated bindings against pre-built external libraries — one object, or an array of them when your library has dependencies of its own. See [Linking external libraries](#linking-external-libraries-user_lib). |
 | `user_sources` | — | `[]` | List of user `.cpp` (or `.c`) files compiled directly into every generated binding target. See [Compiling user sources](#compiling-user-sources-user_sources). |
 | `compile_definitions` | — | `[]` | Preprocessor definitions (`"NAME"` or `"NAME=VALUE"`) applied to the generator driver and every compiled binding target. See [Preprocessor definitions](#preprocessor-definitions-compile_definitions). |
-| `build_type` | — | — | Default `CMAKE_BUILD_TYPE` baked into every compiled backend's generated `CMakeLists.txt` (`Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel`). See [Build type & optimization](#build-type--optimization-build_type-optimization). |
+| `build_type` | — | `Release` | Default `CMAKE_BUILD_TYPE` baked into every compiled backend's generated `CMakeLists.txt` (`Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel`). See [Build type & optimization](#build-type--optimization-build_type-optimization). |
 | `optimization` | — | — | Explicit optimization flag (`-O0`…`-O3`, `-Os`, `-Oz`, `-Og`, `-Ofast`) applied to every compiled backend, overriding the build type's own `-O` level. See [Build type & optimization](#build-type--optimization-build_type-optimization). |
 | `version` | — | `0.1.0` | Distribution version stamped into the packaging artifacts — the `pyproject.toml` the `python` / `nanobind` backends emit for wheel builds. See [Python wheels](#python-wheels-version). |
 | `plugins` | — | `[]` | Extra `.cpp` sources to compile into the generator driver (e.g. a custom backend). Paths relative to the manifest. |
@@ -812,24 +812,24 @@ The flags are emitted **after** the template's own `target_link_options`, so on 
 
 ### Available `lang` values
 
-Every compiled target is **expanded**: reflection runs once on the generation host and the emitted code builds with a stock compiler. `rest` is the exception — its generated server still splices reflections, so it alone needs the C++26 toolchain to build.
+Every compiled target is **expanded**: reflection runs once on the generation host and the emitted code builds with an off-the-shelf compiler. `rest` and `json` are the two exceptions — both emit a project whose sources include a *runtime visitor* (`rosetta/visitors/rest.h`, `rosetta/visitors/json.h`) that still splices reflections, so those two need the C++26 toolchain to build.
 
 | `lang` | Output | Builds with |
 |---|---|---|
-| `python` | pybind11 extension module | stock compiler |
-| `nanobind` | nanobind extension module | stock compiler |
-| `node` | N-API native addon | stock compiler |
-| `wasm` | Emscripten / embind module | stock emsdk |
-| `qt` | Qt Widgets property/method inspector | stock compiler + Qt 6 |
-| `imgui` | Dear ImGui inspector app (GLFW + OpenGL3, auto-fetched) | stock compiler |
-| `qml` | QML / QtQuick inspector | stock compiler + Qt 6 |
-| `csharp` | C-ABI shared lib + P/Invoke wrappers | stock compiler + .NET |
-| `java` | C-ABI + handle-backed FFM wrappers | stock compiler + JDK |
-| `julia` | CxxWrap.jl / jlcxx shared module | stock compiler + CxxWrap.jl |
-| `lua` | sol2 shared module, `require`-able (Lua 5.1–5.4 / LuaJIT) | stock compiler |
+| `python` | pybind11 extension module | off-the-shelf compiler |
+| `nanobind` | nanobind extension module | off-the-shelf compiler |
+| `node` | N-API native addon | off-the-shelf compiler |
+| `wasm` | Emscripten / embind module | off-the-shelf emsdk |
+| `qt` | Qt Widgets property/method inspector | off-the-shelf compiler + Qt 6 |
+| `imgui` | Dear ImGui inspector app (GLFW + OpenGL3, auto-fetched) | off-the-shelf compiler |
+| `qml` | QML / QtQuick inspector | off-the-shelf compiler + Qt 6 |
+| `csharp` | C-ABI shared lib + P/Invoke wrappers | off-the-shelf compiler + .NET |
+| `java` | C-ABI + handle-backed FFM wrappers | off-the-shelf compiler + JDK |
+| `julia` | CxxWrap.jl / jlcxx shared module | off-the-shelf compiler + CxxWrap.jl |
+| `lua` | sol2 shared module, `require`-able (Lua 5.1–5.4 / LuaJIT) | off-the-shelf compiler |
 | `rest` | cpp-httplib JSON server + browser client | **C++26 toolchain** |
 | `openapi` | OpenAPI 3.1 spec | text output |
-| `json` | nlohmann (de)serialization | text output |
+| `json` | nlohmann (de)serialization + `demo.cpp` | **C++26 toolchain** |
 | `typescript` | ambient `.d.ts` declarations | text output |
 | `markdown` | API reference document | text output |
 | `html` | styled API reference page | text output |
@@ -837,9 +837,9 @@ Every compiled target is **expanded**: reflection runs once on the generation ho
 
 Each name also accepts a deprecated `-expanded` spelling (`lua-expanded`, `qt-expanded`, …) resolving to the same backend, so manifests written before the suffix was dropped keep working.
 
-The text-only outputs (`markdown`, `html`, `json`, `typescript`, `openapi`, `paraview`) don't compile anything, so the C++26-vs-stock distinction doesn't apply — they're produced directly.
+The text-only outputs (`markdown`, `html`, `typescript`, `openapi`, `paraview`) don't compile anything, so the C++26-vs-off-the-shelf distinction doesn't apply — they're produced directly. `json` is *not* one of them: besides the serialization header it emits a buildable `demo.cpp` + `CMakeLists.txt` at `CMAKE_CXX_STANDARD 26`.
 
-> **Why expanded?** Your *target* compiler doesn't have to support reflection: generate once on a C++26 / P2996 host, then ship and build the generated sources anywhere with a stock toolchain (plain Clang / GCC / MSVC, stock emsdk, stock Qt 6). The generator host still needs C++26; the target does not. Pairs naturally with out-of-line annotations so the bound headers stay stock C++ too. See [`examples/geom-expanded`](../examples/geom-expanded).
+> **Why expanded?** Your *target* compiler doesn't have to support reflection: generate once on a C++26 / P2996 host, then ship and build the generated sources anywhere with an off-the-shelf toolchain (plain Clang / GCC / MSVC, off-the-shelf emsdk, off-the-shelf Qt 6). The generator host still needs C++26; the target does not. Pairs naturally with out-of-line annotations so the bound headers stay plain C++ too. See [`examples/geom-expanded`](../examples/geom-expanded).
 
 ---
 
@@ -967,7 +967,7 @@ Every compiled backend's generated `CMakeLists.txt` can carry a build configurat
 
 Both are optional and independent:
 
-- **`build_type`** — one of `Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel` (case-insensitive). Emitted as a *default* inside `if(NOT CMAKE_BUILD_TYPE)`, so `-DCMAKE_BUILD_TYPE=...` at configure time still wins. Omitted ⇒ CMake's usual no-build-type behaviour.
+- **`build_type`** — one of `Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel` (case-insensitive). Emitted as a *default* inside `if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)`, so `-DCMAKE_BUILD_TYPE=...` at configure time still wins and multi-config generators (Visual Studio, Xcode) are left to pick a configuration at build time. **Omitted ⇒ `Release`.** It previously meant "emit nothing", which left CMake with no build type and hence no optimization flags at all, so the documented two-line build produced an unoptimized module — around 8× slower on a trivial pybind11 call. Pass `-DCMAKE_BUILD_TYPE=Debug` (or set `"build_type": "Debug"`) when you want an unoptimized build.
 - **`optimization`** — an explicit optimization level: `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, `-Oz`, `-Og` or `-Ofast` (the leading `-` may be omitted). Emitted as `add_compile_options(...)` / `add_link_options(...)`, which land *after* the build type's own per-config flags on the compiler command line — so this `-O` overrides the level the build type implies (e.g. `"build_type": "Release", "optimization": "-O2"` builds `-DNDEBUG` but at `-O2` instead of Release's `-O3`). The link option matters for the wasm targets, where emscripten optimizes at link time too.
 
 The flags apply to the *bindings* (and any [`user_sources`](#compiling-user-sources-user_sources) compiled into them), in every compiled backend. The text-only backends compile nothing and ignore both.
@@ -1017,7 +1017,7 @@ A few things worth knowing:
 - **ABI tagging.** `nanobind` builds against CPython's stable ABI on 3.12+ and tags the wheel `abi3`, so one artifact covers every later interpreter. Below 3.12, and for `python` in every case (pybind11 has no stable-ABI mode), the wheel is tagged for the exact CPython that built it — covering several versions means running the script once per interpreter. The plain `cmake` build is unaffected either way; stable-ABI mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` forces it by hand).
 - **`user_lib` and wheel repair.** The generated CMake links [`user_lib`](#linking-external-libraries-user_lib) entries by absolute path, so a freshly built module refers to a directory that does not exist on the installing machine. `make_wheel.py` runs the platform's repair tool — `delocate` (macOS), `auditwheel` (Linux), `delvewheel` (Windows) — to copy those libraries *into* the wheel and rewrite the load paths; results land in `dist/repaired`. On Linux this also retags the wheel `manylinux_*`, without which PyPI rejects it. On Windows the `user_lib` directories are baked into the script as `USER_LIB_DIRS` and handed to `delvewheel --add-path`: a `.pyd` records no search path for its DLLs (Windows has no rpath), so unlike the other two tools delvewheel cannot discover them by following a load command. Repair failing is a warning, not an error — a wheel with nothing external to bundle is already correct. Declaring `"link": "static"` sidesteps the whole question.
 - **Wheels are redistributable; sdists are not.** The generated `CMakeLists.txt` embeds the header and library paths the manifest resolved on the generating machine. Ship wheels, or re-run the generator wherever you build.
-- **Matrix builds.** For several Python versions and platforms in one go, use [cibuildwheel](https://cibuildwheel.pypa.io/) (`pipx run cibuildwheel --platform auto`) instead of looping over the script. This is where the `-expanded` backends pay off: the generated source needs no reflection toolchain, so stock CI runners — including Windows/MSVC — can build it.
+- **Matrix builds.** For several Python versions and platforms in one go, use [cibuildwheel](https://cibuildwheel.pypa.io/) (`pipx run cibuildwheel --platform auto`) instead of looping over the script. This is where the `-expanded` backends pay off: the generated source needs no reflection toolchain, so off-the-shelf CI runners — including Windows/MSVC — can build it.
 
 ---
 
@@ -1080,7 +1080,7 @@ The `cpp26_*` fields point at the **C++26 / P2996 reflection compiler** used to 
 | `cpp26_cc` | `${cpp26_root}/bin/clang` |
 | `cpp26_lib` | `${cpp26_root}/lib` |
 
-If your [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) build lives elsewhere, set `cpp26_root` alone — `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` all derive from it. Override the individual ones only when the compiler binaries or the `libc++` / `libc++abi` directory sit outside the usual `bin/` and `lib/` layout. `$ENV{HOME}` is expanded by CMake at configure time, so the path stays portable across machines. Of the targets these only affect `rest` — every other one builds with a stock compiler and ignores them.
+If your [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) build lives elsewhere, set `cpp26_root` alone — `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` all derive from it. Override the individual ones only when the compiler binaries or the `libc++` / `libc++abi` directory sit outside the usual `bin/` and `lib/` layout. `$ENV{HOME}` is expanded by CMake at configure time, so the path stays portable across machines. Of the targets these only affect `rest` and `json` — every other one builds with an off-the-shelf compiler and ignores them.
 
 ---
 
@@ -1090,4 +1090,4 @@ If your [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) buil
 - A class missing from `classes[]` is **invisible** to the bindings.
 - A bare-string target reuses `module_name`; if two object-form targets share a `name`, they share a module name — usually intended (one module per language), but watch for collisions across languages that write to the same directory.
 - Comments must be valid JSON: use `"//"`-prefixed keys, not `//` line comments.
-- The generator host always needs the C++26 / P2996 toolchain; only the `-expanded` and text targets build on a stock compiler afterwards.
+- The generator host always needs the C++26 / P2996 toolchain; only the `-expanded` and text targets build on an off-the-shelf compiler afterwards.

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // REST (cpp-httplib) generation backend. Included by inline/generate.hxx,
 // which provides the shared render helpers this file relies on. Besides the

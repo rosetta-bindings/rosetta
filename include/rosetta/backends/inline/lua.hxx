@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Expanded (reflection-free) sol2 / Lua backend. Included by
 // inline/generate.hxx after backends/python.h (whose qualify_std() it
@@ -867,12 +867,21 @@ local {{LIB}} = require("{{LIB}}")
                             body += "    m.set_function(\"" + f.name + "\", " + lambda(true) +
                                     ");\n";
                         }
+                        coverage::note_bound_function("lua", f);
+                    } else {
+                        coverage::note_skip_function("lua", f, "sequence_not_adaptable",
+                                                     "a registered sequence in the signature has "
+                                                     "no std::vector boundary adapter");
                     }
                     continue;
                 }
                 if (!lx_method_ok(probe, c)) {
+                    coverage::note_skip_function("lua", f, "unmarshalable_signature",
+                                                 "no sol2 conversion for a type in this "
+                                                 "signature");
                     continue;
                 }
+                coverage::note_bound_function("lua", f);
                 if (lx_has_vector_param(f.params)) {
                     // Same table-accepting second overload as methods get.
                     const LuaTableParams tp = lua_table_params(f.params);

@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Smoke test for the reflection-driven Markdown reference (rosetta::to_markdown).
 // Renders Person and prints its docs to stdout.

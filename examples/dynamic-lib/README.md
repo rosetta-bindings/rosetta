@@ -9,7 +9,7 @@ This example binds exactly that shape. It has two halves:
 
 ```
 dynamic-lib/
-├── space/                     a pure, stock-C++ library — NO rosetta, NO annotations
+├── space/                     a pure, plain-C++ library — NO rosetta, NO annotations
 │   ├── include/               PUBLIC API: declarations only (Vector3.h, BoundingBox.h)
 │   ├── src/                   the bodies (Vector3.cpp, BoundingBox.cpp)
 │   ├── bin/                   -> libspace.dylib / .so  (build output)
@@ -26,7 +26,7 @@ dynamic-lib/
 `space` is an ordinary library: `space/include/*.h` only **declare** `Vector3` /
 `BoundingBox`; the bodies are in `space/src/*.cpp` and compiled into
 `space/bin/libspace.*`. The headers carry no rosetta include and no annotations —
-they build with any stock compiler and sit in a real `namespace space`.
+they build with any off-the-shelf compiler and sit in a real `namespace space`.
 
 ## The new manifest capability: `user_lib`
 
@@ -128,7 +128,7 @@ The one-shot script runs the whole pipeline (see the per-step commands inside):
 Or by hand, from this directory:
 
 ```sh
-# 1. the pure-C++ shared library (stock compiler — no rosetta)
+# 1. the pure-C++ shared library (off-the-shelf compiler — no rosetta)
 cmake -S space -B space/build && cmake --build space/build -j     # -> space/bin/libspace.*
 
 # 2. scaffold + build the generator driver (needs clang-p2996)

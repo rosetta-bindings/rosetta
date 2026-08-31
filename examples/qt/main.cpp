@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Auto-Qt-Widgets demo: a property/method inspector window built by
 // one rosetta::walk over Person. The visitor in visitors/widget.h

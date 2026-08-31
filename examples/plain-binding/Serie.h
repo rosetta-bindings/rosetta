@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 //
 // A flat buffer of scalars grouped into items of `itemSize` consecutive values:
 // itemSize 1 is a serie of scalars, 3 a serie of 3D vectors, 6 a serie of

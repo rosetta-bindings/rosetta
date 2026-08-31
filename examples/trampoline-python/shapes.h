@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // A tiny polymorphic library — your existing, unmodified code. `Shape` has a
 // pure virtual (`area`) and a virtual with a default (`describe`). rosetta

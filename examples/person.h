@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Shared demo type — annotated with rosetta::doc / range / readonly.
 // Both examples/python/auto_pybind.cpp and examples/node/auto_napi.cpp

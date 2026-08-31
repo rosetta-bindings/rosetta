@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // --init: write a starter manifest. Without a source dir, the fully-commented
 // example below; with one, a manifest pre-filled from a heuristic scan of its

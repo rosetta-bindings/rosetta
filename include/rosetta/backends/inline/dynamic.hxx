@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) fmaerten@gmail.com
-// SPDX-License-Identifier: UNLICENSED
+// Copyright (c) fmaerten@gmail.com
+// License: MIT
 
 // Dynamic object-model backend, emitter. Included by inline/generate.hxx after
 // the shared render helpers and backends/python.h (for qualify_std).
@@ -945,8 +945,10 @@ int main() {
                 }
                 funcs += ",\n";
                 if (reject) {
+                    coverage::note_skip_function("dynamic", f, "unmarshalable_type", reject);
                     funcs += "        .skip_reason = " + dyn_quote(reject) + "};\n";
                 } else {
+                    coverage::note_bound_function("dynamic", f);
                     std::string args;
                     for (std::size_t i = 0; i < f.params.size(); ++i) {
                         args += (i ? ", " : "") + dyn_arg(f.params[i], i);
