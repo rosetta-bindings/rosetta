@@ -11,8 +11,8 @@
 //
 //   * invokes positions() / triangles() dynamically to get the mesh,
 //   * reads whatever OPTIONAL appearance fields the class happens to have —
-//     visible, colour, opacity, size, spin, origin, shading — skipping any that
-//     are absent,
+//     visible, colour, opacity, size, spin, origin, shading, preset — skipping
+//     any that are absent,
 //   * builds a triangle soup and draws it.
 //
 // Bind a different library with the same two method names and it renders,
@@ -107,6 +107,40 @@ protected:
                       : QString{};
     }
 
+    /** @brief Shading parameters for a named material preset.
+     *
+     *  The names come from the `combobox` annotation on the field, not from
+     *  here — the view is only deciding what each one should LOOK like, which
+     *  is a renderer's business and not the library's. An unrecognised name
+     *  falls back to the default material rather than failing, so a library
+     *  offering different presets still renders.
+     */
+    struct Material {
+        float shine   = 48.0f; // specular exponent
+        float spec    = 0.14f; // specular strength
+        float fresnel = 0.0f;  // rim brightening; non-zero only for glass
+        float alpha   = 1.0f;  // multiplies the object's own opacity
+    };
+
+    static Material material_for(const QString &preset) {
+        // The four differ enough to be told apart at a glance, which is the
+        // whole point of a preset control: a highlight that only a rendering
+        // engineer can see is the same as no highlight.
+        if (preset == "matte") {
+            return {4.0f, 0.0f, 0.0f, 1.0f}; // chalk: no highlight at all
+        }
+        if (preset == "glossy") {
+            // A LOW exponent with a strong weight gives a broad, obvious
+            // sheen; a high one puts a pinpoint somewhere off the silhouette
+            // and reads as no change.
+            return {24.0f, 0.65f, 0.0f, 1.0f};
+        }
+        if (preset == "glass") {
+            return {64.0f, 0.5f, 0.30f, 0.30f}; // translucent, bright rim
+        }
+        return {}; // "default", and anything this view does not know
+    }
+
     /** @brief A nested bound object read through the SAME dynamic API — the
      *  handle it returns pins its parent, so borrowing x/y/z off it is safe. */
     static QVector3D vec_field(const dynui::rd::Object &o, const char *n) {
@@ -175,6 +209,9 @@ uniform vec3  uColour;
 uniform float uAlpha;
 uniform vec3  uEye;
 uniform int   uFlat;
+uniform float uShine;      // specular exponent  (preset)
+uniform float uSpec;       // specular strength  (preset)
+uniform float uFresnel;    // rim brightening    (preset: glass)
 out vec4 FragColour;
 void main() {
     if (uFlat == 1) {          // wireframe / grid: unlit
@@ -187,9 +224,15 @@ void main() {
     vec3 H = normalize(L + V);
     float key  = max(dot(N, L), 0.0);
     float fill = max(dot(N, -L), 0.0);            // soft bounce from below
-    float spec = pow(max(dot(N, H), 0.0), 48.0);
-    vec3  c    = uColour * (0.20 + 0.70 * key + 0.15 * fill) + vec3(0.14 * spec);
-    FragColour = vec4(c, uAlpha);
+    float spec = pow(max(dot(N, H), 0.0), uShine);
+    vec3  c    = uColour * (0.20 + 0.70 * key + 0.15 * fill) + vec3(uSpec * spec);
+    // Grazing angles go brighter and more opaque, which is what reads as
+    // glass; uFresnel is 0 for the solid presets, so they are unaffected.
+    // The rim is tinted with the object's own colour rather than white, or a
+    // saturated object turns into a pale blob at the silhouette.
+    float rim  = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+    c += uColour * (uFresnel * rim);
+    FragColour = vec4(c, clamp(uAlpha + uFresnel * rim, 0.0, 1.0));
 })";
 
         prog_.addShaderFromSourceCode(QOpenGLShader::Vertex, VS);
@@ -294,7 +337,14 @@ protected:
         prog_.setUniformValue("uColour",
                               QVector3D(float(col.redF()), float(col.greenF()),
                                         float(col.blueF())));
-        prog_.setUniformValue("uAlpha", float(num_field(obj, "opacity", 1.0)));
+        // `preset` is one more OPTIONAL appearance field, read the same way as
+        // colour and opacity: a class that does not declare it simply renders
+        // with the default material, because str_field falls back.
+        const Material mat = material_for(str_field(obj, "preset", "default"));
+        prog_.setUniformValue("uAlpha", float(num_field(obj, "opacity", 1.0)) * mat.alpha);
+        prog_.setUniformValue("uShine", mat.shine);
+        prog_.setUniformValue("uSpec", mat.spec);
+        prog_.setUniformValue("uFresnel", mat.fresnel);
         prog_.setUniformValue("uFlat", wire ? 1 : 0);
 
         upload(soup);

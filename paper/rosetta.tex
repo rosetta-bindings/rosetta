@@ -1571,7 +1571,11 @@ grows its rows.
 creates a \code{scene::Relaxer}, sets its parameters and calls \code{run} on the
 bunny; the object list gains \code{r}; the view redraws from the mutated mesh.
 Nothing in \code{qt/} was recompiled against the solver, and nothing in it
-mentions one --- the window is built by querying metadata that grew.}
+mentions one --- the window is built by querying metadata that grew. The
+property sheet on the right is generated the same way: its rows, their widgets
+and their bounds all come from annotations travelling with the metadata rather
+than from code in \code{qt/} --- including the \code{Preset} row, whose four
+choices are read from a \code{combobox} annotation the view never hard-codes.}
 \label{fig:e6}
 \end{figure}
 

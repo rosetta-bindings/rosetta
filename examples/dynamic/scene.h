@@ -164,7 +164,12 @@ namespace scene {
                 for (int s = 0; s < segments; ++s) {
                     const int a = r * (segments + 1) + s;
                     const int b = a + segments + 1;
-                    for (int idx : {a, b, a + 1, a + 1, b, b + 1}) {
+                    // Counter-clockwise seen from OUTSIDE, so the face
+                    // normal cross(b-a, c-a) points outward. Wound the
+                    // other way the sphere is lit from inside: the
+                    // diffuse term reads inverted and no specular
+                    // highlight can ever appear on a visible fragment.
+                    for (int idx : {a, a + 1, b, a + 1, b + 1, b}) {
                         m.t_.push_back(idx);
                     }
                 }
@@ -213,9 +218,18 @@ namespace scene {
                     m.v_.push_back((bunny::positions[3 * i + c] - 0.5 * (lo[c] + hi[c])) / span);
                 }
             }
+            // The scan's index table is wound CLOCKWISE seen from outside, so
+            // taken verbatim every face normal points into the model: the
+            // lighting reads inverted and no specular highlight can land on a
+            // visible fragment. Swapping two indices per triangle flips it.
+            // (Check: the signed volume sum(dot(a, cross(b,c)))/6 is negative
+            // for the raw table and positive after the swap, as it is for
+            // cube() and sphere().)
             m.t_.reserve(bunny::indexCount);
-            for (std::size_t i = 0; i < bunny::indexCount; ++i) {
+            for (std::size_t i = 0; i + 2 < bunny::indexCount; i += 3) {
                 m.t_.push_back(static_cast<int>(bunny::indices[i]));
+                m.t_.push_back(static_cast<int>(bunny::indices[i + 2]));
+                m.t_.push_back(static_cast<int>(bunny::indices[i + 1]));
             }
             return m;
         }
