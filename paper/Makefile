@@ -1,19 +1,33 @@
-PAPER = rosetta
 PAPERBIB = rosetta
 
-all: $(PAPER).pdf
+EN = en/rosetta-en
+FR = fr/rosetta-fr
 
-$(PAPER).pdf: $(PAPER).tex $(PAPERBIB).bib
-	pdflatex -interaction=nonstopmode $(PAPER).tex
-	bibtex $(PAPER)
-	pdflatex -interaction=nonstopmode $(PAPER).tex
-	pdflatex -interaction=nonstopmode $(PAPER).tex
+all: en fr
+
+en: $(EN).pdf
+fr: $(FR).pdf
+
+# Both papers share ../figures and ../rosetta.bib, so each is built from inside
+# its own language directory.
+$(EN).pdf: $(EN).tex $(PAPERBIB).bib
+	cd en && pdflatex -interaction=nonstopmode rosetta-en.tex
+	cd en && bibtex rosetta-en
+	cd en && pdflatex -interaction=nonstopmode rosetta-en.tex
+	cd en && pdflatex -interaction=nonstopmode rosetta-en.tex
+
+$(FR).pdf: $(FR).tex $(PAPERBIB).bib
+	cd fr && pdflatex -interaction=nonstopmode rosetta-fr.tex
+	cd fr && bibtex rosetta-fr
+	cd fr && pdflatex -interaction=nonstopmode rosetta-fr.tex
+	cd fr && pdflatex -interaction=nonstopmode rosetta-fr.tex
 
 # List everything still missing a number or a citation.
 todo:
-	@grep -n '\\todo{\|\\gap{\|INCOMPLETE' $(PAPER).tex $(PAPERBIB).bib
+	@grep -n '\\todo{\|\\gap{\|INCOMPLETE' $(EN).tex $(FR).tex $(PAPERBIB).bib
 
 clean:
-	rm -f $(PAPER).aux $(PAPER).bbl $(PAPER).blg $(PAPER).log $(PAPER).out $(PAPER).pdf
+	rm -f $(EN).aux $(EN).bbl $(EN).blg $(EN).log $(EN).out $(EN).pdf
+	rm -f $(FR).aux $(FR).bbl $(FR).blg $(FR).log $(FR).out $(FR).pdf
 
-.PHONY: all todo clean
+.PHONY: all en fr todo clean

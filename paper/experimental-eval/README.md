@@ -1,6 +1,6 @@
 # Experimental evaluation
 
-The measurement campaign behind the paper (`../rosetta.tex`, §10). Each
+The measurement campaign behind the paper (`../en/rosetta.tex`, §10). Each
 experiment is self-contained: its own generator, its own `run.sh`, its own
 analysis, and a `results/` directory holding what the paper cites.
 
