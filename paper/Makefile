@@ -1,8 +1,9 @@
 PAPER = rosetta
+PAPERBIB = rosetta
 
 all: $(PAPER).pdf
 
-$(PAPER).pdf: $(PAPER).tex $(PAPER).bib
+$(PAPER).pdf: $(PAPER).tex $(PAPERBIB).bib
 	pdflatex -interaction=nonstopmode $(PAPER).tex
 	bibtex $(PAPER)
 	pdflatex -interaction=nonstopmode $(PAPER).tex
@@ -10,7 +11,7 @@ $(PAPER).pdf: $(PAPER).tex $(PAPER).bib
 
 # List everything still missing a number or a citation.
 todo:
-	@grep -n '\\todo{\|\\gap{\|INCOMPLETE' $(PAPER).tex $(PAPER).bib
+	@grep -n '\\todo{\|\\gap{\|INCOMPLETE' $(PAPER).tex $(PAPERBIB).bib
 
 clean:
 	rm -f $(PAPER).aux $(PAPER).bbl $(PAPER).blg $(PAPER).log $(PAPER).out $(PAPER).pdf
