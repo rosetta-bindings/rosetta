@@ -82,6 +82,7 @@ cmake -B build && cmake --build build
 | `rosetta_include` | ✅ | — | Path to rosetta's `include/` directory. Same resolution rules. |
 | `generator_name` | — | manifest's directory name | Basename of the emitted reflection driver: `"my_person_gen"` ⇒ `gen/my_person_gen.cpp`. The built binary is always `generator`, so this is mostly cosmetic — its one load-bearing role is being the last-resort default for `module_name`. The **derived** default is folded to an identifier (`my-cool-lib` ⇒ `my_cool_lib`) so that fallback cannot produce an invalid module name; an explicit value is used verbatim. |
 | `module_name` | — | a `preset`'s, else `generator_name` | Default binding module name, used by any **shorthand** (bare-string) target. A [preset](#presets-preset) may supply one, which is why a preset-based manifest usually names neither this nor `generator_name`. |
+| `variables` | — | `[]` | Manifest-local variables, substituted as `$NAME` / `${NAME}` into every string of the manifest — a shared path prefix written once instead of once per field. See [Variables](#variables-variables). |
 | `targets` | ✅ | — | The language backends to emit. See [Targets](#targets). |
 | `classes` | ✅* | — | The classes / structs / enums to bind. See [Classes](#classes). *Optional when a [`preset`](#presets-preset) supplies them. |
 | `functions` | — | `[]` | Free (non-member) functions to bind. See [Functions](#functions). |
@@ -112,6 +113,75 @@ cmake -B build && cmake --build build
 | `cpp26_lib` | — | `${cpp26_root}/lib` | Directory holding the fork's `libc++` / `libc++abi` (`-L` / rpath). |
 
 Keys beginning with `//` (e.g. `"//1"`, `"//note"`) are treated as comments and ignored — handy since JSON has no comment syntax.
+
+---
+
+## Variables (`variables`)
+
+A path that appears in four fields is written four times, and moving it means
+editing four lines and hoping none was missed. The `cpp26_*` block is the case
+that motivated this — one toolchain root, spelled out with a different suffix
+each time:
+
+```json
+"cpp26_root": "$ENV{HOME}/devs/c++/clang-p2996/build",
+"cpp26_cxx":  "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang++",
+"cpp26_cc":   "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang",
+"cpp26_lib":  "$ENV{HOME}/devs/c++/clang-p2996/build/lib",
+```
+
+`variables` declares a name for the shared part, which `$NAME` (or `${NAME}`)
+then stands for:
+
+```json
+"variables": [
+    { "name": "P2996", "value": "$ENV{HOME}/devs/c++/clang-p2996" }
+],
+
+"cpp26_root": "$P2996/build",
+"cpp26_cxx":  "$P2996/build/bin/clang++",
+"cpp26_cc":   "$P2996/build/bin/clang",
+"cpp26_lib":  "$P2996/build/lib",
+```
+
+The substitution runs over **every string in the manifest** before any field is
+read, so a variable works anywhere a string does — `user_include`, `out_dir`,
+a `user_lib` directory, a `compile_definitions` value — not only in the
+toolchain paths above. The field itself disappears afterwards; nothing
+downstream sees it.
+
+Declarations are an **array**, not an object, because they are **ordered**: a
+value may use the variables declared before it (and only those — a forward
+reference is left as written).
+
+```json
+"variables": [
+    { "name": "TC",  "value": "/opt/toolchains/clang-p2996" },
+    { "name": "BIN", "value": "$TC/build/bin" }
+],
+"cpp26_cxx": "$BIN/clang++"
+```
+
+### What is *not* substituted
+
+A manifest already carries two other dollar notations, and both belong to
+**CMake**, which expands them at its own configure time. Rosetta must hand them
+over untouched, so the rule is that **only a name you declared is substituted**:
+
+| Written | Result |
+|---|---|
+| `$ENV{HOME}` | passed through verbatim — CMake's environment lookup, whatever `variables` says |
+| `${CMAKE_SOURCE_DIR}` | passed through verbatim — no `CMAKE_SOURCE_DIR` was declared |
+| `$P2996` with `P2996` declared | substituted |
+
+Declaring `ENV` is an error, since `$ENV{...}` could never resolve to it.
+
+The price of that leniency is that a **misspelt variable is silent** rather than
+an error — `$P2996x` is one name, `P2996x`, which nothing declares, so it stays
+as written and surfaces later as a path that does not exist. `${P2996}x` is how
+a variable abuts other text, and is worth preferring for that reason.
+
+A name is a C identifier: letters, digits and `_`, not starting with a digit.
 
 ---
 
@@ -180,7 +250,7 @@ A preset is only a JSON fragment: drop your own into
 
 | Field | Required | Default | Meaning |
 |---|:---:|---|---|
-| `header` | ✅ | — | Filename emitted into `#include "..."`. Resolved against `user_include`. |
+| `header` | ✅ | — | Filename emitted into `#include "..."`. Resolved against `user_include`. May be a **glob** (`"*.h"`), which binds every header it matches — see [Binding a whole folder](#binding-a-whole-folder-header-as-a-glob). |
 | `name` | — | header basename | C++ type name, must be reachable after including `header`. May be namespace-qualified (`space::Vector3`). |
 | `expose` | — | unqualified `name` | The **binding name** — what scripts see (Python attribute, JS export, TypeScript class) and what the generated trampoline is suffixed with (`Py_<expose>` / `Js_<expose>`). Works on an enum entry too. Must be a plain identifier. See [Renaming a class (`expose`)](#renaming-a-class-expose). |
 | `annotations` | — | — | Path (relative to the manifest) to an out-of-line annotation JSON side-car, baked into `bindings.h` so the header stays clean. See [OUT_OF_LINE_ANNOTATIONS](OUT_OF_LINE_ANNOTATIONS.md). |
@@ -189,6 +259,90 @@ A preset is only a JSON fragment: drop your own into
 | `final` | — | `false` | Treat the class as non-overridable from the host language: **no trampoline** is generated even when it has public virtual methods (they still bind as ordinary callable methods). Also what makes a class *with* virtuals eligible as a node member-object property (`mesh.vertices` — the aliased wrap stores a `T*`, which requires the wrapped type to be `T`, not `Js_T`). |
 
 Inheritance, multiple constructors, enums, nested user types and `std::vector` members are discovered automatically — no entry needed per base class, just list the most-derived type you want bound.
+
+---
+
+## Binding a whole folder (`header` as a glob)
+
+Optional shorthand for the common library shape — *one class per header, named after its file*. An entry whose `header` is a **shell glob** stands for every header it matches: one class entry per file, its `name` derived from the file's stem.
+
+```json
+"classes": [
+  { "header": "*.h" }
+]
+```
+
+The pattern uses the same syntax as [`user_sources`](#compiling-user-sources-user_sources) — `*`, `?`, `[...]` within a path component, and a component of exactly `**` matching zero or more directories:
+
+```json
+"classes": [
+  { "header": "shapes/*.h" },
+  { "header": "solvers/**/*.h", "exclude": ["solvers/detail/*.h", "solvers/*_impl.h"] }
+]
+```
+
+| Field | Required | Default | Meaning |
+|---|:---:|---|---|
+| `header` | ✅ | — | The glob. Resolved against **every** `user_include` root (a class header is emitted into `#include "..."`, so it is spelled relative to the include path — not to the manifest, as `user_sources` is), with the composed `header_dir` in front. |
+| `exclude` | — | `[]` | Glob pattern, or a list of them, whose matches are dropped: the headers in the folder that declare no bound class, a `detail/` subtree, an `_impl` convention. |
+| `final` | — | `false` | Applies to every matched class — it is a uniform property, unlike `name` / `expose` / `annotations` / `extensions`, which are per-class and are **rejected** on a glob entry. |
+
+Rules:
+
+- Only headers are taken — `.h`, `.hh`, `.hpp`, `.hxx` — so `"**/*"` cannot drag a `.cpp` or a `README` in.
+- The derived name is the file's **stem**, qualified by the `namespace` in scope exactly like a spelled-out entry with no `name`. A glob works inside a group, taking that group's `header_dir` and `namespace`.
+- A header whose stem is not a C++ identifier (`my-utils.h`) is **skipped with a warning** — there is nothing to derive a name from.
+- Globbed entries land **after** everything spelled out and **yield to it**, by name and by header — see [The stem is the class name](#the-stem-is-the-class-name) below.
+
+```json
+"header_dir": "geom",
+"namespace": "geom",
+"classes": [
+  { "header": "*.h", "exclude": ["fwd.h"] },
+  { "header": "Mesh.h", "annotations": "Mesh.ann.json" },
+  { "header": "types.h", "name": "Tolerance" }
+]
+```
+
+Everything above binds: every `geom/*.h` but `geom/fwd.h`, with `geom/Mesh.h` taking its side-car and `geom/types.h` binding `geom::Tolerance` rather than a non-existent `geom::types`.
+
+A pattern matching nothing is a **warning**, not an error (the "manifest has no class entries" check still fires if that was all there was).
+
+### The stem is the class name
+
+The loader never opens a bound header — it lists files. So a glob's only claim about a header is the one its **name** makes, and that claim has to hold exactly:
+
+> **`Point.h` must declare a class named `Point`**, spelled identically (case included), in the namespace in scope for the entry (top-level `namespace`, plus any enclosing group's).
+
+Nothing checks it at load time; a stem naming no such class surfaces as a *compile error in the generated driver* (`no member named 'vec3' in namespace 'geom'`), which is why the three cases below are worth knowing before pointing a glob at a folder.
+
+| Your header tree | What the glob does | What to write |
+|---|---|---|
+| `Point.h` declares `Point` | binds `Point` | `{"header": "*.h"}` — nothing else |
+| `Point.h` declares `Point` **and** `Aabb` | binds `Point` only — a file yields **one** entry | list the extra class: `{"header": "Point.h", "name": "Aabb"}` **and** `{"header": "Point.h", "name": "Point"}` (see the take-over rule below) |
+| `types.h` declares `Tolerance`, `Mode` — no `types` | would bind a non-existent `types` | list them (`{"header": "types.h", "name": "Tolerance"}`, …); the take-over rule then keeps the glob off the file |
+| `vec3.h` declares `Vec3` (stem ≠ class) | would bind a non-existent `vec3` | list it — `{"header": "vec3.h", "name": "Vec3"}` — or `"exclude": ["vec3.h"]` |
+| `my-utils.h` (stem is no identifier) | skipped, with a warning | list it explicitly if it declares something bindable |
+| `Point.h` declares `geom::detail::Point` | binds `geom::Point` — the glob applies the namespace **in scope**, it does not look inside | list it, or put the glob in a group with `"namespace": "detail"` |
+
+**The take-over rule.** An entry that names a class of a header **speaks for that whole header**: the glob then leaves the file alone. That is what makes the `types.h` and `vec3.h` rows work — you name the classes, and no bogus stem entry appears beside them.
+
+The cost is the second row: if the header declares *both* a class named after the file and another one you list, taking the file over drops the first. `rosetta_gen` says so rather than leaving it to be noticed —
+
+```
+rosetta_gen: note: "Point.h" is listed explicitly (class "Aabb"), so the pattern that also
+matched it contributes nothing there — class "Point" is NOT bound. List it too if the header
+declares both; name the header in the pattern's "exclude" if it does not (silences this)
+```
+
+— with the two fixes it names. The note fires on the `types.h` / `vec3.h` rows too, where losing the stem class is exactly what you wanted: add those headers to `exclude` to say so once and quiet it.
+
+A name already taken is *not* reported: `{"header": "Mesh.h", "annotations": "Mesh.ann.json"}` beside a glob is the intended composition, not a loss.
+
+Two other ways to fill `classes` from a folder, when the naming does not line up:
+
+- `rosetta_gen --init <src_dir>` **reads** the headers (a heuristic token scan) instead of trusting their names, and writes the classes it found into a manifest — once, into a file you then edit. Use it when stems and class names disagree often.
+- Keep the glob for the folder's regular part and spell out the rest; the two compose, which is the whole point of the take-over rule.
 
 ---
 
@@ -1080,7 +1234,7 @@ The `cpp26_*` fields point at the **C++26 / P2996 reflection compiler** used to 
 | `cpp26_cc` | `${cpp26_root}/bin/clang` |
 | `cpp26_lib` | `${cpp26_root}/lib` |
 
-If your [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) build lives elsewhere, set `cpp26_root` alone — `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` all derive from it. Override the individual ones only when the compiler binaries or the `libc++` / `libc++abi` directory sit outside the usual `bin/` and `lib/` layout. `$ENV{HOME}` is expanded by CMake at configure time, so the path stays portable across machines. Of the targets these only affect `rest` and `json` — every other one builds with an off-the-shelf compiler and ignores them.
+If your [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) build lives elsewhere, set `cpp26_root` alone — `cpp26_cxx` / `cpp26_cc` / `cpp26_lib` all derive from it. Override the individual ones only when the compiler binaries or the `libc++` / `libc++abi` directory sit outside the usual `bin/` and `lib/` layout. `$ENV{HOME}` is expanded by CMake at configure time, so the path stays portable across machines; when you do spell all four out, [`variables`](#variables-variables) lets the shared prefix be written once. Of the targets these only affect `rest` and `json` — every other one builds with an off-the-shelf compiler and ignores them.
 
 ---
 

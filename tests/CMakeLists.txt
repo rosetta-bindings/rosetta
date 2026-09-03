@@ -259,6 +259,25 @@ target_compile_options(interop_sequence PRIVATE -fannotation-attributes)
 target_link_libraries(interop_sequence PRIVATE GTest::gtest_main)
 gtest_discover_tests(interop_sequence)
 
+# Class-entry GLOBS in the manifest loader ({"header": "geom/*.h"} standing for
+# every header it matches). The subject is rosetta_gen's own manifest.cpp, so
+# the suite compiles that file directly and needs neither reflection nor
+# annotations — only nlohmann/json, which the loader parses with.
+add_executable(manifest_glob manifest_glob.cpp
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/manifest.cpp)
+target_include_directories(manifest_glob PRIVATE ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen)
+target_link_libraries(manifest_glob PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
+gtest_discover_tests(manifest_glob)
+
+# Manifest-local VARIABLES ("variables": [{"name": "P", "value": "..."}], used
+# as $P / ${P}). Same arrangement as manifest_glob above — the loader itself,
+# compiled directly, with no reflection involved.
+add_executable(manifest_vars manifest_vars.cpp
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/manifest.cpp)
+target_include_directories(manifest_vars PRIVATE ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen)
+target_link_libraries(manifest_vars PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
+gtest_discover_tests(manifest_vars)
+
 add_executable(nested_enum nested_enum.cpp)
 target_include_directories(nested_enum PRIVATE ${CMAKE_SOURCE_DIR}/../include)
 target_compile_options(nested_enum PRIVATE -fannotation-attributes)

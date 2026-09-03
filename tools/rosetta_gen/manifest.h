@@ -10,7 +10,17 @@
 //     "rosetta_include": "../../include",
 //     "generator_name": "generator_geom",           // driver tool / CMake target
 //     "module_name": "geom",                        // default binding module name
-//     "cpp26_root": "$ENV{HOME}/clang-p2996/build", // optional: C++26/P2996
+//     "variables": [                                // optional: manifest-local
+//       {"name": "P2996",                           //   variables, substituted as
+//        "value": "$ENV{HOME}/clang-p2996"}         //   $NAME / ${NAME} into every
+//     ],                                            //   string of the manifest, so
+//                                                   //   a shared prefix is written
+//                                                   //   once. Ordered (a value may
+//                                                   //   use the ones before it).
+//                                                   //   $ENV{...} and any undeclared
+//                                                   //   ${...} pass through to CMake
+//                                                   //   untouched.
+//     "cpp26_root": "$P2996/build",                 // optional: C++26/P2996
 //                                                   // toolchain root for the thin
 //                                                   // (reflection) backends. Default:
 //                                                   // $ENV{HOME}/devs/c++/clang-p2996/build
@@ -114,8 +124,14 @@
 //             "header": "model_ext.h",              //   instance methods — glue for
 //             "doc": "..." }                        //   members that can't cross the
 //         ] },                                      //   boundary (raw ptrs, overloads)
-//       { "header": "Point.h" }                     // name derived from header stem
-//     ],
+//       { "header": "Point.h" },                    // name derived from header stem
+//       { "header": "shapes/*.h",                   // a GLOB binds every header it
+//         "exclude": ["shapes/detail_*.h"] }        //   matches, one class per file
+//     ],                                            //   named from the file's stem
+//                                                   //   ("**/*.h" recurses). Optional
+//                                                   //   "exclude" drops patterns; a
+//                                                   //   header (or name) an explicit
+//                                                   //   entry claims is left to it.
 //     "functions": [                                // optional: free (non-member) fns
 //       { "name": "transform", "header": "common.h", "doc": "...",
 //         "expose": "warp",                         // optional: binding name, overriding

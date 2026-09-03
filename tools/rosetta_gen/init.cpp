@@ -17,7 +17,8 @@
 #include <vector>
 
 // A fully-commented example manifest, emitted by `--init`. It exercises every
-// commonly-used field — cpp26_* toolchain overrides, a multi-entry user_include,
+// commonly-used field — a `variables` declaration feeding the cpp26_* toolchain
+// overrides (the case it was added for), a multi-entry user_include,
 // rosetta_include, generator_name / module_name, user_sources,
 // compile_definitions, build_type / optimization, a representative
 // spread of targets, and one example class and one example function — so the
@@ -27,11 +28,16 @@ static std::string render_example_manifest() {
     "//": "Rosetta binding manifest. Edit the fields below to match your project.",
     "//paths": "All relative paths resolve from THIS file's directory.",
 
+    "//variables": "Optional manifest-local variables, substituted as $NAME / ${NAME} into every string below, so a shared path prefix is written once. Ordered: a value may use the ones before it. $ENV{...} and any undeclared ${...} are CMake's and pass through untouched.",
+    "variables": [
+        { "name": "P2996", "value": "$ENV{HOME}/devs/c++/clang-p2996" }
+    ],
+
     "//cpp26": "Optional C++26 / P2996 reflection toolchain (clang-p2996 build dir). The generator itself always needs it; of the targets, only \"rest\" does. Omit to fall back to the built-in defaults ($ENV{HOME}/devs/c++/clang-p2996/build).",
-    "cpp26_root": "$ENV{HOME}/devs/c++/clang-p2996/build",
-    "cpp26_cxx": "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang++",
-    "cpp26_cc": "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang",
-    "cpp26_lib": "$ENV{HOME}/devs/c++/clang-p2996/build/lib",
+    "cpp26_root": "$P2996/build",
+    "cpp26_cxx": "$P2996/build/bin/clang++",
+    "cpp26_cc": "$P2996/build/bin/clang",
+    "cpp26_lib": "$P2996/build/lib",
 
     "//include": "user_include is one path or an array of them; each is added to the bindings' include path.",
     "user_include": [
@@ -74,7 +80,7 @@ static std::string render_example_manifest() {
     "namespace": "mylib",
     "header_dir": "mylib",
 
-    "//classes": "Each class: its name and the header declaring it (\"mylib/widget.h\" here, via header_dir; \"Widget\" becomes \"mylib::Widget\" via namespace). \"name\" may be omitted to derive it from the header stem. \"annotations\" points at an optional out-of-line annotation JSON side-car.",
+    "//classes": "Each class: its name and the header declaring it (\"mylib/widget.h\" here, via header_dir; \"Widget\" becomes \"mylib::Widget\" via namespace). \"name\" may be omitted to derive it from the header stem. \"header\" may also be a glob (\"*.h\", \"**/*.h\", with an optional \"exclude\") to bind every header it matches, one class per file named from its stem. \"annotations\" points at an optional out-of-line annotation JSON side-car.",
     "classes": [
         {"doc": "An example bound class.", "name": "Widget", "header": "widget.h"}
     ],

@@ -213,6 +213,150 @@ static void merge_preset(json &dst, const json &src) {
     }
 }
 
+// --- "variables" -----------------------------------------------------------
+//
+// A shared path prefix written once instead of once per field:
+//
+//   "variables": [
+//     { "name": "P2996", "value": "$ENV{HOME}/devs/c++/clang-p2996" }
+//   ],
+//   "cpp26_root": "$P2996/build",
+//   "cpp26_cxx":  "${P2996}/build/bin/clang++"
+//
+// The substitution runs over every string in the document before any field is
+// read, so a variable works anywhere a string does — not only in the toolchain
+// paths that motivated it.
+//
+// One rule keeps this from colliding with the two OTHER dollar notations a
+// manifest already carries, both of which belong to CMake and must reach it
+// untouched: only a name this file DECLARED is substituted. `$ENV{HOME}` is
+// skipped outright, and an undeclared `${CMAKE_SOURCE_DIR}` is left exactly as
+// written. The price of that leniency is that a misspelt `$P2996x` passes
+// through silently rather than failing — `${P2996}x` is how a variable abuts
+// text, and the braced form is worth preferring for that reason.
+//
+// Declarations are an ARRAY rather than an object because they are ORDERED: a
+// declaration may use the variables declared before it, and a JSON object has
+// no order to lean on.
+using Vars = std::vector<std::pair<std::string, std::string>>;
+
+static const std::string *find_var(const Vars &vars, const std::string &name) {
+    for (const auto &v : vars) {
+        if (v.first == name) {
+            return &v.second;
+        }
+    }
+    return nullptr;
+}
+
+// Substitute `$NAME` / `${NAME}` for every declared NAME in one string.
+static std::string expand_vars(const std::string &s, const Vars &vars) {
+    if (vars.empty() || s.find('$') == std::string::npos) {
+        return s;
+    }
+    const auto is_var_char = [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+    };
+    std::string out;
+    out.reserve(s.size());
+    for (std::size_t i = 0; i < s.size();) {
+        if (s[i] != '$') {
+            out += s[i++];
+            continue;
+        }
+        // "$ENV{...}" is CMake's own, expanded at ITS configure time: copied
+        // through whole, so a name inside it is never mistaken for one of ours.
+        if (s.compare(i, 5, "$ENV{") == 0) {
+            const std::size_t close = s.find('}', i + 5);
+            const std::size_t end   = (close == std::string::npos) ? s.size() : close + 1;
+            out.append(s, i, end - i);
+            i = end;
+            continue;
+        }
+        std::size_t begin  = i + 1;
+        const bool  braced = begin < s.size() && s[begin] == '{';
+        if (braced) {
+            ++begin;
+        }
+        std::size_t end = begin;
+        while (end < s.size() && is_var_char(s[end])) {
+            ++end;
+        }
+        std::size_t next = end;
+        if (braced) {
+            if (end >= s.size() || s[end] != '}') { // unterminated: not a reference
+                out += s[i++];
+                continue;
+            }
+            next = end + 1;
+        }
+        const std::string *val = (end > begin) ? find_var(vars, s.substr(begin, end - begin))
+                                               : nullptr;
+        if (val == nullptr) { // undeclared — CMake's, or plain text
+            out += s[i++];
+            continue;
+        }
+        out += *val;
+        i = next;
+    }
+    return out;
+}
+
+// The same, over every string of a JSON document (values only — a key is a
+// field name, never a path).
+static void expand_vars_in(json &v, const Vars &vars) {
+    if (v.is_string()) {
+        v = expand_vars(v.get<std::string>(), vars);
+    } else if (v.is_array() || v.is_object()) {
+        for (auto &e : v) {
+            expand_vars_in(e, vars);
+        }
+    }
+}
+
+// Read "variables", expanding each value against the declarations before
+// it. Names are C identifiers, so `$P2996` has one obvious end.
+static Vars read_variables(const json &j) {
+    Vars vars;
+    if (!j.contains("variables")) {
+        return vars;
+    }
+    const json &decls = j.at("variables");
+    if (!decls.is_array()) {
+        throw std::runtime_error(
+            "\"variables\" must be an ARRAY of {\"name\": ..., \"value\": ...} objects "
+            "(the order is what lets one declaration use another)");
+    }
+    for (const auto &d : decls) {
+        if (!d.is_object() || !d.contains("name") || !d.contains("value") ||
+            !d.at("name").is_string() || !d.at("value").is_string()) {
+            throw std::runtime_error("each \"variables\" entry must be "
+                                     "{\"name\": \"NAME\", \"value\": \"...\"} with both strings");
+        }
+        const std::string name = d.at("name").get<std::string>();
+        const bool        ok =
+            !name.empty() && (std::isalpha(static_cast<unsigned char>(name[0])) != 0 ||
+                              name[0] == '_') &&
+            std::all_of(name.begin(), name.end(), [](char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+            });
+        if (!ok) {
+            throw std::runtime_error("\"variables\" name \"" + name +
+                                     "\" is not an identifier (letters, digits and _, "
+                                     "not starting with a digit)");
+        }
+        if (name == "ENV") {
+            throw std::runtime_error("\"variables\" cannot declare \"ENV\": $ENV{...} is "
+                                     "CMake's environment lookup, passed through untouched");
+        }
+        if (find_var(vars, name) != nullptr) {
+            throw std::runtime_error("\"variables\" declares \"" + name + "\" twice");
+        }
+        vars.emplace_back(name, expand_vars(d.at("value").get<std::string>(), vars));
+    }
+    return vars;
+}
+
 Manifest load(const fs::path &manifest_path) {
     std::ifstream in(manifest_path);
     if (!in) {
@@ -221,6 +365,15 @@ Manifest load(const fs::path &manifest_path) {
     // Tolerate // and /* */ comments in the manifest.
     json j = json::parse(in, /*cb=*/nullptr, /*allow_exceptions=*/true,
                          /*ignore_comments=*/true);
+
+    // Manifest-local variables, substituted into the whole document before a
+    // single field is read — including `user_include` and `rosetta_include`
+    // just below, which is why this comes first. See read_variables above.
+    if (j.contains("variables")) {
+        const Vars vars = read_variables(j);
+        j.erase("variables"); // done its work; nothing downstream knows it
+        expand_vars_in(j, vars);
+    }
 
     Manifest       m;
     const fs::path base = fs::absolute(manifest_path).parent_path();
@@ -554,6 +707,114 @@ Manifest load(const fs::path &manifest_path) {
                                             : std::string{}),
         std::string{}};
 
+    // A class entry whose "header" is a shell GLOB ("*.h", "solvers/**/*.h")
+    // stands for every header it matches — one class entry per file, named
+    // from the file's stem. The whole-folder shorthand for the common library
+    // shape (one class per header): a manifest says which FOLDER to bind
+    // instead of repeating a line per class, and adding a header to the tree
+    // is enough to bind it. Optional, of course: nothing changes for a
+    // manifest that spells its classes out.
+    //
+    // The pattern is resolved against each `user_include` root (not the
+    // manifest dir like `user_sources`, since a class header is emitted into
+    // `#include "..."` and so must be spelled relative to the include path),
+    // with the composed `header_dir` in front. Only headers are taken
+    // (.h/.hh/.hpp/.hxx), so "**/*" cannot drag a .cpp in.
+    //
+    // These entries are DEFERRED into `globbed` and appended after everything
+    // spelled out, where they yield to it — see the flush below.
+    std::vector<ClassEntry> globbed;
+    auto expand_class_glob = [&](const json &c, const EntryCtx &ctx, const std::string &pattern) {
+        // Per-class fields cannot mean anything for a whole folder: a name, a
+        // binding rename, one class's annotation side-car, one class's
+        // extension methods. Reject them rather than apply them N times.
+        for (const char *key : {"name", "expose", "annotations", "extensions"}) {
+            if (c.contains(key)) {
+                throw std::runtime_error(std::string("class entry \"") + pattern +
+                                         "\" is a glob (it stands for every header it matches), "
+                                         "so it cannot carry \"" + key +
+                                         "\" — spell that class out in its own entry");
+            }
+        }
+        // "final" is uniform, so it does carry (a folder of leaf structs).
+        const bool final_ = c.contains("final") && c.at("final").get<bool>();
+        // Optional "exclude": glob patterns (same syntax, same roots) whose
+        // matches are dropped — the headers in the folder that declare no
+        // bound class, or a detail/ subtree. A single string is a one-element
+        // list, as everywhere else.
+        std::vector<std::string> exclude;
+        if (c.contains("exclude")) {
+            const auto &ex = c.at("exclude");
+            if (ex.is_array()) {
+                for (const auto &p : ex) {
+                    exclude.push_back(ctx.dir + p.get<std::string>());
+                }
+            } else {
+                exclude.push_back(ctx.dir + ex.get<std::string>());
+            }
+        }
+
+        bool matched = false;
+        for (const auto &inc : m.user_include) {
+            std::vector<fs::path> dropped;
+            for (const auto &p : exclude) {
+                for (auto &d : expand_glob(inc, p)) {
+                    dropped.push_back(std::move(d));
+                }
+            }
+            for (const auto &p : expand_glob(inc, pattern)) {
+                std::error_code ec;
+                if (!fs::is_regular_file(p, ec)) {
+                    continue;
+                }
+                const std::string ext = p.extension().string();
+                if (ext != ".h" && ext != ".hh" && ext != ".hpp" && ext != ".hxx") {
+                    continue;
+                }
+                if (std::find(dropped.begin(), dropped.end(), p) != dropped.end()) {
+                    continue;
+                }
+                matched = true;
+                // The derived name is the file's stem, so a header whose stem
+                // is not a C++ identifier ("my-utils.h") has nothing to derive
+                // from: skip it here, where the message names the file, rather
+                // than emit a driver that will not compile.
+                const std::string stem = p.stem().string();
+                const bool ident = !stem.empty() &&
+                                   (std::isalpha(static_cast<unsigned char>(stem[0])) ||
+                                    stem[0] == '_') &&
+                                   std::all_of(stem.begin(), stem.end(), [](char ch) {
+                                       return std::isalnum(static_cast<unsigned char>(ch)) ||
+                                              ch == '_';
+                                   });
+                if (!ident) {
+                    std::fprintf(stderr,
+                                 "rosetta_gen: warning: \"classes\" pattern \"%s\" matched %s, "
+                                 "whose name cannot come from its stem — skipped (list it "
+                                 "explicitly with a \"name\")\n",
+                                 pattern.c_str(), p.filename().string().c_str());
+                    continue;
+                }
+                ClassEntry e;
+                e.header = fs::relative(p, inc, ec).generic_string();
+                e.name   = qualify(ctx.ns, stem);
+                e.final_ = final_;
+                // Two include roots can hold the same relative header, and two
+                // patterns can overlap; first match wins.
+                if (std::none_of(globbed.begin(), globbed.end(), [&](const ClassEntry &g) {
+                        return g.header == e.header || g.name == e.name;
+                    })) {
+                    globbed.push_back(std::move(e));
+                }
+            }
+        }
+        if (!matched) {
+            std::fprintf(stderr,
+                         "rosetta_gen: warning: \"classes\" pattern matched no headers: %s\n",
+                         pattern.c_str());
+        }
+    };
+
     std::function<void(const json &, const EntryCtx &)> add_classes =
         [&](const json &arr, const EntryCtx &ctx) {
             for (const auto &c : arr) {
@@ -568,6 +829,11 @@ Manifest load(const fs::path &manifest_path) {
                 }
                 ClassEntry e;
                 e.header = entry_header(c, ctx, "class");
+                // A globbed header stands for a whole folder — see above.
+                if (is_glob_pattern(e.header)) {
+                    expand_class_glob(c, ctx, e.header);
+                    continue;
+                }
                 // `name` is optional; fall back to the header's basename (stem).
                 e.name = qualify(ctx.ns, c.contains("name") ? c.at("name").get<std::string>()
                                                             : fs::path(e.header).stem().string());
@@ -623,6 +889,45 @@ Manifest load(const fs::path &manifest_path) {
     }
     if (preset.contains("classes")) {
         add_classes(preset.at("classes"), EntryCtx{}); // pristine: see the preset block
+    }
+
+    // Flush the glob-produced entries. They land AFTER everything spelled out
+    // and yield to it, by NAME and by HEADER:
+    //
+    //   name   — the class is already bound, with whatever "expose" /
+    //            "annotations" / "extensions" the explicit entry gave it. The
+    //            glob simply has nothing to add.
+    //   header — an entry that names a class of this header SPEAKS FOR THE
+    //            HEADER: the glob leaves the file alone. That is what lets a
+    //            header whose stem names nothing bindable ("types.h" declaring
+    //            Tolerance and Mode) be listed class by class without the glob
+    //            also inventing a class called `types`.
+    //
+    // The second rule has a cost worth naming out loud rather than leaving to
+    // be discovered: if the header declares BOTH a class named after the file
+    // and another one listed explicitly, taking the file over drops the first.
+    // Only the manifest's author can say which was meant — the loader never
+    // reads a bound header — so it is a note on stderr and a one-line fix
+    // (list the stem class too).
+    for (auto &g : globbed) {
+        const auto same_name = std::find_if(m.classes.begin(), m.classes.end(),
+                                            [&](const ClassEntry &e) { return e.name == g.name; });
+        if (same_name != m.classes.end()) {
+            continue;
+        }
+        const auto same_header = std::find_if(
+            m.classes.begin(), m.classes.end(),
+            [&](const ClassEntry &e) { return e.header == g.header; });
+        if (same_header != m.classes.end()) {
+            std::fprintf(stderr,
+                         "rosetta_gen: note: \"%s\" is listed explicitly (class \"%s\"), so the "
+                         "pattern that also matched it contributes nothing there — class \"%s\" "
+                         "is NOT bound. List it too if the header declares both; name the header "
+                         "in the pattern's \"exclude\" if it does not (silences this)\n",
+                         g.header.c_str(), same_header->name.c_str(), g.name.c_str());
+            continue;
+        }
+        m.classes.push_back(std::move(g));
     }
 
     // `functions` is optional: free (non-member) functions to bind. Each entry
