@@ -26,6 +26,13 @@ Needs only `pdflatex` from a **basic** TeX Live: `listings`, `xcolor`,
 primitives so the book compiles wherever pdflatex does. If you add a package,
 check it against a basic install first.
 
+The only external file is the title-page logo, `../../media/logo-rosetta.png`.
+It is guarded by `\IfFileExists`, so a copy of `docs/book` on its own still
+builds — the title page just loses the image. Note that `\IfFileExists` does
+**not** consult `\graphicspath`: give it the same literal path you give
+`\includegraphics`, or the guard silently reports "missing" and skips a file
+that is right there.
+
 ## Layout
 
 ```

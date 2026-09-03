@@ -183,18 +183,49 @@
 \setcounter{secnumdepth}{2}
 \captionsetup{font=small,labelfont=bf}
 
-\title{\vspace{-2cm}\Huge\textbf{\rosetta}\\[0.4cm]
-       \LARGE A User's Guide\\[0.6cm]
-       \large Multi-language bindings for unmodified C++,\\
-       generated once with C++26 static reflection}
-\author{Frantz Maerten\\\small\texttt{fmaerten@gmail.com}}
-\date{\today}
+% --- title page ------------------------------------------------------
+% The logo lives with the rest of the repository's media rather than in
+% this directory. Spelled as one path rather than through \graphicspath
+% because \IfFileExists does NOT consult graphicspath — it would have
+% found nothing and silently skipped the logo. The guard keeps the book
+% buildable from a copy of docs/book alone: a missing logo leaves a gap,
+% not a failed run.
+\newcommand{\logopath}{../../media/logo-rosetta.png}
+
+\hypersetup{pdftitle={Rosetta — A User's Guide},
+            pdfauthor={Frantz Maerten},
+            pdfsubject={Multi-language bindings for unmodified C++ with C++26 reflection}}
 
 % =====================================================================
 \begin{document}
 
 \frontmatter
-\maketitle
+
+\begin{titlepage}
+\centering
+\vspace*{1.2cm}
+
+{\Huge\bfseries\rosetta\par}
+\vspace{0.5cm}
+{\LARGE A User's Guide\par}
+\vspace{0.7cm}
+{\large Multi-language bindings for unmodified C++,\\
+        generated once with C++26 static reflection\par}
+
+% \vfill on both sides so the logo sits centred in whatever space the
+% title and author blocks leave, rather than hard against the title.
+\vfill
+\IfFileExists{\logopath}{%
+  \includegraphics[width=0.66\textwidth]{\logopath}%
+}{}
+\vfill
+
+{\large Frantz Maerten\par}
+\vspace{0.2cm}
+{\small\texttt{fmaerten@gmail.com}\par}
+\vspace{1.0cm}
+{\small\today\par}
+\end{titlepage}
 
 \input{ch/00-preface}
 
