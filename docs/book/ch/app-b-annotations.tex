@@ -1,0 +1,161 @@
+\chapter{Annotation reference}
+\label{app:annotations}
+
+\section{The kinds}
+
+\begin{center}
+\small
+\begin{longtable}{@{}lL{2.0cm}L{5.7cm}L{4.9cm}@{}}
+\toprule
+\textbf{Kind} & \textbf{Applies to} & \textbf{Inline / side-car} &
+  \textbf{Meaning} \\
+\midrule
+\endhead
+\code{doc} & fields, methods, classes$^*$ &
+  \code{= rosetta::doc\{"\ldots"\}} \newline \code{"doc": "\ldots"} &
+  Description text. \\
+\addlinespace
+\code{range} & numeric fields &
+  \code{= rosetta::range\{lo, hi\}} \newline \code{"range": [lo, hi]} &
+  Value bounds; validating setter, clamping slider, documented constraint. \\
+\addlinespace
+\code{readonly} & fields &
+  \code{= rosetta::readonly} \newline \code{"readonly": true} &
+  Getter-only property. \\
+\addlinespace
+\code{combobox} & string fields &
+  \code{= rosetta::combobox\{\{"a","b"\}\}} \newline
+  \code{"combobox": ["a","b"]} &
+  Allowed choices, maximum 16. \\
+\addlinespace
+\code{label} & fields, methods &
+  \code{= rosetta::label\{"\ldots"\}} \newline \code{"label": "\ldots"} &
+  Display-name override in UI backends only. \\
+\addlinespace
+\code{button} & methods &
+  \code{= rosetta::button\{"Run"\}} \newline \code{"button": "Run"} &
+  Call-button caption. \\
+\addlinespace
+\code{widget::*} & fields &
+  \code{= rosetta::widget::slider} \newline \code{"widget": "slider"} &
+  Editor hint; see below. \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\noindent$^*$ Class-level and free-function \code{doc} come from the manifest's
+\field{doc} key, since free functions carry no in-source annotations.
+
+\section{Widget hints}
+
+\begin{center}
+\small
+\begin{tabular}{@{}llL{7.0cm}@{}}
+\toprule
+\textbf{Hint} & \textbf{Field type} & \textbf{Renders as} \\
+\midrule
+\code{spin}      & number & spin box / typed input \\
+\code{slider}    & number + \code{range} & slider bounded by the range \\
+\code{textfield} & number & validated free-text input \\
+\code{checkbox}  & number (0/1), bool & checkbox \\
+\code{color}     & string \code{"\#rrggbb"} & colour picker; writes back hex \\
+\code{multiline} & string & multi-line text area \\
+\code{radio}     & string + \code{combobox} & radio-button group \\
+\code{file}      & string path & entry + platform file dialog \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Consumption by backend family}
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{4.0cm}L{9.0cm}@{}}
+\toprule
+\textbf{Family} & \textbf{Honours} \\
+\midrule
+Scripting --- \lang{python}, \lang{nanobind}, \lang{node}, \lang{wasm},
+  \lang{lua}, \lang{julia}, \lang{csharp}, \lang{java} &
+  \code{doc} (docstrings where the framework has them), \code{range}
+  (validating setters), \code{readonly} (getter-only properties). The UI kinds
+  are ignored. \\
+\addlinespace
+UI inspectors --- \lang{qt}, \lang{qml}, \lang{imgui} &
+  Everything. \\
+\addlinespace
+Documents --- \lang{markdown}, \lang{html}, \lang{openapi}, \lang{typescript} &
+  \code{doc} and the constraints (\code{range}, \code{readonly},
+  \code{combobox}) rendered into the reference text or schema. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+An annotation a backend has no use for is ignored, never an error.
+
+\section{Inline versus side-car}
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{7.2cm}cc@{}}
+\toprule
+ & \textbf{Inline} & \textbf{Side-car} \\
+\midrule
+Header stays plain C++ & \no & \yes \\
+Generated binding builds on an off-the-shelf compiler & \no & \yes \\
+Works on third-party headers you cannot edit & \no & \yes \\
+Expressiveness & full set & full set \\
+Edit requires & regeneration & regeneration \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Wiring a side-car:
+
+\begin{lstlisting}[style=json]
+"classes": [
+  { "name": "Algo", "header": "Algo.h", "annotations": "Algo.ann.json" }
+]
+\end{lstlisting}
+
+\section{Side-car schema}
+
+Keys are member identifiers --- fields or methods. Each value is an object
+carrying any subset of:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Key} & \textbf{JSON type} & \textbf{Example} \\
+\midrule
+\code{doc}      & string       & \code{"Visible items"} \\
+\code{range}    & 2-element array & \code{[0, 100]}, \code{[1e-10, 1e-6]} \\
+\code{readonly} & boolean      & \code{true} \\
+\code{combobox} & string array & \code{["fast", "slow"]} \\
+\code{label}    & string       & \code{"Max iterations"} \\
+\code{button}   & string       & \code{"Run"} \\
+\code{widget}   & string       & \code{"slider"} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A key naming no member of the type \textbf{fails the build}, naming the
+offending key. That is deliberate: a renamed field must not silently lose its
+metadata.
+
+\section{Merge rules}
+
+\begin{itemize}
+  \item No side-car: the class is un-annotated. Not an error.
+  \item Inline annotations present: the JSON entries are \emph{concatenated}
+    after them.
+  \item Precedence: a reader that keeps the last match lets a JSON entry
+    override an inline one of the same kind; cumulative readers such as
+    \code{doc} see both.
+\end{itemize}
+
+\section{Internal}
+
+\code{rosetta::virtual\_spec} is synthesised by the walk and never written by
+users. It marks a method's reflection as virtual or overriding so backends can
+emit trampolines.

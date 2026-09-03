@@ -1,0 +1,130 @@
+\chapter{Presets}
+\label{ch:presets}
+
+Some binding surfaces are \textbf{fixed}: they do not depend on your project at
+all. Binding rosetta's own reflection API is the case that motivated this ---
+the twelve \code{rosetta::script} handle classes and the eight registry free
+functions are the same in every project that wants them, and copying twenty
+entries into each manifest makes the three lines that \emph{are}
+project-specific hard to find.
+
+\section{Using one}
+
+\field{preset} names a JSON fragment shipped under
+
+\begin{center}
+\code{<rosetta\_include>/rosetta/presets/<name>.json}
+\end{center}
+
+\begin{lstlisting}[style=json]
+{
+    "preset": "scriptable",
+    "rosetta_include": "../../include",
+    "user_include": ["../lib", "../lib/bindings/dynamic"],
+    "user_sources": ["../lib/bindings/dynamic/auto_dynamic.cpp"],
+    "module_init": { "headers": ["auto_dynamic.h"],
+                     "statements": ["bank::register_all()"] },
+    "targets": ["python", "lua"]
+}
+\end{lstlisting}
+
+That is a complete manifest. Six keys, every one of them about \emph{this}
+project: where its files are, which targets to emit, what to run at load.
+\field{classes}, \field{functions} and \field{module\_name} all come from the
+preset --- and a preset that supplies \field{module\_name} is what lets the
+targets stay bare strings.
+
+Give an array to apply several: \code{"preset": ["scriptable", "\ldots"]},
+applied in order. An unknown name is an error naming the path that was searched,
+so a typo surfaces immediately.
+
+\section{What applying one does}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{10.0cm}@{}}
+\toprule
+\textbf{Merge} & Deep, with the \textbf{manifest winning} every conflict it can
+  express. A key you did not write is taken from the preset; arrays present in
+  both are concatenated \emph{preset first}; objects merge recursively; a scalar
+  you spelled out is never overridden. \\
+\addlinespace
+\field{classes} / \field{functions} & Parsed with a \textbf{pristine context}:
+  your \field{namespace} and \field{header\_dir} defaults describe \emph{your}
+  tree and are not prepended to a preset's headers. They are appended after your
+  own entries. \\
+\addlinespace
+\textbf{Include path} & A preset binds headers that live under
+  \field{rosetta\_include}, so it puts that directory on the \textbf{target's}
+  include path too. Every other binding is reflection-free by construction and
+  has no reason to see rosetta's headers, which is why this is not the default. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The array rule is what makes \field{module\_init} compose: the preset
+contributes its caster include and \emph{your} statements survive, rather than
+one silently replacing the other.
+
+\field{classes} becomes optional when a preset supplies it --- which is why the
+manifest above has none.
+
+\section{The shipped preset}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{10.2cm}@{}}
+\toprule
+\textbf{Name} & \textbf{What it binds} \\
+\midrule
+\code{scriptable} & \code{<rosetta/script.h>} --- the bindable facade over the
+  runtime object model --- plus the per-language \code{Value} casters. Lets a
+  host language walk the metadata of any library that emits \lang{dynamic}
+  tables, and call into it by name. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Chapter~\ref{ch:scriptable} is what that preset is \emph{for}, and is worth
+reading before using it --- it is the most unusual thing in rosetta and the
+hardest to guess at from the manifest alone.
+
+\section{Writing your own}
+
+A preset is only a JSON fragment. Drop one into
+\code{<rosetta\_include>/rosetta/presets/} and it is available by name to every
+manifest that points at that include directory.
+
+It is worth doing when a binding surface is genuinely fixed across projects:
+
+\begin{itemize}
+  \item a company-wide utility library every binding also exposes;
+  \item a facade type plus its helpers, where the twenty entries never vary;
+  \item a set of \field{sequences} / \field{matrices} / \field{interop}
+    registrations shared by every project using the same numerical stack.
+\end{itemize}
+
+It is \emph{not} worth doing to factor out the parts of a manifest that differ
+per project --- \field{user\_include}, \field{user\_sources},
+\field{targets} --- because the merge rule (manifest wins) means those would be
+overridden anyway, and a preset nobody can use unchanged is just an indirection.
+
+The fields most worth putting in one:
+
+\begin{lstlisting}[style=json]
+{
+  "module_name": "mylib",
+  "classes":   [ ... fixed entries ... ],
+  "functions": [ ... fixed entries ... ],
+  "module_init": { "headers": ["mylib/init.h"],
+                   "statements": ["mylib::initialize()"] },
+  "sequences": ["mylib::Vector"]
+}
+\end{lstlisting}
+
+\begin{note}
+Remember the pristine-context rule when writing one: a preset's
+\field{classes} entries must spell their headers and names in full, because
+the consuming manifest's \field{namespace} and \field{header\_dir} will
+\emph{not} be applied to them.
+\end{note}

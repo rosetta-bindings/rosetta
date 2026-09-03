@@ -1,0 +1,316 @@
+\chapter{Types across the boundary}
+\label{ch:types}
+
+Reflection tells rosetta that a method takes a \code{GEO::vector<double>}. It
+does not tell it what a Python caller should hand over. That mapping --- the
+\emph{type gate} --- is per backend, and this chapter is about widening it for
+the types your library actually uses.
+
+The default gate handles the obvious cases without a word in the manifest:
+arithmetic types, \code{bool}, \code{std::string}, enums, \code{std::vector<T>}
+of any of those, and any \emph{bound class}. Everything below is for the rest.
+
+\begin{note}
+The IR's rule for anything it cannot claim is uniform: mark the type
+\code{kind: "unknown"} and let each backend skip the member. That is why a
+type rosetta does not understand costs you one skipped method with a stated
+reason, not a compile error.
+\end{note}
+
+\section{Foreign sequence containers}
+\label{sec:sequences}
+
+Many libraries carry their bulk data in their \emph{own} vector type ---
+geogram's \code{GEO::vector<T>}, an aligned or pooled vector --- and the
+marshalling layers only know \code{std::vector}. List the container template
+(qualified, \textbf{one type parameter}) and it crosses like a
+\code{std::vector} of its element:
+
+\begin{lstlisting}[style=json]
+"sequences": ["GEO::vector"]
+\end{lstlisting}
+
+\code{rosetta\_gen} emits
+
+\begin{lstlisting}[style=cpp]
+template <typename T>
+struct rosetta::is_sequence<GEO::vector<T>> : std::true_type {};
+\end{lstlisting}
+
+into the generated \code{bindings.h}. The container must be
+default-constructible with \code{value\_type}, \code{size()}, \code{resize(n)}
+and \code{begin()}/\code{end()}; elements must be arithmetic, \code{bool},
+\code{std::string} or a bound enum.
+
+The opted-in backends --- \lang{python}, \lang{nanobind}, \lang{node},
+\lang{wasm}, \lang{lua}, plus \lang{typescript} declarations --- marshal it
+\textbf{by copy through a \code{std::vector<element>} boundary} inside an
+emitted adapter. Scripts pass and receive plain arrays, lists or tables. Every
+other backend keeps skipping the type.
+
+Three consequences worth knowing:
+
+\begin{itemize}
+  \item \textbf{Mutable \code{Seq\&} parameters bind, input-only.} The adapter's
+    local container is a real lvalue, so geogram's
+    \code{assign\_points(vector<double>\&, dim, steal)} works --- \code{steal}
+    steals from the adapter's copy, which is fine. In-place mutations are
+    discarded, exactly like pybind's \code{std::vector\&} casters.
+  \item \textbf{Overload sets need the sequence overload to be first.} The
+    adapter calls the method \emph{by name} with concrete arguments instead of
+    spelling the ambiguous \code{\&T::name} member pointer. A backend that keys
+    methods by name binds the first-declared overload, so a set whose first
+    declaration is the raw-pointer one stays skipped there.
+  \item \textbf{Virtual methods naming the container cannot be overridden
+    script-side} --- the exact spelling cannot round-trip --- but they still
+    bind as callable methods.
+\end{itemize}
+
+Sequence-typed public \emph{fields} bind as copying properties in
+\lang{python}, \lang{nanobind}, \lang{wasm} and \lang{lua}; \lang{node} skips
+them.
+
+\subsection{Registering a concrete type}
+\label{sec:concrete}
+
+The string form registers a \emph{template}, and the adapter spells the
+container it builds as \code{Namespace::Template<element>}. That composition is
+wrong the moment the specialisation carries more than its element:
+\code{Eigen::VectorXd} is really \code{Eigen::Matrix<double, -1, 1>}, and the
+composed \code{Eigen::Matrix<double>} does not compile.
+
+Register the concrete type instead, spelled exactly as the adapter should write
+it:
+
+\begin{lstlisting}[style=json]
+"sequences": [{ "type": "Eigen::VectorXd" }]
+\end{lstlisting}
+
+which emits a full specialisation --- plus the spelling, as
+\code{rosetta::is\_sequence} and \code{rosetta::sequence\_cpp\_name} --- rather
+than the partial one.
+
+\code{\{ "template": "GEO::vector" \}} is the long form of a plain string entry.
+An object with \emph{both} keys, or neither, is an error --- the two cannot be
+told apart by looking at the text, and guessing wrong emits code that does not
+compile.
+
+This is also the only way to register a container that is not a template at all.
+
+\section{Foreign matrices}
+\label{sec:matrices}
+
+\field{sequences} one dimension up. A 2-D type --- \code{Eigen::MatrixXd}, a
+library's own dense grid --- is a sequence in no useful sense, so it needs its
+own registration:
+
+\begin{lstlisting}[style=json]
+"matrices": [{ "type": "Eigen::MatrixXd" }]
+\end{lstlisting}
+
+Entries take the \textbf{same two forms} as \field{sequences}: a plain string
+for a one-type-parameter template (\code{"mylib::Grid"}, spelled
+\code{mylib::Grid<double>} by the adapter), or \code{\{ "type": "\ldots" \}} for
+a concrete type.
+
+The type must be default-constructible with \code{value\_type}, \code{rows()},
+\code{cols()}, \code{resize(r, c)} and \code{operator()(i, j)}; the element must
+be \textbf{arithmetic} --- a grid of strings has no natural script shape.
+
+The opted-in backends marshal it \textbf{by copy through a
+\code{std::vector<std::vector<element>>} boundary} --- an array of row arrays.
+\lang{typescript} says \code{number[][]}.
+
+\begin{itemize}
+  \item \textbf{Row-major, whatever the matrix stores.} \code{operator()(i, j)}
+    is the only access the registration promises, so the boundary is built row
+    by row regardless of the type's own storage order.
+  \item \textbf{A ragged incoming array is squared off} to the first row's
+    length: rows are the outer size, columns the first row's; short rows keep
+    whatever \code{resize()} left and extra columns are dropped.
+  \item \textbf{A mutable \code{Mat\&} parameter binds input-only}, like a
+    sequence one.
+\end{itemize}
+
+\section{Foreign-library interop}
+\label{sec:interop}
+
+A method taking or returning \code{Eigen::VectorXd} is, to the reflection walk,
+a method taking an ordinary class. Every backend used to bind it happily --- and
+the call then \textbf{threw at run time}, because no caster for that class was
+ever registered.
+
+\field{interop} names foreign libraries whose types the target's binding
+framework can already marshal on its own:
+
+\begin{lstlisting}[style=json]
+"interop": ["eigen"]
+\end{lstlisting}
+
+Recognition is by \textbf{enclosing namespace}, not by a list of type names, so
+one line covers everything the library owns: \code{VectorXd}, \code{MatrixXd},
+\code{Vector3d}, \code{Map}, \code{Ref}, \code{Block}, \code{Array}, the sparse
+types --- including spellings a hand-maintained list would have missed.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.4cm}@{}}
+\toprule
+\textbf{Backend} & \textbf{Behaviour} \\
+\midrule
+\lang{python} & Emits \code{\#include <pybind11/eigen.h>}; the types bind
+  \textbf{natively as numpy arrays}, both directions, matrices included. No
+  adapter, no copy where the layout allows a view. \\
+\addlinespace
+\lang{nanobind} & Same, through \code{<nanobind/eigen/dense.h>}. (Sparse is not
+  emitted --- \code{<nanobind/eigen/sparse.h>} costs compile time a rare
+  signature does not justify.) \\
+\addlinespace
+every other backend & \textbf{Skips} the member. Deliberate, and an improvement:
+  a skipped method is honest, a bound one that always throws is not. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Two practical notes: Eigen must be on the include path of the generated binding
+(it already is if \field{user\_include} lists it, which it must anyway for the
+bound headers to compile), and the caster header is only emitted when a bound
+signature actually names such a type --- so declaring \field{interop} on a
+library that never exposes one costs nothing.
+
+\subsection{Reaching the caster-less backends}
+
+\lang{node}, \lang{wasm} and \lang{lua} have no caster to lean on, so on their
+own they skip every Eigen-typed member. Give them the flat array by
+\textbf{also} registering the concrete type as a sequence:
+
+\begin{lstlisting}[style=json]
+"interop":   ["eigen"],
+"sequences": [{ "type": "Eigen::VectorXd" }]
+\end{lstlisting}
+
+The IR then carries both marks, and each backend picks:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.4cm}@{}}
+\toprule
+\lang{python} / \lang{nanobind} & The \textbf{caster wins} --- still numpy,
+  still no copy. A dual-marked type costs them nothing. \\
+\lang{node} / \lang{wasm} / \lang{lua} & Bind through the \textbf{sequence
+  adapter}: in, out and back through a \code{std::vector<double>} boundary.
+  Scripts see a plain array. \\
+\lang{typescript} & Declares \code{number[]}, matching what those runtimes hand
+  out. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{1-D only.} \code{MatrixXd} has no useful reading as a sequence ---
+register it under \field{matrices} instead, which splits the backends exactly
+the same way:
+
+\begin{lstlisting}[style=json]
+"interop":   ["eigen"],
+"sequences": [{ "type": "Eigen::VectorXd" }],
+"matrices":  [{ "type": "Eigen::MatrixXd" }]
+\end{lstlisting}
+
+covers both shapes, in both directions, on every expanded backend.
+
+\section{Two standard types that need no declaration}
+
+Nothing to write in the manifest for these. They are here because a factory API
+tends to name both at once, and until recently either one made a signature
+quietly unbindable on the caster-less backends:
+
+\begin{lstlisting}[style=cpp]
+std::shared_ptr<Mesh> compile_file(const std::filesystem::path &input);
+\end{lstlisting}
+
+\subsection*{\code{std::filesystem::path} marshals as a string}
+
+It is described as \code{kind: "string"} with an \code{is\_path} flag.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.4cm}@{}}
+\toprule
+\lang{python} / \lang{nanobind} & \textbf{Native}, through
+  \code{<pybind11/stl/filesystem.h>} / \code{<nanobind/stl/filesystem.h>} ---
+  callers pass a \code{str} \emph{or} any \code{os.PathLike}, and a returned
+  path comes back as \code{pathlib.Path}. \\
+\lang{node} / \lang{wasm} / \lang{lua} & Through the same copy adapter the
+  foreign containers use: the boundary declares \code{std::string}, the emitted
+  code builds a path from it and calls \code{.string()} on the way back. \\
+\lang{typescript} & Declares \code{string}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{\code{std::shared\_ptr<T>} crosses in the return direction}
+
+Which is where a factory needs it. The pointee \code{T} must itself be a bound
+class.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.4cm}@{}}
+\toprule
+\lang{python} & \code{py::class\_<T, std::shared\_ptr<T>>} --- the holder is
+  declared automatically for every pointee the module hands out. \\
+\lang{nanobind} & Native, through \code{<nanobind/stl/shared\_ptr.h>}. \\
+\lang{wasm} & The class registration gains
+  \code{.smart\_ptr<std::shared\_ptr<T>>("T\_sp")}, and only for classes that
+  actually travel that way. \\
+\lang{lua} & Native --- sol2's own \code{unique\_usertype\_traits} handles it. \\
+\lang{node} & The JS object \textbf{adopts} the pointer: a third ownership mode
+  in the wrapper, next to ``owns'' and ``aliases a member of a pinned parent''.
+  The C++ object lives as long as the JS handle does. \\
+\lang{typescript} & Declares the \emph{pointee} (\code{Doc}), not
+  \code{shared\_ptr}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Two limits:
+
+\begin{itemize}
+  \item \textbf{Returns only.} A \code{shared\_ptr<T>} \emph{parameter} stays
+    skipped: converting an incoming script object would mean manufacturing a
+    control block over memory the binding does not own --- a double-free waiting
+    to happen. Take \code{const T\&}.
+  \item \textbf{\lang{node}: untrampolined pointees only.} A class with virtual
+    methods is wrapped as its trampoline subclass, and the adopting wrapper
+    stores a \code{T*}; reading one as the other is undefined, so such a return
+    stays skipped there. The other backends have no such restriction.
+\end{itemize}
+
+Both work with a non-copyable \code{T} --- which is the point, since a class
+handed out by a factory usually is one.
+
+\section{Deciding what you need}
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{6.4cm}L{7.0cm}@{}}
+\toprule
+\textbf{Your signature names\ldots} & \textbf{Write} \\
+\midrule
+your own \code{Vec<T>} template & \code{"sequences": ["my::Vec"]} \\
+\code{Eigen::VectorXd}, Python only & \code{"interop": ["eigen"]} \\
+\code{Eigen::VectorXd}, everywhere &
+  \code{"interop"} + \code{"sequences": [\{"type": "Eigen::VectorXd"\}]} \\
+\code{Eigen::MatrixXd}, everywhere &
+  \code{"interop"} + \code{"matrices": [\{"type": "Eigen::MatrixXd"\}]} \\
+a 2-D grid of your own & \code{"matrices": ["my::Grid"]} \\
+\code{std::filesystem::path} & nothing \\
+\code{std::shared\_ptr<Bound>} returned & nothing \\
+a \code{std::function} parameter & nothing will help --- the member is skipped,
+  with a reason. Add an \field{extensions} wrapper if you need it. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+When in doubt, generate and read \code{coverage.json}: it names every type that
+failed a gate, and which one.

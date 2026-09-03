@@ -1,0 +1,270 @@
+\chapter{What rosetta is}
+\label{ch:what}
+
+\section{The problem, stated once}
+
+Exposing a C++ library to another language is normally paid for once per
+destination. A pybind11 module for Python. An N-API layer for Node. A sol2
+usertype for Lua. A P/Invoke shim for C\#. A moc-annotated hierarchy for a Qt
+panel. A JSON route table for a REST service.
+
+Look at what those files actually contain. Here is one method, five times:
+
+\begin{lstlisting}[style=cpp]
+double Grid::at(int i, int j) const;
+\end{lstlisting}
+
+\begin{lstlisting}[style=cpp]
+py::class_<Grid>(m, "Grid").def("at", &Grid::at);                 // pybind11
+ut["at"] = &Grid::at;                                             // sol2
+exports.Set("at", Napi::Function::New(env, wrap_at));             // N-API
+emscripten::class_<Grid>("Grid").function("at", &Grid::at);        // embind
+[DllImport("grid")] static extern double Grid_at(IntPtr h, int i, int j);
+\end{lstlisting}
+
+Every one of those restates, in a different notation, something the C++
+compiler already knows: that \code{Grid} has a member called \code{at}, that it
+takes two \code{int}s, that it returns a \code{double}, that it does not
+mutate. The information is not missing. It is simply not reachable from
+anywhere except the compiler.
+
+And the cost is not the initial write --- it is the \emph{derivative}. Add a
+parameter to \code{at} and five files are now wrong, in five languages, and
+four of them will not tell you until run time.
+
+\section{The idea}
+
+C++26 static reflection (P2996) makes that information reachable from inside
+C++ itself. A program can ask, at its own compile time, what members a type
+has, what their types are, whether they are public, whether they are virtual.
+
+Rosetta does exactly one thing with that: it reads your headers \emph{once},
+through reflection, into a target-neutral intermediate representation, and then
+\emph{projects} that representation into as many bindings as you asked for.
+
+\begin{center}
+\begin{tikzpicture}[
+  node distance=6mm,
+  box/.style={draw,rounded corners=2pt,align=center,font=\small,inner sep=5pt,minimum height=8mm},
+  user/.style={box,fill=blue!6,draw=rosettablue},
+  tool/.style={box,fill=orange!8,draw=rosettaorange},
+  outbox/.style={box,fill=black!4,draw=black!35,dashed},
+  arr/.style={-{Stealth[length=2mm]},draw=black!55}
+]
+\node[user] (h) {your headers\\\scriptsize unmodified};
+\node[user,below=of h] (m) {\texttt{manifest.json}\\\scriptsize what to bind};
+\node[tool,right=14mm of $(h)!0.5!(m)$] (r) {reflection\\walk};
+\node[outbox,right=12mm of r] (ir) {IR\\\scriptsize target-neutral};
+\node[outbox,above right=2mm and 12mm of ir] (a) {\texttt{bindings/python}};
+\node[outbox,right=12mm of ir] (b) {\texttt{bindings/node}};
+\node[outbox,below right=2mm and 12mm of ir] (c) {\texttt{bindings/\ldots}};
+\draw[arr] (h) -- (r);
+\draw[arr] (m) -- (r);
+\draw[arr] (r) -- (ir);
+\draw[arr] (ir) -- (a);
+\draw[arr] (ir) -- (b);
+\draw[arr] (ir) -- (c);
+\end{tikzpicture}
+\end{center}
+
+You declare \emph{what} to bind. You never declare \emph{how}.
+
+\section{What you write}
+
+Two things, and one of them you already have.
+
+The header stays exactly as it is:
+
+\begin{lstlisting}[style=cpp]
+// my_lib/person.h
+#include <string>
+
+struct Person {
+    std::string name;
+    int         age = 0;
+    std::string id;
+    std::string greet(const std::string &salutation) const;
+};
+\end{lstlisting}
+
+The manifest is the only new file:
+
+\begin{lstlisting}[style=json]
+{
+  "user_include": "../my_lib",
+  "rosetta_include": "/path/to/rosetta/include",
+  "targets": [
+    { "lang": "python", "name": "person_py" },
+    { "lang": "node",   "name": "person_js" }
+  ],
+  "classes": [
+    { "name": "Person", "header": "person.h" }
+  ]
+}
+\end{lstlisting}
+
+Then one command:
+
+\begin{lstlisting}[style=sh]
+rosetta_gen --build manifest.json
+\end{lstlisting}
+
+and \code{bindings/python} and \code{bindings/node} exist, compiled, with
+\code{Person} in both --- its three fields as properties, its method as a
+method, its constructors as constructors.
+
+\section{What comes out without being asked for}
+
+The manifest above names one class. Reflection supplies the rest of it:
+
+\begin{itemize}
+  \item \textbf{Public fields}, as read/write properties with per-backend
+    getters and setters.
+  \item \textbf{Public methods}, instance and \code{static} alike.
+  \item \textbf{Constructors} --- every overload, not just the default one.
+  \item \textbf{Inheritance}. Public base fields and methods are flattened into
+    the derived binding; a derived declaration shadows the base one, and a
+    virtual diamond collapses to a single member. Virtual methods are flagged,
+    so backends that can generate trampolines do.
+  \item \textbf{Overload sets}. The whole set reaches the IR; what each target
+    does with it depends on whether its runtime can dispatch on argument types
+    (Chapter~\ref{ch:coverage}).
+  \item \textbf{Enums}, both plain and scoped, with their enumerators.
+  \item \textbf{Nested user types and \code{std::vector}}, marshalled across
+    the boundary --- a \code{Surface} returning \code{std::vector<Triangle>}
+    works without a line about \code{Triangle} beyond listing it.
+\end{itemize}
+
+Free functions are the one thing you must name, because a namespace has no
+member list to enumerate --- you list them in the manifest, still without
+touching the header (Section~\ref{sec:functions}).
+
+\section{What you get out}
+
+One self-contained project per target, under \code{bindings/}:
+
+\begin{lstlisting}[style=plain]
+bindings/
+  python/    auto_pybind.cpp      CMakeLists.txt  pyproject.toml  make_wheel.py
+  node/      auto_napi.cpp        CMakeLists.txt  package.json
+  wasm/      auto_emscripten.cpp  CMakeLists.txt
+  typescript/ person.d.ts
+  coverage.json
+\end{lstlisting}
+
+Each is an ordinary CMake (or npm, or emcmake) project. Nothing in it refers to
+rosetta at run time; nothing in it needs reflection to compile. That last point
+is worth its own section.
+
+\section{Reflection-free by construction}
+\label{sec:reflection-free}
+
+Every compiled backend \emph{fully expands} what it found. There are no splices
+left in the output, no \code{<experimental/meta>}, no trace that reflection was
+ever involved --- just explicit pybind11 / N-API / embind / sol2 / jlcxx calls,
+or, for the \lang{dynamic} target, aggregate-initialised tables.
+
+The consequence is the one that makes rosetta usable in practice:
+
+\begin{note}
+Reflection runs \emph{once}, on the generation host. The machine that builds
+the generated binding needs an off-the-shelf toolchain --- plain Clang, GCC,
+MSVC, a stock emsdk, a stock Qt~6. It does not need a C++26 compiler, and it
+does not need rosetta.
+\end{note}
+
+So the workflow for a project whose CI runs on a normal compiler is: generate
+on one machine that has the fork, commit or ship the generated tree, and build
+it anywhere.
+
+Two targets are exceptions and are marked as such throughout: \lang{rest} and
+\lang{json} emit code that still splices reflections, so those two --- and only
+those two --- need the C++26 toolchain at their own build time.
+
+\section{The nineteen targets}
+
+\begin{center}
+\small
+\begin{tabular}{@{}llL{5.4cm}@{}}
+\toprule
+\textbf{Kind} & \textbf{\code{lang}} & \textbf{Output} \\
+\midrule
+Scripting  & \lang{python}     & pybind11 extension module \\
+           & \lang{nanobind}   & nanobind extension module \\
+           & \lang{node}       & N-API native addon \\
+           & \lang{wasm}       & Emscripten / embind module \\
+           & \lang{lua}        & sol2 module, \code{require}-able \\
+           & \lang{julia}      & CxxWrap.jl / jlcxx shared module \\
+\addlinespace
+Managed    & \lang{csharp}     & C-ABI shared library + P/Invoke wrappers \\
+           & \lang{java}       & C-ABI + handle-backed FFM wrappers \\
+\addlinespace
+User inter- & \lang{qt}        & Qt Widgets property/method inspector \\
+faces      & \lang{qml}        & QML / QtQuick inspector \\
+           & \lang{imgui}      & Dear ImGui inspector application \\
+\addlinespace
+Services   & \lang{rest}       & cpp-httplib JSON server + browser client \\
+           & \lang{openapi}    & OpenAPI 3.1 specification \\
+           & \lang{json}       & nlohmann (de)serialisation \\
+\addlinespace
+Documents  & \lang{typescript} & ambient \code{.d.ts} declarations \\
+           & \lang{markdown}   & API reference document \\
+           & \lang{html}       & styled API reference page \\
+           & \lang{paraview}   & ParaView Server Manager plugin XML \\
+\addlinespace
+Metadata   & \lang{dynamic}    & the IR as runtime data (Chapter~\ref{ch:dynamic}) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The full table, with what each one needs to build, is
+Appendix~\ref{app:targets}. The last row is not a language binding at all and
+is the subject of its own chapter.
+
+\section{Annotations are optional}
+
+Reflection binds the class. \emph{Annotations} enrich it --- a docstring, a
+numeric range enforced at the boundary, a read-only property, a UI hint that
+turns a field into a slider:
+
+\begin{lstlisting}[style=cpp]
+[[= rosetta::doc{"Max solver iterations"}, = rosetta::range{0, 200},
+   = rosetta::widget::slider ]]
+int maxIter{100};
+\end{lstlisting}
+
+They are never required, they never change the C++ behaviour of your type, and
+you add them only where they pay off. If you would rather not touch the header
+at all --- because it is a third party's, or because you want the generated
+binding to build on a stock compiler --- the same metadata goes in a JSON
+side-car instead, wired by one manifest field. Chapter~\ref{ch:annotations}
+covers both forms.
+
+\section{What rosetta is not}
+
+Being clear about this early saves disappointment later.
+
+\begin{itemize}
+  \item \textbf{It is not a C++ parser.} It does not read your headers as text.
+    A compiler does, and rosetta asks the compiler. The one place a heuristic
+    scan exists --- \code{rosetta\_gen --init} over a source tree --- is
+    explicitly a starting point you then edit.
+  \item \textbf{It is not a runtime.} Nothing rosetta ships is loaded by your
+    finished binding. The generated code depends on pybind11, or on N-API, or
+    on sol2 --- not on rosetta.
+  \item \textbf{It does not bind everything.} Some C++ has no shape in the
+    destination language: a \code{std::function} parameter, a raw pointer
+    return, an operator with no name to bind to. Those members are
+    \emph{skipped}, never fatal, and every skip is recorded with a reason in
+    \code{coverage.json} (Chapter~\ref{ch:coverage}). A binding that silently
+    loses a method is the failure mode this design exists to avoid.
+  \item \textbf{It is not finished.} It is a prototype tracking proposals that
+    are themselves not final. See the status note in the Preface.
+\end{itemize}
+
+\section{Where to go next}
+
+Chapter~\ref{ch:pipeline} explains why generating a binding is a
+\emph{pipeline} rather than a command --- which is the one piece of rosetta's
+shape that is not obvious, and the piece that explains most of the rest.
+If you would rather see it work first, skip to Chapter~\ref{ch:first}.

@@ -112,6 +112,11 @@
 //                                                   //       {"header": "Gmres.h"} ] }
 //     "targets": [                                  // shared by every class
 //       { "lang": "python", "name": "pygeom" },     // per-target module name
+//       { "lang": "nanobind", "name": "nbgeom",     // optional per-target
+//         "wheel": true,                            //   packaging: build a wheel
+//         "wheel_dir": "./dist" },                  //   on every --build, into
+//                                                   //   this dir (python /
+//                                                   //   nanobind only)
 //       { "lang": "wasm-expanded",                  // optional per-target linker
 //         "link_options": ["-lnodefs.js"] },        //   flags (only THIS target's
 //       "node"                                      //   link line — flags are
@@ -321,6 +326,26 @@ struct TargetEntry {
     std::string requires_python;
     std::string napi_version;
     std::string node_engine;
+
+    // Optional packaging, for the two backends that emit a make_wheel.py
+    // (python / nanobind — any other lang carrying these is an error):
+    //
+    //   "wheel"     — build a wheel for THIS target on every --build, without
+    //                 passing --wheel each time. A project that always ships
+    //                 says so once. The flag still wins and only ever toward
+    //                 packaging MORE, so a target saying false cannot disarm a
+    //                 --wheel that was typed.
+    //   "wheel_dir" — where this target's wheels go instead of its own dist/,
+    //                 absolute. Implies `wheel`, exactly as --wheel-dir does.
+    //                 --wheel-dir on the command line overrides it.
+    //
+    // Per-target rather than top-level because the two python backends
+    // genuinely differ here: nanobind emits one abi3 wheel covering every
+    // CPython 3.12+, pybind11 one wheel per version, and `python` above already
+    // pins which interpreter each is tagged for. Sharing one output directory
+    // is still safe — each make_wheel.py repairs only the wheels it produced.
+    bool        wheel = false;
+    std::string wheel_dir;
 };
 
 struct Manifest {
@@ -360,13 +385,7 @@ struct Manifest {
     // absolute. A target's own entry overrides it.
     std::string out_dir;
 
-    // Optional "wheel": build a Python wheel for every python-expanded /
-    // nanobind-expanded target during `--build`, without passing --wheel each
-    // time. The flag still works and still wins — a manifest saying false (or
-    // saying nothing) cannot turn one off. "wheel_dir" is the same default for
-    // --wheel-dir: one directory collecting every backend's wheels.
-    bool     wheel = false;
-    fs::path wheel_dir;
+    // NOTE: `wheel` / `wheel_dir` are per-TARGET — see TargetEntry.
     std::vector<std::string>   plugins;   // extra .cpp sources (absolute) for the driver
     std::vector<std::string>   user_sources; // user .cpp/.c sources (absolute) compiled into the bindings
     std::vector<std::string>   compile_definitions; // "NAME"/"NAME=VALUE" defs for driver + bindings

@@ -1,0 +1,211 @@
+\chapter{The dynamic object model}
+\label{ch:dynamic}
+
+Every backend so far spends the reflection result on \emph{framework calls}:
+\code{py::class\_<Mesh>().def("at", \ldots)}, an N-API property descriptor, a
+sol2 usertype. The information is consumed at generation time, and what survives
+is code for one specific runtime.
+
+The \lang{dynamic} backend spends it on \textbf{data instead}. It writes the IR
+back out as static tables, so the answer to ``what does this class have'' is
+still available at run time --- to a caller that was never compiled against your
+headers.
+
+\section{What it emits}
+
+\begin{lstlisting}[style=plain]
+bindings/dynamic/auto_dynamic.h     declares <lib>::register_all()  -- idempotent
+bindings/dynamic/auto_dynamic.cpp   the tables
+bindings/dynamic/inspect.cpp        a registry walker, for free
+bindings/dynamic/CMakeLists.txt     a static library, <lib>_dynamic
+\end{lstlisting}
+
+\code{auto\_dynamic.cpp} is the only file that includes your header. It is
+ordinary C++20: the metadata is data, so nothing here needs reflection to
+compile.
+
+\section{Using it}
+
+\begin{lstlisting}[style=cpp]
+#include <rosetta/dynamic.h>     // the runtime -- ordinary C++20
+#include "auto_dynamic.h"        // the generated tables (scene.h is NOT included)
+
+scene::register_all();           // publish the tables into the registry, once
+
+for (const rosetta::dyn::MetaClass *k : rosetta::dyn::registry().classes())
+    for (std::size_t i = 0; i < k->n_fields; ++i)
+        std::cout << k->qualified << "::" << k->fields[i].name << '\n';
+        // ... plus .type, .doc, .readonly, .range, .choices
+        //     and the .get / .set thunks
+\end{lstlisting}
+
+Note what the consumer does \emph{not} do: it never includes \code{scene.h}, and
+it names no bound type. That is the property everything else in this chapter
+follows from.
+
+\section{What the tables look like}
+
+One \code{TypeDesc} per distinct type, shared by address; one \code{MetaField} /
+\code{MetaMethod} / \code{MetaCtor} array per class; one \code{MetaClass} tying
+them together. Straight from generated output:
+
+\begin{lstlisting}[style=cpp]
+TypeDesc td_0{.kind = Kind::number, .spelling = "double", .integral = false};
+TypeDesc td_6{.kind = Kind::vector, .spelling = "std::vector<double>",
+              .element = &td_0};
+
+const MetaField k_scene__Vec3_fields[] = {
+    {.name = "x", .type = &td_0, .doc = "X component",
+     .annotations = k_scene__Vec3_x_anns, .n_annotations = 2,
+     .get = +[](const ObjectRef &self, const ArgList &) {
+         return make_any(&td_0, static_cast<scene::Vec3 *>(self.ptr)->x);
+     },
+     .set = +[](const ObjectRef &self, const ArgList &a) {
+         static_cast<scene::Vec3 *>(self.ptr)->x = value_cast<double>(a[0]);
+         return Any::none();
+     }},
+\end{lstlisting}
+
+Three properties of that shape are deliberate:
+
+\begin{itemize}
+  \item \textbf{Aggregate initialisers of trivially-constructible data} ---
+    \code{const char *}, pointer-and-count spans, function pointers. No
+    \code{std::string}, no \code{std::vector}, no dynamic initialisation. A
+    500-class library's metadata lands in \code{.rodata}, not in a static
+    constructor that runs at load.
+  \item \textbf{One captureless lambda per member}, decaying to a plain function
+    pointer:
+    \code{using Thunk = Any (*)(const ObjectRef \&self, const ArgList \&args)}.
+    That is the \emph{only} callable shape in the model --- a field getter, a
+    field setter, an instance method, a static method and a free function all
+    reduce to it. \code{self} is the receiver, default-constructed when there
+    is not one.
+  \item \textbf{\code{TypeDesc} is structural, not an identity.}
+    \code{std::type\_index} answers ``are these the same type''; a UI and a
+    marshaller need ``what is \emph{inside} it'', so \code{element} recurses and
+    \code{vector<vector<Foo>>} is describable.
+\end{itemize}
+
+\section{Why \code{register\_all()} exists}
+
+Two classes can name each other's types, so \code{TypeDesc::cls} cannot be
+filled during static initialisation without an ordering you have no way to
+guarantee. The generated function adds every class, enum and function to the
+registry and then calls \code{link()} to resolve those back-pointers:
+
+\begin{lstlisting}[style=cpp]
+void register_all(rosetta::dyn::Registry &r) {
+    r.add_class(&k_scene__Vec3);
+    r.add_class(&k_scene__Mesh);
+    r.link();
+}
+\end{lstlisting}
+
+It is idempotent, and it is the one line a consumer must run before querying
+anything.
+
+\section{Calling by name}
+
+\code{Any} is the value type crossing the boundary, and its \textbf{canonical
+representation} is what makes a single generic wrapper possible: whatever the
+C++ said, the box holds exactly one of \code{bool}, \code{long long},
+\code{double}, \code{std::string}, \code{std::vector<Any>} or an
+\code{ObjectRef}.
+
+So a caller reads a number with \code{as\_number()} without caring whether the
+signature said \code{int}, \code{size\_t} or \code{uint32\_t} --- and changing
+one for the other in your library is not a break for the wrapper.
+
+\code{resolve()} scores every candidate of a name against the actual arguments
+on a deliberately small ladder --- \code{exact} / \code{promote} /
+\code{convert} / \code{none} --- rather than reproducing C++'s conversion
+lattice. The question from a dynamically typed host is ``did the user mean this
+overload'', not ``which standard conversion sequence is shorter''.
+
+An equal best score is reported as \emph{ambiguous} rather than silently picked,
+and a failure names every candidate and why it lost:
+
+\begin{lstlisting}[style=plain]
+Mesh::at(std::string) matched no overload of 2:
+  at(int) -- argument 1 ("nope") is not a int
+  at(int, int) -- takes 2 argument(s), 1 given
+\end{lstlisting}
+
+\section{Two consequences worth knowing}
+
+\subsection*{What cannot be marshalled is described, not deleted}
+
+A member whose type no gate claimed keeps its entry, with a null thunk and a
+stated reason:
+
+\begin{lstlisting}[style=cpp]
+.skip_reason = "callback: a std::function parameter needs a foreign-callable adapter"
+\end{lstlisting}
+
+So a user interface can grey it out instead of the member silently vanishing.
+This is the same information \code{coverage.json} carries, available at run time
+rather than at review time.
+
+\subsection*{Ownership is explicit}
+
+\code{ObjectRef::owner} is non-null when the reference owns the object. A getter
+returning \code{T\&} can hand back a \emph{borrowed} handle carrying the
+parent's owner --- which pins the parent and closes the dangling-sub-object hole
+that a raw-pointer return has.
+
+\section{What it buys}
+
+Relative to the language backends:
+
+\begin{itemize}
+  \item \textbf{Overloads come back.} The metadata keeps the whole overload set
+    and scores it against the actual arguments, so the name-keyed targets'
+    first-only limit (Chapter~\ref{ch:coverage}) does not apply --- and a failed
+    call can name every candidate it rejected, with the reason.
+  \item \textbf{UI by query, not by codegen.} A property inspector is a walk
+    over \code{registry()}: \code{label} to caption, \code{doc} to tooltip,
+    \code{range} to slider bounds, \code{readonly} to a disabled row,
+    \code{combobox} and enumerators to a drop-down, \code{button} to an action
+    row. Annotations are enforced once, in the core, instead of per backend.
+  \item \textbf{Lifetime is explicit}, as above.
+\end{itemize}
+
+\section{What it costs}
+
+Every access is a linear name lookup plus a scoring pass.
+
+That is the right price for menus, property panels, commands and scripting
+glue. It is the wrong price for bulk data --- pulling a mesh across boxes every
+coordinate into an \code{Any}.
+
+\begin{note}
+Cache the resolved \code{MetaMethod}: the pointer is stable for the process.
+And keep an expanded binding for hot paths --- the two projections are not
+exclusive, and a library that emits both gets the property sheet from one and
+the throughput from the other.
+\end{note}
+
+\section{When to reach for it}
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{6.4cm}L{7.0cm}@{}}
+\toprule
+\textbf{You want\ldots} & \textbf{Use} \\
+\midrule
+Python/JS/Lua callers of your API & a language backend \\
+a property panel over your types & \lang{dynamic} + a walker, or the
+  \lang{qt} / \lang{qml} / \lang{imgui} backends \\
+a command console, a menu system, an undo stack keyed by member name &
+  \lang{dynamic} \\
+one scripting wrapper that works for \emph{any} library you have bound &
+  \lang{dynamic} + the \code{scriptable} preset (Chapter~\ref{ch:scriptable}) \\
+maximum throughput on a hot call & a language backend \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The worked example is \code{examples/dynamic}: one set of generated metadata
+driving a terminal interpreter \emph{and} a Qt viewer --- 3-D view, property
+panel, console --- neither of which names a single bound type.

@@ -65,9 +65,9 @@ static std::string render_example_manifest() {
     "build_type": "Release",
     "optimization": "-O2",
 
-    "//targets": "A target is a bare string (\"python\", uses module_name) or {\"lang\": ..., \"name\": ...}. The bindings are fully expanded, so they build with a stock compiler.",
+    "//targets": "A target is a bare string (\"python\", uses module_name) or {\"lang\": ..., \"name\": ...}. The bindings are fully expanded, so they build with a stock compiler. Per-target extras: \"link_options\" (this target's link line only), \"out_dir\" (where the built artifact is copied), the runtime pins \"python\"/\"requires_python\"/\"napi_version\"/\"node_engine\", and — on python/nanobind only — \"wheel\"/\"wheel_dir\" to build a redistributable wheel on every --build.",
     "targets": [
-        {"lang": "python",        "name": "mylib"},
+        {"lang": "python",        "name": "mylib", "wheel": true, "wheel_dir": "./dist"},
         {"lang": "node",          "name": "mylib"},
         {"lang": "wasm", "name": "mylib"},
         {"lang": "typescript",    "name": "mylib"},

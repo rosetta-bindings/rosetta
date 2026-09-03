@@ -1,0 +1,221 @@
+\chapter{Worked examples}
+\label{ch:examples}
+
+The repository carries eighteen runnable examples. This chapter is a guide to
+which one answers which question, followed by three walked through in enough
+detail to copy from.
+
+\section{The map}
+
+\begin{center}
+\small
+\begin{longtable}{@{}L{5.1cm}L{8.5cm}@{}}
+\toprule
+\textbf{Path} & \textbf{What it shows} \\
+\midrule
+\endhead
+\code{examples/manifest} &
+  Manifest-driven generation for \code{Person}, with no class modification. The
+  smallest complete case. \\
+\addlinespace
+\code{examples/annotate-manifest} &
+  Out-of-line annotations from an external JSON file, wired by the manifest's
+  \field{annotations} field. \\
+\addlinespace
+\code{examples/geom-lib} &
+  Manifest-driven bindings for a small geometry library --- nested types,
+  vectors. \\
+\addlinespace
+\code{examples/geom-expanded} &
+  Ten backends (\lang{python}, \lang{nanobind}, \lang{node}, \lang{wasm},
+  \lang{qt}, \lang{qml}, \lang{csharp}, \lang{java}, \lang{lua}, \lang{julia})
+  built with off-the-shelf toolchains, plus out-of-line annotations. The proof
+  of Section~\ref{sec:reflection-free}. \\
+\addlinespace
+\code{examples/dynamic} &
+  The \lang{dynamic} backend end to end: one set of generated metadata driving a
+  terminal interpreter \emph{and} a Qt viewer (3-D view, property panel,
+  console), neither naming a bound type. \\
+\addlinespace
+\code{examples/scriptable-model} &
+  The two-stage pipeline of Chapter~\ref{ch:scriptable}. \\
+\addlinespace
+\code{examples/plain-binding} &
+  One library, one manifest, four language bindings --- the base case, run
+  once. \\
+\addlinespace
+\code{examples/trampoline-python} &
+  Overriding C++ virtuals from Python: generated pybind11 trampolines from
+  \code{virtual\_spec}. \\
+\addlinespace
+\code{examples/trampoline-node} &
+  The same from JavaScript, with N-API trampolines. \\
+\addlinespace
+\code{examples/dynamic-lib} &
+  Linking the bindings against a pre-built library --- the \field{user\_lib}
+  case. \\
+\addlinespace
+\code{examples/moc} &
+  The moc-less signals/slots/properties demo built on \code{mini\_moc.h}. \\
+\addlinespace
+\code{examples/docgen} &
+  A reflection-driven Markdown / HTML reference generator. \\
+\addlinespace
+\code{examples/paraview} &
+  ParaView plugin property-panel XML from an annotated \code{vtkThreshold}
+  spec --- exercises every annotation feature. \\
+\addlinespace
+\code{examples/qt}, \code{examples/qml}, \code{examples/imgui} &
+  The three inspector backends, each building a form from a reflected struct.
+  \code{imgui} uses an \code{Algo.ann.json} side-car and builds with an
+  off-the-shelf C++20 compiler, dependencies auto-fetched. \\
+\addlinespace
+\code{examples/bindings/*} &
+  Hand-written reference backends --- pybind11, N-API, jlcxx, REST, embind.
+  What the generator emits, written by hand, for comparison. \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\section{The smallest case}
+
+\code{examples/manifest} is the one to read first. An unmodified
+\code{person.h}, a manifest of ten lines, and the pipeline. It is
+Chapter~\ref{ch:first} as a runnable directory.
+
+\section{A geometry library}
+
+\code{examples/geom-lib} is the first realistic shape: several classes, one
+returning a \code{std::vector} of another, an enum, and a free function.
+
+The two things to look at:
+
+\begin{itemize}
+  \item \textbf{Nested user types cross without being mentioned.} A
+    \code{Surface} method returning \code{std::vector<Triangle>} works because
+    \code{Triangle} is in \field{classes} --- not because anything says how to
+    convert it.
+  \item \textbf{One module per target, not one per class.} The generated
+    \code{pygeom} carries \code{Model}, \code{Point}, \code{Surface},
+    \code{Triangle} and \code{Kind} together.
+\end{itemize}
+
+\code{examples/geom-expanded} takes the same library and builds ten backends
+with stock toolchains --- no fork anywhere in the second pass. If you want to
+convince yourself (or a colleague) that the reflection-free claim is real, that
+is the directory to run.
+
+\section{The dynamic model, end to end}
+
+\code{examples/dynamic} is the most interesting example in the repository and
+the one that takes longest to appreciate.
+
+A small scene library --- \code{Vec3}, \code{Mesh}, and a \code{Relaxer} solver
+--- goes through the \lang{dynamic} backend once. Two entirely separate
+consumers then drive it:
+
+\begin{itemize}
+  \item a \textbf{terminal interpreter} that lists types, gets and sets fields,
+    and calls methods by name;
+  \item a \textbf{Qt viewer} with a 3-D view, a property panel and a console.
+\end{itemize}
+
+Neither names a single bound type. The property panel is a walk over
+\code{fields()}: \code{doc} becomes a tooltip, \code{range} becomes slider
+bounds, \code{combobox} becomes a drop-down.
+
+\subsection*{What adding a class costs}
+
+The example's own history is the argument. Adding \code{scene::Relaxer} ---
+tangential Laplacian relaxation, a genuine algorithm with tuning parameters and
+one method that runs for a while --- touched three files, \emph{all of them the
+library's own}:
+
+\begin{enumerate}
+  \item \code{scene.h}, to add the class;
+  \item \code{Mesh.ann.json}, for one new accessor's annotation;
+  \item one line of \code{manifest.json}.
+\end{enumerate}
+
+No consumer changed. Not the Qt viewer, not the interpreter, not any of the five
+scriptable drivers --- yet all of them gained it: the solver appeared in the
+type list, its parameters appeared in the property panel with their declared
+ranges, and its method appeared as a button.
+
+That is what ``UI by query rather than by codegen'' buys, stated as a diff.
+
+\section{Rosetta in the wild}
+
+Real libraries bound with rosetta, each from a single manifest and with no
+hand-written wrappers:
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{3.2cm}L{5.0cm}L{4.6cm}@{}}
+\toprule
+\textbf{Project} & \textbf{Bound library} & \textbf{Targets} \\
+\midrule
+\code{pmp-rosetta} & PMP --- polygon mesh processing (remeshing, smoothing,
+  subdivision, decimation) & Python, Node.js, WebAssembly, TypeScript \\
+\addlinespace
+\code{geogram-rosetta} & geogram --- geometry processing (reconstruction,
+  remeshing, parameterisation, booleans) & Python, Node.js, WebAssembly,
+  TypeScript, Lua \\
+\addlinespace
+\code{arch-rosetta} & Arch --- 3-D boundary-element geomechanics &
+  Python, Node.js, WebAssembly, TypeScript \\
+\addlinespace
+\code{cassini-rosetta} & Cassini --- FEM geomechanical restoration, through a
+  single high-level facade & Python, Node.js, WebAssembly, TypeScript \\
+\addlinespace
+\code{triax-rosetta} & Triax --- discrete-element triaxial compression &
+  Python, Node.js, WebAssembly \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The geogram manifest is the best worked reference for a difficult library: it
+uses \field{sequences} for \code{GEO::vector}, \field{extensions} to reach
+geometry behind raw-pointer accessors, \field{signature} to pick one overload of
+\code{mesh\_union}, \field{module\_init} for \code{GEO::initialize()},
+\field{generated\_headers} for the configured \code{version.h}, and
+\field{link\_options} for the wasm NODEFS mount --- in other words, nearly every
+field in Part~II, each for a reason you can see.
+
+\section{Extending a generated binding by hand}
+
+Everything under \code{bindings/} is regenerated output and must never be
+edited. When the generated binding misses something you need --- a helper the
+walker skips, a typed-array export for a renderer --- add it in a
+\textbf{separate hand-written file} compiled \emph{alongside} the generated
+source, from a small build of your own that lives outside \code{bindings/}.
+
+The binding frameworks accept several registration blocks per module, so your
+file contributes a second one. Nothing generated is touched, and regenerating
+never clobbers your extensions.
+
+\begin{lstlisting}[style=cpp]
+// viz_helpers.cpp -- compiled next to the generated auto_emscripten.cpp
+emscripten::val mesh_positions(const pmp::SurfaceMesh &mesh);  // Float32Array
+emscripten::val mesh_triangles(const pmp::SurfaceMesh &mesh);  // Uint32Array
+void triangulate_mesh(pmp::SurfaceMesh &m) { pmp::triangulate(m); }
+
+EMSCRIPTEN_BINDINGS(pmp_viz) {   // a second block; the generated one keeps its own
+    emscripten::function("mesh_positions", &mesh_positions);
+    emscripten::function("mesh_triangles", &mesh_triangles);
+    emscripten::function("triangulate_mesh", &triangulate_mesh);
+}
+\end{lstlisting}
+
+\begin{warn}
+Embind is the friendliest here because it accepts any number of
+\code{EMSCRIPTEN\_BINDINGS} blocks in one module. Backends with a single module
+entry point --- pybind11's \code{PYBIND11\_MODULE}, N-API's
+\code{NODE\_API\_MODULE} --- cannot add a second block to the \emph{same}
+module. There, ship your extras as a small companion module built the same way
+(it sees the same user headers and links the same library) and import both.
+\end{warn}
+
+Before reaching for this, check whether \field{extensions}
+(Section~\ref{sec:extensions}) covers your case: a free function taking
+\code{Cls\&} needs no build of your own and reaches every backend at once.

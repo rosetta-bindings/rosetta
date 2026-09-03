@@ -1,0 +1,187 @@
+\chapter{Troubleshooting}
+\label{app:trouble}
+
+\section{A method is missing from the binding}
+
+Read \code{bindings/coverage.json} first. It was written before anything was
+compiled, and it names every member that did not reach a backend, with a reason.
+The likely entries:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.0cm}@{}}
+\toprule
+\textbf{Reason} & \textbf{What to do} \\
+\midrule
+\code{overload\_not\_expressible} &
+  The target keys methods by name and this overload lost the tie. Wrap it in an
+  \field{extensions} entry under a distinct name, or reach it through the
+  dynamic model. \S\ref{sec:extensions} \\
+\addlinespace
+\code{unmarshalable\_signature} &
+  \code{detail} names the offending type. If it is a foreign container or an
+  Eigen type, Chapter~\ref{ch:types} is the fix. If it is a
+  \code{std::function} or a raw pointer, write an \field{extensions} wrapper
+  with a marshallable signature. \\
+\addlinespace
+\code{no\_identifier} &
+  An operator or conversion function. There is no name to bind to --- expose it
+  as a named extension method. \\
+\addlinespace
+\code{function\_template} &
+  A member template has no fixed parameter pack to splice. Add an explicit
+  non-template wrapper. \\
+\addlinespace
+\code{hidden\_by\_derived} &
+  C++ name hiding, honoured deliberately. Add \code{using Base::f;} to the
+  derived class if you want the base overloads visible. \\
+\addlinespace
+\code{sequence\_not\_adaptable} &
+  A registered sequence with no \code{std::vector} boundary adapter on this
+  backend. \\
+\addlinespace
+\code{extension\_has\_no\_member\_pointer} &
+  This backend dispatches through member pointers and cannot take extensions.
+  Expected on \lang{qt}, \lang{qml}, \lang{csharp}, \lang{java}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+If the member is not in \code{coverage.json} at all, it was not public, or its
+class is not in \field{classes}.
+
+\section{The generated driver does not compile}
+
+\subsection*{\code{no member named 'vec3' in namespace 'geom'}}
+
+A glob entry derived a class name from a file stem that names no such class.
+See the table in Section~\ref{sec:globs}: list the class explicitly, or add the
+header to \field{exclude}.
+
+\subsection*{An error inside a \field{signature} you wrote}
+
+The signature is spliced verbatim. Spell the types the way the header does,
+fully qualified. \code{rosetta\_gen} only checks its shape --- the types are the
+compiler's business.
+
+\subsection*{An error inside a \field{module\_init} statement}
+
+Same cause: those are spliced verbatim into the module entry point. Spell types
+qualified, and remember there are no arguments available at that point.
+
+\subsection*{The bound header sees a different class than the binding will}
+
+A configuration macro is missing from \field{compile\_definitions}. Those are
+emitted for the \emph{generator driver} as well as the binding targets precisely
+so the two cannot disagree --- if you passed the macro some other way, move it
+into the manifest.
+
+\section{A side-car annotation had no effect}
+
+\begin{itemize}
+  \item Did you \textbf{re-run \code{rosetta\_gen}}? The JSON is baked into
+    \code{bindings.h} at generation time. A rebuild of the binding alone will
+    not pick it up.
+  \item A key naming no member \emph{fails the build}, so a silent no-effect
+    usually means the annotation reached a backend that ignores it ---
+    \code{label} and \code{widget} are UI-only. See
+    Appendix~\ref{app:annotations}.
+  \item \code{widget::slider} without a \code{range} falls back to the default
+    editor. \code{widget::radio} without a \code{combobox} does nothing.
+\end{itemize}
+
+\section{The binding is slow}
+
+\begin{itemize}
+  \item Check the build type. Omitting \field{build\_type} now defaults to
+    \code{Release}, but a \code{-DCMAKE\_BUILD\_TYPE=Debug} on the command line
+    wins. An unoptimised pybind11 call costs roughly eight times an optimised
+    one.
+  \item If you are going through the dynamic model, every access is a linear
+    name lookup plus a scoring pass. Cache the resolved \code{MetaMethod}, and
+    keep an expanded binding for hot paths. \S\ref{ch:dynamic}
+  \item A foreign container crosses \emph{by copy} through a
+    \code{std::vector} boundary. For bulk data on the Python family, prefer
+    \field{interop} --- the numpy caster avoids the copy where the layout
+    allows.
+\end{itemize}
+
+\section{The module will not load}
+
+\begin{itemize}
+  \item \textbf{Missing shared library.} Every \field{user\_lib} \field{dir}
+    lands in \code{BUILD\_RPATH} and \code{INSTALL\_RPATH}, so this usually
+    means a dependency was not listed. Add it --- and remember the order is the
+    link order.
+  \item \textbf{A wasm target linking a native library.} Every \field{user\_lib}
+    entry is taken as \code{lib<name>.a} built with the \emph{same} emsdk. A
+    native \code{.so} cannot enter a wasm module.
+  \item \textbf{Something the library needs was never initialised.} That is what
+    \field{module\_init} is for. \S\ref{sec:moduleinit}
+\end{itemize}
+
+\section{The pipeline produced stale output}
+
+\begin{itemize}
+  \item \textbf{A generator binary from a previous emit.} If the emitted sources
+    changed but the old \code{generator} still sits next to the output
+    directory, running it re-emits the old bindings. The tool prints a rebuild
+    note --- believe it.
+  \item \textbf{A \field{user\_sources} glob.} Globs expand when
+    \code{rosetta\_gen} runs. A new \code{.cpp} does not appear by itself.
+  \item \textbf{Stale CMake caches} after a toolchain or layout change. Use
+    \code{--fresh}.
+\end{itemize}
+
+\section{\code{--build} skipped a backend}
+
+That is by design: a missing toolchain is a skip with a note, not an error.
+The summary line says which tool was not found.
+
+\begin{lstlisting}[style=plain]
+   wasm        SKIPPED (emcc not found -- activate emsdk)
+\end{lstlisting}
+
+A backend that \emph{failed} is reported differently, and \code{--build} exits
+non-zero after trying the rest.
+
+\section{The wrong Python was used}
+
+\code{--cmake-arg -DPython\_EXECUTABLE=\ldots} \textbf{does not work} --- the
+generated CMake sets that variable with \code{CACHE \ldots\ FORCE} after
+probing. Pin the interpreter on the target instead:
+
+\begin{lstlisting}[style=json]
+{ "lang": "nanobind", "python": "3.11", "requires_python": ">=3.10" }
+\end{lstlisting}
+
+This also fixes a wheel tagged for the wrong version, since the wheel is built
+by whichever interpreter runs \code{make\_wheel.py}.
+
+\section{\code{--clean} did not remove something}
+
+By design in three cases: the manifest is never removed; a folder whose
+\code{CMakeLists.txt} lacks the \code{Generated by rosetta} stamp is never
+touched; and only the per-backend folders \emph{the manifest declares} are
+removed, so anything else parked under \code{bindings/} survives.
+
+\begin{lstlisting}[style=plain]
+not removing gen (no rosetta_gen marker in its CMakeLists)
+\end{lstlisting}
+
+\section{A variable in the manifest did not expand}
+
+Only a name declared in \field{variables} is substituted. \code{\$ENV\{HOME\}}
+and any undeclared \code{\$\{\ldots\}} are CMake's and pass through untouched
+--- and a \emph{misspelt} name is indistinguishable from those, so it passes
+through silently and surfaces as a path that does not exist.
+
+\code{\$\{NAME\}} rather than \code{\$NAME} is worth preferring: \code{\$Px}
+is one name, \code{Px}.
+
+\section{Reporting something}
+
+The two artifacts that make a report actionable are \code{bindings/coverage.json}
+and the manifest. Between them they say what rosetta thought your API was and
+what it decided to do about it, which is almost always where the disagreement
+is.

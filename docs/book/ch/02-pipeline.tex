@@ -1,0 +1,209 @@
+\chapter{The pipeline, and why it has that shape}
+\label{ch:pipeline}
+
+Binding a library with rosetta is a \emph{pipeline} rather than a single
+command. That is not an implementation choice --- it is the only shape the
+problem admits. This chapter explains why, because almost every surprise in
+later chapters resolves back to it.
+
+\section{The constraint everything follows from}
+
+C++26 reflection answers questions \textbf{at the compile time of a program
+that includes your headers}. It cannot be queried from a script, from a
+configuration file, or from a build system. Only from C++, being compiled, with
+your types in scope.
+
+So to learn the shape of your types, something has to \textbf{compile}. To turn
+those answers into files on disk, that something has to \textbf{run}.
+
+\begin{center}
+\emph{Compile, then run.} Everything below is that sequence, plus one step
+before it and one after.
+\end{center}
+
+\section{The five steps}
+
+\begin{center}
+\begin{tikzpicture}[
+  node distance=5mm,
+  b/.style={draw,rounded corners=2pt,align=center,font=\scriptsize,inner sep=4pt,text width=23mm,minimum height=9mm},
+  user/.style={b,fill=blue!6,draw=rosettablue},
+  tool/.style={b,fill=orange!8,draw=rosettaorange},
+  gen/.style={b,fill=black!4,draw=black!35,dashed},
+  fin/.style={b,fill=green!7,draw=green!45!black},
+  arr/.style={-{Stealth[length=2mm]},draw=black!55,font=\scriptsize}
+]
+\node[user] (m) {\texttt{manifest.json}\\+ your headers};
+\node[tool,right=9mm of m] (rg) {\textbf{0}\ \texttt{rosetta\_gen}\\\scriptsize no reflection};
+\node[gen,right=9mm of rg] (g) {\textbf{1}\ \texttt{gen/}\\driver source};
+\node[tool,right=9mm of g] (drv) {\texttt{./generator}\\\scriptsize reflection HERE};
+\node[gen,below=8mm of drv] (bind) {\textbf{2}\ \texttt{bindings/}\\one project per target};
+\node[fin,left=9mm of bind] (built) {\textbf{3}\ compiled\\\texttt{.so .node .wasm}};
+\node[fin,left=9mm of built] (load) {\textbf{4}\ \texttt{import}\\\texttt{require}};
+\draw[arr] (m) -- (rg);
+\draw[arr] (rg) -- (g);
+\draw[arr] (g) -- node[above,align=center]{cmake\\build} (drv);
+\draw[arr] (drv) -- (bind);
+\draw[arr] (bind) -- node[above]{cmake} (built);
+\draw[arr] (built) -- (load);
+\end{tikzpicture}
+\end{center}
+
+\subsection*{Step 0 --- build \code{rosetta\_gen}}
+
+\code{rosetta\_gen} is a JSON-to-C++ text templater. It does no reflection at
+all and builds with an off-the-shelf C++17 compiler. You build it once.
+
+It exists so that what \emph{you} write is a manifest and not a driver program.
+Given \code{manifest.json} it emits three files: a \code{<name>.cpp} containing
+a \code{main()} that reflects, a \code{bindings.h} with your types (and any
+out-of-line annotations) baked in, and a \code{CMakeLists.txt} that knows where
+the reflection toolchain lives.
+
+\emph{Your library:} untouched. \code{rosetta\_gen} never opens your headers.
+It only copies their names into the driver it writes.
+
+\subsection*{Step 1 --- compile and run the driver}
+
+Three commands, because ``compile then run'' is three things --- emit the
+program, build it, execute it:
+
+\begin{lstlisting}[style=sh]
+rosetta_gen manifest.json gen     # emit the driver source
+cmake -S gen -B gen/build         # COMPILE it -- reflection happens HERE
+cmake --build gen/build
+./generator bindings              # RUN it -- writes one project per target
+\end{lstlisting}
+
+During the \emph{compile}, clang-p2996 evaluates the reflection operators in
+the driver: it walks your classes, enumerates fields and methods, reads
+annotations, and resolves each member against the target language's type gate.
+\textbf{Every decision about what can and cannot be bound is made at this
+moment.} During the \emph{run}, the driver does nothing clever --- it prints
+the conclusions it was compiled with.
+
+Neither half can be skipped. A compiler cannot write your binding files; a
+program cannot see types it was not compiled against.
+
+\emph{Your library:} read for the \textbf{first} time, as source, by the C++26
+toolchain.
+
+\subsection*{Step 2 --- what lands in \code{bindings/}}
+
+One self-contained project per target, plus \code{coverage.json} --- a
+machine-readable account of what bound and what did not, available
+\emph{before} anything is compiled.
+
+The generated code is fully expanded (Section~\ref{sec:reflection-free}). No
+splices, no \code{<experimental/meta>}, nothing that needs the fork.
+
+\subsection*{Step 3 --- compile a backend}
+
+Ordinary CMake, or npm, or emcmake, over an ordinary C++ project.
+
+\emph{Your library:} read a \textbf{second} time --- the generated binding
+\code{\#include}s your headers and calls your functions. This is where
+\field{user\_sources} are compiled and \field{user\_lib} is linked in.
+
+\subsection*{Step 4 --- load it}
+
+\code{import}, \code{require}, \code{dlopen}. Nothing rosetta-specific is left.
+
+\section{Your library is read twice, for different reasons}
+
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Pass} & \textbf{By} & \textbf{To} & \textbf{Needs C++26} \\
+\midrule
+step 1 & the reflection driver  & \textbf{describe} your types & \yes \\
+step 3 & the generated binding  & \textbf{call} them           & \no \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This table is the single most useful thing to hold in your head, and it has one
+consequence worth stating on its own:
+
+\begin{warn}
+Annotations written \textbf{inline} --- \code{[[= rosetta::doc\{\ldots\} ]]} ---
+pull \code{<experimental/meta>} into your header. Pass~2 then needs the C++26
+toolchain as well, and the ``no reflection on the target'' promise is lost.
+Out-of-line annotations (a \code{.ann.json} side-car) keep your header plain
+C++ and pass~2 reflection-free. See Section~\ref{sec:outofline}.
+\end{warn}
+
+\section{Two commands, not five}
+
+You rarely run the steps by hand. \code{rosetta\_gen --build} chains all of
+them:
+
+\begin{lstlisting}[style=sh]
+rosetta_gen --build manifest.json
+\end{lstlisting}
+
+It emits \code{gen/}, builds and runs the driver, and then compiles every
+backend the manifest declares --- each with its own build shape (plain
+\code{cmake}, \code{npm install} + \code{npm run build}, \code{emcmake}, a
+second-stage \code{dotnet build} or \code{mvn package}). A backend whose
+toolchain is missing is \emph{skipped with a note}, not an error, and every run
+ends with a per-backend summary.
+
+\code{rosetta\_gen --clean manifest.json} takes you back to sources. Chapter~\ref{ch:rosettagen}
+is the full reference for both.
+
+The manual sequence remains useful for exactly the reasons you would expect:
+inspecting \code{bindings.h}, hacking on the emitted driver, or wiring the
+stages into a build system of your own.
+
+\section{When to re-run what}
+
+The two-pass structure decides this, and getting it wrong is the most common
+way to be confused by rosetta.
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{6.2cm}L{7.4cm}@{}}
+\toprule
+\textbf{What changed} & \textbf{What to do} \\
+\midrule
+A field or method: added, removed, retyped &
+  Rebuild the backend. The generated binding is expanded, so this needs a
+  regeneration \emph{if the member set changed} --- re-run \code{--build}. \\
+\addlinespace
+An \textbf{inline} annotation &
+  Re-run \code{--build}: the annotation is read during pass~1. \\
+\addlinespace
+A \textbf{side-car} \code{.ann.json} &
+  Re-run \code{rosetta\_gen} \emph{and} the generator, not just the binding
+  build --- the JSON is baked into \code{bindings.h} at \code{rosetta\_gen}
+  time. \\
+\addlinespace
+A class added, or \field{targets} changed &
+  Re-run the whole pipeline. \\
+\addlinespace
+A \field{user\_sources} glob now matches new files &
+  Re-run \code{rosetta\_gen}: globs expand at generation time. \\
+\addlinespace
+The manifest moved &
+  Re-run. Every relative path in it resolves from the manifest's own directory. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+Re-emitting is idempotent: unchanged files are not rewritten, so the next
+\code{cmake --build} recompiles nothing. Running the pipeline again when you
+are not sure is cheap.
+\end{note}
+
+\section{The footgun the tool warns about}
+
+If the emitted sources changed but a \code{generator} binary from a previous
+emit still sits next to the output directory, running it without rebuilding
+\textbf{silently re-emits the old bindings}. The tool detects this and prints a
+rebuild note. Believe it.
+
+The related one: a fresh checkout (or a \code{--clean}) leaves
+\code{out\_dir/build} unconfigured, so \code{cmake --build} alone fails. The
+\emph{configure} step is printed as a \code{next:} hint when that happens.

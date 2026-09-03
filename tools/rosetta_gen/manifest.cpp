@@ -550,6 +550,28 @@ Manifest load(const fs::path &manifest_path) {
                 }
                 e.out_dir = fs::weakly_canonical(base / fs::path(d)).string();
             }
+            // Optional packaging, per target (see TargetEntry::wheel). Only the
+            // two backends that emit a make_wheel.py can honour it, and a
+            // manifest asking a markdown target for a wheel has made a mistake
+            // worth naming rather than ignoring.
+            const bool packages = e.lang == "python" || e.lang == "nanobind";
+            for (const char *key : {"wheel", "wheel_dir"}) {
+                if (t.contains(key) && !packages) {
+                    throw std::runtime_error(
+                        std::string("a \"") + e.lang + "\" target cannot take \"" + key +
+                        "\": only the python and nanobind backends emit a make_wheel.py");
+                }
+            }
+            if (t.contains("wheel")) {
+                e.wheel = t.at("wheel").get<bool>();
+            }
+            if (t.contains("wheel_dir")) {
+                const std::string d = t.at("wheel_dir").get<std::string>();
+                if (d.empty()) {
+                    throw std::runtime_error("a target's \"wheel_dir\" must not be empty");
+                }
+                e.wheel_dir = fs::weakly_canonical(base / fs::path(d)).string();
+            }
         }
         m.targets.push_back(std::move(e));
     }
@@ -569,18 +591,21 @@ Manifest load(const fs::path &manifest_path) {
         }
     }
 
-    // `wheel` / `wheel_dir` are the manifest-side defaults for --build's
-    // --wheel / --wheel-dir. The command-line flags still win, so a manifest
-    // cannot turn packaging OFF for a run that asked for it.
-    if (j.contains("wheel")) {
-        m.wheel = j.at("wheel").get<bool>();
-    }
-    if (j.contains("wheel_dir")) {
-        const std::string d = j.at("wheel_dir").get<std::string>();
-        if (d.empty()) {
-            throw std::runtime_error("\"wheel_dir\" must not be empty");
+    // `wheel` / `wheel_dir` are PER-TARGET (see TargetEntry::wheel). They were
+    // top-level once, because they began as defaults for --build's --wheel /
+    // --wheel-dir and a flag applies to a whole run — but the two backends that
+    // package already differ per target in the way that matters most to a wheel
+    // (`python` picks the interpreter it is tagged for), and `out_dir`, the
+    // field with the same shape, is per-target. A top-level key here would now
+    // silently do nothing, which is the one outcome worth an error: a manifest
+    // that used to ship wheels would quietly stop.
+    for (const char *key : {"wheel", "wheel_dir"}) {
+        if (j.contains(key)) {
+            throw std::runtime_error(
+                std::string("top-level \"") + key +
+                "\" is no longer supported — move it onto the python / nanobind "
+                "entries of \"targets\"");
         }
-        m.wheel_dir = fs::weakly_canonical(base / fs::path(d));
     }
 
     // Optional shared defaults, factoring the per-entry repetition out of

@@ -1,0 +1,209 @@
+\chapter{Manifest field reference}
+\label{app:manifest}
+
+Every top-level field, alphabetically. \req\ marks a required field.
+
+\begin{center}
+\small
+\begin{longtable}{@{}L{3.0cm}cL{2.8cm}L{6.0cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Req.} & \textbf{Default} & \textbf{Meaning} \\
+\midrule
+\endhead
+\field{build\_type} & & \code{Release} &
+  Default \code{CMAKE\_BUILD\_TYPE} baked into every compiled backend's
+  \code{CMakeLists.txt}. \S\ref{sec:buildtype} \\
+\addlinespace
+\field{classes} & \req$^*$ & --- &
+  The classes, structs and enums to bind. $^*$Optional when a \field{preset}
+  supplies them. Ch.~\ref{ch:whattobind} \\
+\addlinespace
+\field{compile\_definitions} & & \code{[]} &
+  Preprocessor definitions (\code{"NAME"} or \code{"NAME=VALUE"}) applied to the
+  generator driver \emph{and} every compiled binding target.
+  Ch.~\ref{ch:building} \\
+\addlinespace
+\field{cpp26\_cc} & & \code{\$\{cpp26\_root\}/}\bk\code{bin/clang} &
+  C compiler of the reflection toolchain. \\
+\field{cpp26\_cxx} & & \code{\$\{cpp26\_root\}/}\bk\code{bin/clang++} &
+  C++ compiler of the reflection toolchain. \\
+\field{cpp26\_lib} & & \code{\$\{cpp26\_root\}/lib} &
+  Directory holding the fork's \code{libc++} / \code{libc++abi}. \\
+\field{cpp26\_root} & & a built-in path &
+  Root of the C++26 / P2996 toolchain. Moves the other three together.
+  \S\ref{sec:toolchain-paths} \\
+\addlinespace
+\field{functions} & & \code{[]} &
+  Free (non-member) functions to bind. \S\ref{sec:functions} \\
+\addlinespace
+\field{generated\_headers} & & \code{[]} &
+  Headers the bound library's own build system would have produced, written
+  into the generated tree and put first on the include path.
+  \S\ref{sec:generatedheaders} \\
+\addlinespace
+\field{generator\_name} & & manifest's directory name &
+  Basename of the emitted reflection driver; last-resort default for
+  \field{module\_name}. \\
+\addlinespace
+\field{header\_dir} & & --- &
+  Directory fragment prepended to every entry header.
+  \S\ref{sec:shared-defaults} \\
+\addlinespace
+\field{interop} & & \code{[]} &
+  Foreign libraries whose types the target's binding framework marshals itself
+  (\code{["eigen"]}). \S\ref{sec:interop} \\
+\addlinespace
+\field{matrices} & & \code{[]} &
+  Foreign 2-D containers that marshal as an array of row arrays.
+  \S\ref{sec:matrices} \\
+\addlinespace
+\field{module\_init} & & --- &
+  Statements the generated module runs when it \emph{loads}, plus the headers
+  declaring them. \S\ref{sec:moduleinit} \\
+\addlinespace
+\field{module\_name} & & a preset's, else \field{generator\_name} &
+  Default binding module name, used by any bare-string target. \\
+\addlinespace
+\field{namespace} & & --- &
+  Default C++ namespace for entry names carrying no \code{::} of their own.
+  \S\ref{sec:shared-defaults} \\
+\addlinespace
+\field{optimization} & & --- &
+  Explicit optimisation flag applied after the build type's own.
+  \S\ref{sec:buildtype} \\
+\addlinespace
+\field{out\_dir} & & --- &
+  Where every target's \emph{built artifact} is copied after each build. A
+  per-target \field{out\_dir} overrides it. \S\ref{sec:outdir} \\
+\addlinespace
+\field{out\_params} & & \code{\{\}} &
+  Which parameters a method returns \emph{through a reference}, keyed
+  \code{"Class::method"}. Never inferred. \S\ref{sec:outparams} \\
+\addlinespace
+\field{plugins} & & \code{[]} &
+  Extra \code{.cpp} sources compiled into the generator driver --- a custom
+  backend. Ch.~\ref{ch:extending} \\
+\addlinespace
+\field{preset} & & --- &
+  A named JSON fragment supplying a fixed binding surface.
+  Ch.~\ref{ch:presets} \\
+\addlinespace
+\field{rosetta\_include} & \req & --- &
+  Path to rosetta's \code{include/} directory. \\
+\addlinespace
+\field{sequences} & & \code{[]} &
+  Foreign sequence containers that marshal like \code{std::vector<T>}.
+  \S\ref{sec:sequences} \\
+\addlinespace
+\field{targets} & \req & --- &
+  The language backends to emit. Ch.~\ref{ch:targets} \\
+\addlinespace
+\field{user\_include} & \req & --- &
+  Directory holding your class headers, or an array of directories. \\
+\addlinespace
+\field{user\_lib} & & --- &
+  Pre-built external libraries to link the bindings against; one object or an
+  array. Ch.~\ref{ch:building} \\
+\addlinespace
+\field{user\_sources} & & \code{[]} &
+  User \code{.cpp} / \code{.c} files compiled into every binding target. Globs
+  allowed. Ch.~\ref{ch:building} \\
+\addlinespace
+\field{variables} & & \code{[]} &
+  Manifest-local variables, substituted as \code{\$NAME} / \code{\$\{NAME\}}
+  into every string. \S\ref{sec:variables} \\
+\addlinespace
+\field{version} & & \code{0.1.0} &
+  Distribution version stamped into the packaging artifacts (PEP 440).
+  \S\ref{sec:wheels} \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+Keys beginning with \code{//} are comments and are ignored everywhere,
+including inside groups and entries.
+
+\section{Class entry fields}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcL{8.4cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Req.} & \textbf{Meaning} \\
+\midrule
+\field{header} & \req & Filename emitted into \code{\#include}, resolved against
+  \field{user\_include}. May be a glob. \\
+\field{name} & & C++ type name; defaults to the header's stem. May be
+  qualified. \\
+\field{expose} & & The binding name. Must be a plain identifier. \\
+\field{annotations} & & Path to an out-of-line annotation side-car. \\
+\field{doc} & & Description for the document backends. \\
+\field{extensions} & & Free functions exposed as instance methods. \\
+\field{final} & & No trampoline even with public virtuals. \\
+\field{exclude} & & Glob-entry only: patterns whose matches are dropped. \\
+\field{entries} & & Makes this a \emph{group} rather than an entry.
+  \S\ref{sec:groups} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Function entry fields}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcL{8.4cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Req.} & \textbf{Meaning} \\
+\midrule
+\field{name} & \req & Function name, optionally qualified. \\
+\field{header} & \req & Header declaring it. \\
+\field{doc} & & Description. \\
+\field{expose} & & The binding name. \\
+\field{signature} & & C++ function type of the one overload to bind. Required
+  when \field{name} is overloaded, meaningless otherwise. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Target entry fields}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcL{8.4cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Req.} & \textbf{Meaning} \\
+\midrule
+\field{lang} & \req & The backend. See Appendix~\ref{app:targets}. \\
+\field{name} & & Module / library name; defaults to \field{module\_name}. \\
+\field{link\_options} & & Extra linker flags for this target only. \\
+\field{out\_dir} & & Where this target's artifact is copied. \\
+\field{python} & & Interpreter the binding is built for. \\
+\field{requires\_python} & & Minimum Python version; feeds both CMake and
+  \code{pyproject.toml}. \\
+\field{napi\_version} & & \code{NAPI\_VERSION=} for a Node addon. \\
+\field{node\_engine} & & \code{engines.node} in \code{package.json}. \\
+\field{wheel} & & Build a wheel for this target on every \code{--build}.
+  \lang{python} / \lang{nanobind} only --- an error elsewhere.
+  \S\ref{sec:wheels} \\
+\field{wheel\_dir} & & Where this target's wheels go instead of its own
+  \code{dist/}. Implies \field{wheel}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A bare string in \field{targets} is shorthand for \code{\{"lang": "\ldots"\}}.
+
+\section{\field{user\_lib} entry fields}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcL{8.4cm}@{}}
+\toprule
+\field{name} & \req & Library base name --- the \code{space} in
+  \code{libspace.dylib}. \\
+\field{dir} & \req & Directory holding it; used for \code{-L} and rpath. \\
+\field{link} & & \code{"shared"} (default), \code{"static"}, or
+  \code{"dynamic"}. \\
+\bottomrule
+\end{tabular}
+\end{center}

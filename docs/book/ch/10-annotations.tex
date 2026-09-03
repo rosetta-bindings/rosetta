@@ -1,0 +1,318 @@
+\chapter{Annotations}
+\label{ch:annotations}
+
+Annotations are rosetta's \textbf{opt-in enrichment layer}: small declarative
+tags attached to your fields and methods that backends turn into docstrings,
+validation and user interface. They are never required --- reflection alone
+binds the whole class --- and they never change the C++ behaviour of your types.
+
+They buy three things:
+
+\begin{enumerate}
+  \item \textbf{Documentation} --- \code{doc} becomes docstrings, reference
+    pages, tooltips.
+  \item \textbf{Validation} --- \code{range} rejects bad assignments at the
+    binding boundary.
+  \item \textbf{User interface} --- \code{label}, \code{button},
+    \code{combobox} and the \code{widget::*} hints drive the generated Qt, QML
+    and Dear ImGui inspectors.
+\end{enumerate}
+
+\section{Two spellings, one result}
+
+Every annotation can be written \textbf{inline} (as a P2996/P3394 attribute in
+the header) or \textbf{out of line} (as a JSON side-car, leaving the header
+plain C++). The two forms produce identical bindings and can be mixed on the
+same class.
+
+\begin{lstlisting}[style=cpp]
+#include <rosetta/annotations.h>
+
+class Algo {
+public:
+    [[= rosetta::doc{"Max solver iterations"}, = rosetta::range{0, 200},
+       = rosetta::widget::slider, = rosetta::label{"Max iter"} ]]
+    int maxIter{100};
+
+    [[= rosetta::doc{"Run the solver"}, = rosetta::button{"Run"} ]]
+    double run();
+};
+\end{lstlisting}
+
+\ldots or the same thing with a clean header and a side-car:
+
+\begin{lstlisting}[style=json]
+{
+  "maxIter": { "doc": "Max solver iterations", "range": [0, 200],
+               "widget": "slider", "label": "Max iter" },
+  "run":     { "doc": "Run the solver", "button": "Run" }
+}
+\end{lstlisting}
+
+Annotations are read \emph{once}, on the generation host, and merged (inline
+first, then JSON) into the same annotation list. Backends cannot tell the two
+sources apart.
+
+\section{The annotation set}
+
+\begin{center}
+\small
+\begin{longtable}{@{}lL{2.0cm}L{5.7cm}L{4.9cm}@{}}
+\toprule
+\textbf{Kind} & \textbf{Applies to} & \textbf{Spellings} & \textbf{Meaning} \\
+\midrule
+\endhead
+\code{doc} & fields, methods, classes$^*$ &
+  \code{= rosetta::doc\{"\ldots"\}} \newline \code{"doc": "\ldots"} &
+  Description text. Docstrings, reference pages, OpenAPI descriptions, hover
+  tooltips. \\
+\addlinespace
+\code{range} & numeric fields &
+  \code{= rosetta::range\{lo, hi\}} \newline \code{"range": [lo, hi]} &
+  Value bounds. Compiled backends emit a \textbf{validating setter}; UI
+  inspectors render a clamping slider; doc backends print the bound. Scientific
+  notation is fine (\code{[1e-10, 1e-6]}). \\
+\addlinespace
+\code{readonly} & fields &
+  \code{= rosetta::readonly} \newline \code{"readonly": true} &
+  Getter-only property; writes are rejected per backend; UI editors grey out. \\
+\addlinespace
+\code{combobox} & string fields &
+  \code{= rosetta::combobox\{\{"a","b"\}\}} \newline
+  \code{"combobox": ["a","b"]} &
+  Allowed choices (maximum 16). UI renders a drop-down. \\
+\addlinespace
+\code{label} & fields, methods &
+  \code{= rosetta::label\{"\ldots"\}} \newline \code{"label": "\ldots"} &
+  Display-name override in UI backends. The C++ identifier stays the
+  lookup/binding key --- only the visible text changes. \\
+\addlinespace
+\code{button} & methods &
+  \code{= rosetta::button\{"Run"\}} \newline \code{"button": "Run"} &
+  Caption of the call button a UI backend renders for the method. \\
+\addlinespace
+\code{widget::*} & fields &
+  \code{= rosetta::widget::slider} \newline \code{"widget": "slider"} &
+  Editor hint --- see below. \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\noindent$^*$ Class-level and free-function \code{doc} come from the
+\textbf{manifest} (a \field{doc} key on the entry), since free functions carry
+no in-source annotations.
+
+\subsection{Widget hints}
+
+Hints pick the editor when more than one would fit the field's type. They are
+consumed by the three UI inspector backends and ignored everywhere else.
+
+\begin{center}
+\small
+\begin{tabular}{@{}llL{7.0cm}@{}}
+\toprule
+\textbf{Hint} & \textbf{Field type} & \textbf{Renders as} \\
+\midrule
+\code{spin}      & number & spin box / typed input \\
+\code{slider}    & number + \code{range} & slider with the range as bounds
+  (clamps by construction) \\
+\code{textfield} & number & validated free-text input --- the right editor for
+  values a slider cannot hit precisely (an eps of \code{1e-7}) \\
+\code{checkbox}  & number (0/1), bool & checkbox \\
+\code{color}     & string \code{"\#rrggbb"} & colour picker (ImGui
+  \code{ColorEdit3}, Qt swatch + \code{QColorDialog}, QML \code{ColorDialog});
+  edits write back as hex \\
+\code{multiline} & string & multi-line text area \\
+\code{radio}     & string + \code{combobox} & the choices as a radio-button
+  group instead of a drop-down \\
+\code{file}      & string path & text entry + browse button opening the platform
+  file dialog \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Who consumes what}
+
+\begin{description}[leftmargin=0cm,style=nextline,font=\normalfont\itshape]
+  \item[Scripting backends] (\lang{python}, \lang{nanobind}, \lang{node},
+    \lang{wasm}, \lang{lua}, \lang{julia}, plus \lang{csharp} / \lang{java}):
+    \code{doc} becomes docstrings where the framework has them; \code{range}
+    becomes validating setters; \code{readonly} becomes getter-only properties.
+    \code{label}, \code{button} and \code{widget::*} are ignored --- they are UI
+    concepts.
+  \item[UI inspectors] (\lang{qt}, \lang{qml}, \lang{imgui}): everything.
+    \code{doc} as tooltips, \code{range} as slider bounds or commit validation,
+    \code{readonly} as disabled editors, \code{combobox} as drop-downs, plus
+    \code{label}, \code{button} and \code{widget::*}.
+  \item[Document backends] (\lang{markdown}, \lang{html}, \lang{openapi},
+    \lang{typescript}): \code{doc} and the constraints (\code{range},
+    \code{readonly}, \code{combobox}) are rendered into the reference text or
+    schema.
+\end{description}
+
+An annotation a backend has no use for is simply ignored --- never an error.
+
+\section{Out-of-line annotations}
+\label{sec:outofline}
+
+The side-car keeps your header plain C++. That matters for three reasons, and
+the second is the one that usually decides it:
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{6.6cm}cc@{}}
+\toprule
+ & \textbf{Inline} & \textbf{Side-car} \\
+\midrule
+Header stays plain C++ & \no & \yes \\
+Generated binding builds on an off-the-shelf compiler & \no & \yes \\
+Works on third-party headers you cannot edit & \no & \yes \\
+Expressiveness & full set & full set \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The middle row is the load-bearing one. Inline annotations pull
+\code{<experimental/meta>} into your header, and the generated binding
+\code{\#include}s that header --- so the ``reflection-free by construction''
+promise (Section~\ref{sec:reflection-free}) is lost for every target.
+
+\subsection{Wiring it up}
+
+One manifest field per class:
+
+\begin{lstlisting}[style=json]
+"classes": [
+  { "name": "Algo", "header": "Algo.h", "annotations": "Algo.ann.json" }
+]
+\end{lstlisting}
+
+The path is resolved relative to the manifest. The side-car's keys are member
+identifiers --- fields \emph{or} methods --- and each value object may carry any
+of the annotation kinds:
+
+\begin{lstlisting}[style=json]
+{
+  "title": { "doc": "The widget title", "label": "Title" },
+  "count": { "doc": "Visible items", "range": [0, 100], "widget": "slider" },
+  "id":    { "readonly": true },
+  "mode":  { "combobox": ["fast", "slow"] },
+  "run":   { "doc": "Run the thing", "button": "Run" }
+}
+\end{lstlisting}
+
+The bound header never mentions rosetta:
+
+\begin{lstlisting}[style=cpp]
+#pragma once
+#include <string>
+struct Widget {
+    std::string title;
+    int         count = 0;
+    int         id    = 0;
+    std::string mode;
+};
+\end{lstlisting}
+
+That is the whole surface. Run \code{rosetta\_gen}, build, and every backend
+sees the annotations.
+
+\subsection{What it does under the hood}
+
+\code{rosetta\_gen} bakes the JSON bytes into \code{bindings.h}, right after the
+class header is included so \code{T} is complete:
+
+\begin{lstlisting}[style=cpp]
+template <> inline constexpr auto rosetta::detail::ann_storage<Widget> =
+    std::to_array<char>({ char(0x7b), /* baked JSON bytes */ '\0' });
+template <> inline constexpr std::string_view rosetta::ann_json_source<Widget> =
+    std::string_view{ rosetta::detail::ann_storage<Widget>.data(),
+                      rosetta::detail::ann_storage<Widget>.size() - 1 };
+static_assert(rosetta::detail::ann_keys_error<Widget>().empty(),
+              rosetta::detail::ann_keys_error<Widget>());
+\end{lstlisting}
+
+A small \code{consteval} parser reads it at \code{walk()} time and concatenates
+the entries with the member's inline annotations. Nothing downstream changes.
+
+Loading the JSON at \emph{run time} could not work: annotations are non-type
+template parameters consumed during constant evaluation, so the data must exist
+then. Baking keeps everything in the one constant-evaluated pass --- and keeps
+the \code{static\_assert} below possible.
+
+\subsection{The staleness guard}
+
+That \code{static\_assert} checks every JSON key names a real member of the
+type. A renamed or misspelt field \textbf{fails the build}, naming the offending
+key, instead of silently dropping its metadata.
+
+\begin{warn}
+Side-car edits need a \textbf{regeneration}, not just a rebuild --- the JSON is
+baked when \code{rosetta\_gen} runs. Re-run \code{rosetta\_gen} and the
+generator, not only the binding build.
+\end{warn}
+
+\subsection{Attaching the JSON yourself}
+
+The manifest's \field{annotations} field is sugar for specialising a
+customisation point. You can do it directly, from anywhere --- another file, a
+translation unit, after the class:
+
+\begin{lstlisting}[style=cpp]
+#include "widget.h"            // the untouched class
+#include <rosetta/annotate.h>  // for the customization point
+
+template <>
+constexpr std::string_view rosetta::ann_json_source<Widget> = R"({
+  "title": { "doc": "The widget title" },
+  "count": { "doc": "Visible items", "range": [0, 100] },
+  "id":    { "readonly": true },
+  "mode":  { "combobox": ["fast", "slow"] }
+})";
+\end{lstlisting}
+
+Same schema, same merge, same effect on every backend. The one rule is that the
+specialisation must be visible before \code{rosetta::walk<Widget>()} runs in a
+translation unit --- which is exactly why the manifest route bakes it into
+\code{bindings.h}.
+
+\subsection{Merge precedence}
+
+Inline annotations come first in the merged pack, JSON after. So a reader that
+keeps the last match (\code{ann::get\_or<A>}) lets a JSON entry \emph{override}
+an inline one of the same kind, while cumulative readers such as \code{doc} see
+both.
+
+A class with no side-car uses the empty primary template and is simply
+un-annotated --- no error, no special-casing.
+
+\section{Internal annotations}
+
+\code{rosetta::virtual\_spec} is \textbf{synthesised by the walk}, never written
+by users: it marks a method's reflection as virtual or overriding so backends
+can emit overridable bindings (pybind11 and N-API trampolines). You only meet it
+when writing a custom backend.
+
+\section{Gotchas}
+
+\begin{itemize}
+  \item \textbf{Inline annotations make the header C++26-only.} Every
+    translation unit that includes it must build with the fork and
+    \code{-fannotation-attributes}. Use the side-car when you want off-the-shelf
+    builds.
+  \item \textbf{Side-car edits need a regeneration}, not just a rebuild.
+  \item \code{widget::slider} without a \code{range} falls back to the default
+    editor --- a slider needs bounds.
+  \item \code{widget::radio} does nothing without a \code{combobox}. It restyles
+    the choices; it does not define them.
+  \item \code{combobox} is capped at 16 choices. Beyond that a drop-down is the
+    wrong widget anyway.
+  \item \code{label} changes only the visible text. Scripting backends still
+    bind the C++ identifier.
+\end{itemize}
+
+\begin{note}
+The side-car parser is deliberately small: it takes string values literally (no
+escape unescaping) and parses numbers as plain decimals. Enough for the
+annotation schema, not a general JSON library.
+\end{note}

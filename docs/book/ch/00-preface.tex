@@ -1,0 +1,78 @@
+\chapter*{Preface}
+\addcontentsline{toc}{chapter}{Preface}
+\markboth{Preface}{Preface}
+
+This book is about a single, narrow claim: that the information needed to
+expose a C++ library to Python, to JavaScript, to Lua, to a REST endpoint or
+to a property panel is \emph{already in the header}, and that a compiler can
+be made to read it out.
+
+Everything else follows from taking that claim seriously. You do not write a
+binding. You write down \emph{what} you want bound --- a list of headers and a
+list of target languages --- and a program compiled against your types answers
+the rest by reflection. Your class definitions never change.
+
+\section*{Who this is for}
+
+You have a C++ library. You want it callable from somewhere else, ideally from
+several somewheres, and you would rather not maintain a hand-written wrapper
+per destination. You are comfortable with CMake and with your own build.
+
+You do \emph{not} need to know anything about C++26 static reflection to use
+rosetta. Reflection is what makes the tool possible, and Chapter~\ref{ch:pipeline}
+explains where it runs and why the pipeline has the shape it does --- but the
+surface you work with is a JSON file and a command-line tool.
+
+\section*{How to read it}
+
+\begin{description}[leftmargin=1.4cm,style=nextline,font=\normalfont\itshape]
+  \item[In a hurry] Chapter~\ref{ch:first} is a complete first binding, from an
+    unmodified header to an importable Python module. Read that, then come back.
+  \item[Evaluating rosetta] Chapters~\ref{ch:what} and~\ref{ch:pipeline} say what
+    the system does and what it costs, including the parts that do not work.
+  \item[Using it in earnest] Part~II is the manifest, field by field, and is the
+    part you will return to. Part~IV is the tool that consumes it.
+  \item[Pushing past bindings] Part~V covers the runtime object model, scripting
+    the metadata itself, and writing a backend of your own.
+\end{description}
+
+The appendices are lookup tables: every manifest field, every annotation, every
+target, and the errors you are most likely to hit.
+
+\section*{Conventions}
+
+\code{Monospace} is a literal --- a field name, a path, a command. A
+\emph{manifest} always means the \code{manifest.json} driving one binding
+project. \emph{Generation host} is the machine that runs the reflection
+compiler; \emph{target} is wherever the generated binding is finally built,
+which is deliberately not the same machine.
+
+Two callouts appear throughout:
+
+\begin{note}
+Something worth knowing that is not on the shortest path.
+\end{note}
+
+\begin{warn}
+Something that will cost you an afternoon if you meet it unprepared.
+\end{warn}
+
+\section*{Status}
+
+Rosetta is a prototype, and this book says so where it matters. It tracks
+in-flight C++ proposals --- P2996 (reflection), P3394 (annotations), P3294
+(token injection) --- and is developed against the Bloomberg
+\code{clang-p2996} fork, which is currently the only front-end that carries
+all of what it uses. What the tool \emph{generates} has no such constraint:
+that is the whole point, and Chapter~\ref{ch:pipeline} is where the distinction
+is made precise.
+
+\section*{Related documents}
+
+The repository carries the reference material this book is built from ---
+\code{docs/MANIFEST.md}, \code{docs/ROSETTA\_GEN.md},
+\code{docs/ANNOTATIONS.md}, \code{docs/COVERAGE.md} and the rest. Where a
+detail here is compressed, those are the long form. The academic write-up of
+the same system, with its evaluation and its related work, lives under
+\code{paper/}; it argues that reflection can serve as an interface description
+language, where this book simply assumes it and gets on with the job.

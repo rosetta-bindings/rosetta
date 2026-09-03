@@ -12,6 +12,52 @@ Everything else — fields, methods, constructors, enums, inheritance — is dis
 
 ---
 
+## Contents
+
+Every field is listed in [Top-level fields](#top-level-fields); the sections below it explain the ones that need more than a table cell.
+
+- [Where it fits](#where-it-fits)
+- [Minimal example](#minimal-example)
+- [**Top-level fields**](#top-level-fields)
+- [Variables (`variables`)](#variables-variables)
+  - [What is *not* substituted](#what-is-not-substituted)
+- [Presets (`preset`)](#presets-preset)
+  - [What it does](#what-it-does)
+  - [Shipped presets](#shipped-presets)
+- [Classes](#classes)
+- [Binding a whole folder (`header` as a glob)](#binding-a-whole-folder-header-as-a-glob)
+  - [The stem is the class name](#the-stem-is-the-class-name)
+- [Renaming a class (`expose`)](#renaming-a-class-expose)
+- [Shared defaults (`namespace`, `header_dir`)](#shared-defaults-namespace-header_dir)
+  - [Grouped entries](#grouped-entries)
+- [Extension methods (`extensions`)](#extension-methods-extensions)
+- [Pinning the runtime (`python`, `requires_python`, `napi_version`, `node_engine`)](#pinning-the-runtime-python-requires_python-napi_version-node_engine)
+- [Artifact output directory (`out_dir`)](#artifact-output-directory-out_dir)
+- [Foreign sequence containers (`sequences`)](#foreign-sequence-containers-sequences)
+  - [Registering a concrete type](#registering-a-concrete-type)
+- [Foreign matrices (`matrices`)](#foreign-matrices-matrices)
+- [Foreign-library interop (`interop`)](#foreign-library-interop-interop)
+  - [Reaching the caster-less backends: register the type as a sequence too](#reaching-the-caster-less-backends-register-the-type-as-a-sequence-too)
+- [Standard types that need no declaration: `std::filesystem::path`, `std::shared_ptr<T>`](#standard-types-that-need-no-declaration-stdfilesystempath-stdshared_ptrt)
+- [Out-parameters (`out_params`)](#out-parameters-out_params)
+- [Module init (`module_init`)](#module-init-module_init)
+- [Generated headers (`generated_headers`)](#generated-headers-generated_headers)
+- [Multiple include directories](#multiple-include-directories)
+- [Functions](#functions)
+  - [Binding one overload (`signature`)](#binding-one-overload-signature)
+- [Targets](#targets)
+  - [Available `lang` values](#available-lang-values)
+- [Linking external libraries (`user_lib`)](#linking-external-libraries-user_lib)
+  - [Several libraries: your library and its dependencies](#several-libraries-your-library-and-its-dependencies)
+- [Compiling user sources (`user_sources`)](#compiling-user-sources-user_sources)
+- [Preprocessor definitions (`compile_definitions`)](#preprocessor-definitions-compile_definitions)
+- [Build type & optimization (`build_type`, `optimization`)](#build-type--optimization-build_type-optimization)
+- [Python wheels (`version`)](#python-wheels-version)
+- [Full reference example](#full-reference-example)
+- [Common gotchas](#common-gotchas)
+
+---
+
 ## Where it fits
 
 ```
@@ -91,9 +137,8 @@ cmake -B build && cmake --build build
 | `header_dir` | — | — | Directory fragment prepended to every `classes` / `functions` / `extensions` header. See [Shared defaults](#shared-defaults-namespace-header_dir). |
 | `sequences` | — | `[]` | Foreign sequence containers that marshal like `std::vector<T>` — a qualified template name with one type parameter (`"GEO::vector"`), or a concrete type spelled exactly (`{ "type": "Eigen::VectorXd" }`). See [Foreign sequence containers](#foreign-sequence-containers-sequences). |
 | `python` / `requires_python` / `napi_version` / `node_engine` | — | — | Per-target runtime pins: which Python the binding is built for, its minimum version, the N-API level and the npm `engines.node` entry. See [Pinning the runtime](#pinning-the-runtime-python-requires_python-napi_version-node_engine). |
+| `wheel` / `wheel_dir` | — | — | **Per-target** (`python` / `nanobind` only): build a wheel for this target on every `--build`, and where it lands. See [Python wheels](#python-wheels-version). |
 | `out_dir` | — | — | Where every target's **built artifact** is copied after each build (the `.so` / `.pyd` / `.node` / `.js`+`.wasm`). Per-target `out_dir` overrides it. See [Artifact output directory](#artifact-output-directory-out_dir). |
-| `wheel` | — | `false` | Build a Python wheel for the `python` / `nanobind` targets on every `--build`, without passing `--wheel`. See [Python wheels](#python-wheels). |
-| `wheel_dir` | — | — | Default for `--wheel-dir`: one directory collecting every backend's wheels. Implies `wheel`. |
 | `matrices` | — | `[]` | Foreign 2-D matrices (same two entry forms as `sequences`) that marshal as an array of row arrays. See [Foreign matrices](#foreign-matrices-matrices). |
 | `interop` | — | `[]` | Foreign libraries whose types the target's binding framework marshals itself (`["eigen"]`). `python` / `nanobind` bind them natively (numpy); backends with no caster skip those members. See [Foreign-library interop](#foreign-library-interop-interop). |
 | `user_lib` | — | — | Link the generated bindings against pre-built external libraries — one object, or an array of them when your library has dependencies of its own. See [Linking external libraries](#linking-external-libraries-user_lib). |
@@ -1149,14 +1194,25 @@ The wheel is built for whichever interpreter runs the script — there is no `--
 
 `rosetta_gen --build manifest.json --wheel` runs the same step for every `python` / `nanobind` target in one go, and `--wheel-dir DIR` collects the results in one directory instead of a per-backend `dist/` (see [ROSETTA_GEN.md](ROSETTA_GEN.md#case-8-python-wheels)).
 
-For a project that always ships wheels, say so in the manifest instead of on every command line:
+For a project that always ships wheels, say so in the manifest instead of on every command line — on the **target**, beside the interpreter it is built for:
 
 ```json
-"wheel": true,
-"wheel_dir": "./dist/wheels"
+"targets": [
+  { "lang": "python",   "name": "pygeom", "python": "3.11" },
+  { "lang": "nanobind", "name": "nbgeom", "wheel": true, "wheel_dir": "./dist" }
+]
 ```
 
-Both are **defaults for the flags**, and the flags still win — in the direction of doing more. `--wheel` on a manifest that says nothing packages anyway; a manifest saying `"wheel": false` cannot turn off a run that asked for `--wheel`. `wheel_dir` implies `wheel`, exactly as `--wheel-dir` implies `--wheel`, and resolves against the manifest's directory. With neither set, `--build` only compiles the extension module.
+| Field | Meaning |
+|---|---|
+| `wheel` | Build a wheel for **this** target on every `--build`, without passing `--wheel`. |
+| `wheel_dir` | Where this target's wheels go instead of its own `dist/`. Implies `wheel`, and resolves against the manifest's directory. |
+
+Both are per-target, and only the two backends that emit a `make_wheel.py` accept them — `wheel` on a `markdown` or `node` target is an error, not a no-op. This is the same shape as [`out_dir`](#artifact-output-directory-out_dir), and for the same reason: the two Python backends genuinely differ here. `nanobind` produces one `abi3` wheel covering every CPython 3.12+ where `python` produces one per version, and [`python`](#pinning-the-runtime-python-requires_python-napi_version-node_engine) already pins per target which interpreter each is tagged for. Sharing one `wheel_dir` between them is safe — each `make_wheel.py` repairs only the wheels it just produced.
+
+The **flags still win, in the direction of doing more**. `--wheel` packages every `python` / `nanobind` target whatever the manifest says, so a target spelling `"wheel": false` cannot turn off a run that asked for it; `--wheel-dir DIR` overrides every target's own directory, which is what makes "collect them all in one place" a single flag. With neither set anywhere, `--build` only compiles the extension module.
+
+> **Changed:** `wheel` and `wheel_dir` were **top-level** keys. They are per-target now, and a top-level one is a load error naming the fix rather than a key that silently does nothing — a manifest that used to ship wheels must not quietly stop.
 
 `version` is the distribution version written into `pyproject.toml`:
 

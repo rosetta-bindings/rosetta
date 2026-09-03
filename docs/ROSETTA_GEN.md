@@ -211,7 +211,9 @@ dist/
 
 It implies `--wheel` (asking where the wheels go is asking for wheels) and resolves relative paths against the directory you ran the command from, not the binding dir. Sharing one output directory is safe: each `make_wheel.py` repairs only the wheels *it* just produced, so building the second backend does not re-process the first one's.
 
-Both flags have manifest counterparts — `"wheel": true` and `"wheel_dir": "./dist/wheels"` — for a project that always packages, so plain `--build` does the whole thing (see [MANIFEST.md](MANIFEST.md#python-wheels-version)). They are defaults, not overrides: the flags still win, and only ever toward packaging more, so a manifest cannot disarm a `--wheel` you typed.
+Both flags have manifest counterparts — `"wheel": true` and `"wheel_dir": "./dist/wheels"`, **on the `python` / `nanobind` entry of `targets`** — for a project that always packages, so plain `--build` does the whole thing (see [MANIFEST.md](MANIFEST.md#python-wheels-version)). Being per-target is what lets a manifest ship the `nanobind` wheel (one `abi3` artifact for every CPython 3.12+) and not the `python` one, or send the two to different directories.
+
+The flags still win, and only ever toward packaging **more**: `--wheel` packages every `python` / `nanobind` target whatever the manifest says, so a target spelling `"wheel": false` cannot disarm a `--wheel` you typed, and `--wheel-dir DIR` overrides every target's own directory.
 
 The wheel build is *independent* of the one above it — scikit-build-core re-runs the same `CMakeLists.txt` in its own tree (with `SKBUILD` set), so it neither reuses nor disturbs `<lang>/build/`. The interpreter is probed on `PATH` (`python3`, then `python`; on Windows `python`, `python3`, `py`); if none is found the backend is recorded `OK (no wheel — no python interpreter found)` rather than failing. A `--wheel` that cannot fire — no such target in the manifest, or none surviving `--only` / `--skip` — says so instead of quietly doing nothing.
 

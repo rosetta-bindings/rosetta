@@ -1,0 +1,361 @@
+\chapter{Anatomy of a manifest}
+\label{ch:manifest}
+
+The manifest is the single hand-written file that drives rosetta. This chapter
+covers the rules that apply to \emph{all} of it --- how paths resolve, how to
+write comments, how to factor out repetition --- before the following chapters
+go field by field.
+
+It answers three questions for the framework:
+
+\begin{enumerate}
+  \item \textbf{Where} are your headers, and where is rosetta's \code{include/}?
+  \item \textbf{What} classes and free functions should be bound?
+  \item \textbf{Which} language backends should be emitted?
+\end{enumerate}
+
+Everything else --- fields, methods, constructors, enums, inheritance --- is
+discovered by reflection from the headers themselves.
+
+\section{The minimum}
+
+Three keys are required: \field{user\_include}, \field{rosetta\_include} and
+\field{targets}, plus \field{classes} unless a preset supplies it.
+
+\begin{lstlisting}[style=json]
+{
+  "user_include": "./geom",
+  "rosetta_include": "../../include",
+  "targets": ["python"],
+  "classes": [ { "header": "Point.h" } ]
+}
+\end{lstlisting}
+
+That is a complete, working manifest.
+
+\section{Paths resolve from the manifest}
+
+Every relative path in the file is resolved against \textbf{the directory
+holding the manifest}, not the current working directory and not the output
+tree. Absolute paths are taken as written.
+
+\begin{warn}
+Move the manifest and you must re-run \code{rosetta\_gen}. Nothing detects a
+stale resolution for you.
+\end{warn}
+
+There is one deliberate exception, and it is the one people trip over: a class
+entry's \field{header} is resolved against \field{user\_include}, not against
+the manifest. That is because the header is emitted into an
+\code{\#include "\ldots"} line in generated code --- it must be spelled relative
+to the \emph{include path}, exactly as the compiler will look for it.
+\field{user\_sources}, which name files to compile rather than to include, do
+resolve from the manifest.
+
+\section{Comments}
+
+JSON has no comment syntax, so the manifest uses two conventions, and both work
+everywhere:
+
+\begin{lstlisting}[style=json]
+{
+  "//": "Bindings for the geom library.",
+  "//paths": "All relative paths resolve from THIS file's directory.",
+
+  // Line comments are tolerated by the parser too.
+  /* As are block comments. */
+  "user_include": "./geom"
+}
+\end{lstlisting}
+
+Any key beginning with \code{//} is ignored --- \code{"//1"}, \code{"//note"},
+\code{"//cpp26"}. Keys must still be unique, which is why the numbered and
+named forms exist. The \code{//} and \code{/* */} line forms are accepted by
+the parser as an extension; the key form is plain JSON and survives any tool
+that reads the file.
+
+\section{Variables}
+\label{sec:variables}
+
+A path that appears in several fields would otherwise be written out in each of
+them. The \field{cpp26\_*} block is the case that motivated this --- one
+toolchain root, spelled four times with a different suffix:
+
+\begin{lstlisting}[style=json]
+"cpp26_root": "$ENV{HOME}/devs/c++/clang-p2996/build",
+"cpp26_cxx":  "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang++",
+"cpp26_cc":   "$ENV{HOME}/devs/c++/clang-p2996/build/bin/clang",
+"cpp26_lib":  "$ENV{HOME}/devs/c++/clang-p2996/build/lib",
+\end{lstlisting}
+
+\field{variables} declares a name for the shared part, which \code{\$NAME} (or
+\code{\$\{NAME\}}) then stands for:
+
+\begin{lstlisting}[style=json]
+"variables": [
+    { "name": "P2996", "value": "$ENV{HOME}/devs/c++/clang-p2996" }
+],
+
+"cpp26_root": "$P2996/build",
+"cpp26_cxx":  "$P2996/build/bin/clang++",
+"cpp26_cc":   "$P2996/build/bin/clang",
+"cpp26_lib":  "$P2996/build/lib",
+\end{lstlisting}
+
+The substitution runs over \textbf{every string in the manifest} before any
+field is read, so a variable works anywhere a string does ---
+\field{user\_include}, \field{out\_dir}, a \field{user\_lib} directory, a
+\field{compile\_definitions} value --- not only in the toolchain paths above.
+The field itself disappears once applied.
+
+Declarations are an \textbf{array}, not an object, because they are
+\textbf{ordered}: a value may use the variables declared before it, and only
+those.
+
+\begin{lstlisting}[style=json]
+"variables": [
+    { "name": "TC",  "value": "/opt/toolchains/clang-p2996" },
+    { "name": "BIN", "value": "$TC/build/bin" }
+],
+"cpp26_cxx": "$BIN/clang++"
+\end{lstlisting}
+
+\subsection{What is not substituted}
+
+A manifest already carries two other dollar notations, and both belong to
+\textbf{CMake}, which expands them at its own configure time. Rosetta hands
+them over untouched, so the rule is that \textbf{only a name you declared is
+substituted}:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{8.4cm}@{}}
+\toprule
+\textbf{Written} & \textbf{Result} \\
+\midrule
+\code{\$ENV\{HOME\}} & passed through verbatim --- CMake's environment lookup,
+  whatever \field{variables} says \\
+\code{\$\{CMAKE\_SOURCE\_DIR\}} & passed through verbatim --- no
+  \code{CMAKE\_SOURCE\_DIR} was declared \\
+\code{\$P2996} with \code{P2996} declared & substituted \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Declaring \code{ENV} is an error, since \code{\$ENV\{\ldots\}} could never
+resolve to it.
+
+\begin{warn}
+The price of that leniency is that a \textbf{misspelt variable is silent}.
+\code{\$P2996x} is one name, \code{P2996x}, which nothing declares --- so it
+stays as written and surfaces later as a path that does not exist.
+\code{\$\{P2996\}x} is how a variable abuts other text, and is worth preferring
+for that reason.
+\end{warn}
+
+A variable name is a C identifier: letters, digits and \code{\_}, not starting
+with a digit.
+
+\section{Where the toolchain lives}
+\label{sec:toolchain-paths}
+
+Four optional fields point at the C++26 / P2996 reflection compiler used to
+build the generator. Omit them all and rosetta uses these defaults:
+
+\begin{center}
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Field} & \textbf{Default} \\
+\midrule
+\field{cpp26\_root} & \code{\$ENV\{HOME\}/devs/c++/clang-p2996/build} \\
+\field{cpp26\_cxx}  & \code{\$\{cpp26\_root\}/bin/clang++} \\
+\field{cpp26\_cc}   & \code{\$\{cpp26\_root\}/bin/clang} \\
+\field{cpp26\_lib}  & \code{\$\{cpp26\_root\}/lib} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+If your clang-p2996 build lives elsewhere, set \field{cpp26\_root} alone --- the
+other three derive from it. Override an individual one only when the compiler
+binaries or the \code{libc++} / \code{libc++abi} directory sit outside the usual
+\code{bin/} and \code{lib/} layout.
+
+\code{\$ENV\{HOME\}} is expanded by CMake at configure time, so the path stays
+portable across machines. Of the targets, these fields affect only \lang{rest}
+and \lang{json} --- every other one builds with an off-the-shelf compiler and
+ignores them entirely. (The \emph{generator} always needs them.)
+
+The command line wins over the manifest:
+\code{rosetta\_gen --build --clang-p2996-root PATH}.
+
+\field{qt\_dir} plays the same role for the \lang{qt} and \lang{qml} backends,
+with \code{--qt-dir} as its flag.
+
+\section{Naming things}
+
+\begin{description}[leftmargin=0cm,style=nextline,font=\normalfont\code]
+  \item[generator\_name] Basename of the emitted reflection driver:
+    \code{"my\_person\_gen"} produces \code{gen/my\_person\_gen.cpp}. The built
+    binary is always called \code{generator}, so this is mostly cosmetic --- its
+    one load-bearing role is being the last-resort default for
+    \field{module\_name}. Defaults to the manifest's directory name.
+  \item[module\_name] The default binding module name, used by any bare-string
+    target. A preset may supply one, which is why a preset-based manifest often
+    names neither this nor \field{generator\_name}.
+\end{description}
+
+\begin{note}
+The \emph{derived} \field{generator\_name} is folded to an identifier
+(\code{my-cool-lib} becomes \code{my\_cool\_lib}) so a directory name cannot
+produce an invalid module name. A value you spell out is used verbatim ---
+if you write something that is not an identifier, you get it.
+\end{note}
+
+\section{Shared defaults: \field{namespace} and \field{header\_dir}}
+\label{sec:shared-defaults}
+
+When every entry repeats the same namespace and the same folder:
+
+\begin{lstlisting}[style=json]
+"classes": [
+  {"name": "stressinv::Serie",      "header": "stressinv/Serie.h"},
+  {"name": "stressinv::Data",       "header": "stressinv/Data.h"},
+  {"name": "stressinv::CostMetric", "header": "stressinv/cost.h"}
+]
+\end{lstlisting}
+
+factor them out:
+
+\begin{lstlisting}[style=json]
+"namespace": "stressinv",
+"header_dir": "stressinv",
+"classes": [
+    {"header": "Serie.h"},
+    {"header": "Data.h"},
+    {"name": "CostMetric", "header": "cost.h"}
+]
+\end{lstlisting}
+
+(\code{Serie} and \code{Data} also drop their \field{name}, which defaults from
+the header stem --- and the derived name is namespace-qualified too.)
+
+The rules apply identically to \field{classes}, \field{functions} and
+\field{extensions}:
+
+\begin{itemize}
+  \item \field{namespace} qualifies an entry name \textbf{only when it carries
+    no \code{::} of its own}. \code{"Serie"} becomes \code{stressinv::Serie};
+    a name containing \code{::} passes verbatim. So fully qualified spellings,
+    nested classes (\code{stressinv::Model::Inner}) and sub-namespaces keep
+    working unchanged, and mixing shortened and full spellings in one manifest
+    is fine.
+  \item A \textbf{leading \code{::}} pins an entry to the global namespace:
+    \code{"::c\_entry"} becomes \code{c\_entry}. This is the escape hatch for
+    the odd global function (an \code{extern "C"} one, say) in an otherwise
+    namespaced manifest.
+  \item \field{header\_dir} is prepended to every entry header, inserting a
+    \code{/} if missing: \code{"Serie.h"} becomes
+    \code{stressinv/Serie.h}. A header living elsewhere can step out relative to
+    it (\code{"../other/x.h"}), or you can leave \field{header\_dir} unset and
+    spell every path in full.
+\end{itemize}
+
+\subsection{Grouped entries}
+\label{sec:groups}
+
+One pair of top-level defaults cannot cover a library whose headers live in
+several folders, or that uses sub-namespaces. For that, an element of
+\field{classes} or \field{functions} may be a \textbf{group}: an object
+carrying \field{entries} plus its own local defaults, instead of being an entry
+itself.
+
+\begin{lstlisting}[style=json]
+"namespace": "arch",
+"header_dir": "Arch",
+"classes": [
+  {"name": "Vector3", "header": "math/math.h"},
+
+  {"header_dir": "solvers", "entries": [
+    {"name": "GmresSolver", "header": "Gmres.h"},
+    {"header": "ParallelSolver.h"}
+  ]},
+
+  {"header_dir": "algos", "entries": [
+    {"header": "DataSuperposition.h"},
+    {"namespace": "sinv", "header_dir": "stress-inversion", "entries": [
+      {"header": "JointData.h"},
+      {"header": "types.h", "entries": [
+        {"name": "MCMCConfig"},
+        {"name": "MCMCResult"}
+      ]}
+    ]}
+  ]}
+]
+\end{lstlisting}
+
+\begin{itemize}
+  \item A group's \field{header\_dir} \textbf{appends below} the inherited one:
+    \code{Arch} + \code{solvers} gives \code{Arch/solvers/Gmres.h}.
+  \item A group's \field{namespace} \textbf{appends to} the inherited one:
+    \code{arch} + \code{sinv} gives \code{arch::sinv::JointData}. A leading
+    \code{::} makes it absolute instead of appending.
+  \item A group may set a \field{header}: the default header for entries that
+    spell none. That is the natural shape for a run of classes declared by one
+    header --- \code{types.h} above yields \code{arch::sinv::MCMCConfig} and
+    \code{arch::sinv::MCMCResult}, both from
+    \code{Arch/algos/stress-inversion/types.h}. Such entries need an explicit
+    \field{name}, since the stem fallback would give every one the same name.
+  \item Groups \textbf{nest}, \textbf{mix freely with plain entries} in the
+    same array, and work identically under \field{functions} --- where a
+    shared-header group reads especially well (a dozen shape generators all
+    declared by \code{shapes.h}).
+  \item A group cannot carry a \field{name}, and \code{//}-comment keys are
+    ignored on groups as everywhere else.
+\end{itemize}
+
+Everything is resolved at load time, so backends and generated output are
+byte-identical to the fully spelled form.
+
+\section{Multiple include directories}
+
+When your headers do not all live under one root, give \field{user\_include} an
+array:
+
+\begin{lstlisting}[style=json]
+"user_include": ["./geom", "../shared/include", "/opt/thirdparty/include"]
+\end{lstlisting}
+
+Each entry follows the same resolution rules as the single-string form. Every
+directory is added to the generated bindings' include path, so a class
+\field{header} is resolved against \emph{all} of them --- the first directory
+containing the file wins, exactly like a compiler's \code{-I} search order. The
+array must not be empty; the single-string form is just the one-directory
+shorthand.
+
+\section{A field map}
+
+The rest of Part~II is organised by what you are trying to do, rather than
+alphabetically. Appendix~\ref{app:manifest} is the alphabetical version.
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{5.6cm}l@{}}
+\toprule
+\textbf{You want to\ldots} & \textbf{See} \\
+\midrule
+say which classes and functions to bind &
+  Chapter~\ref{ch:whattobind} \\
+choose the languages, and name the modules &
+  Chapter~\ref{ch:targets} \\
+get the generated projects to actually compile and link &
+  Chapter~\ref{ch:building} \\
+make a foreign container or an Eigen type cross the boundary &
+  Chapter~\ref{ch:types} \\
+reuse a fixed binding surface across projects &
+  Chapter~\ref{ch:presets} \\
+add docstrings, ranges, UI hints &
+  Chapter~\ref{ch:annotations} \\
+\bottomrule
+\end{tabular}
+\end{center}

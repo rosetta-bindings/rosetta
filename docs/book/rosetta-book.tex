@@ -1,0 +1,240 @@
+% =====================================================================
+%  Rosetta — A User's Guide
+%
+%  Build:  make          (or: pdflatex rosetta-book && pdflatex rosetta-book)
+%
+%  This is the USER MANUAL. The academic write-up of the same system —
+%  its thesis, its evaluation, its related work — is ../../paper/en.
+%  Keep the two apart: this book says how to use rosetta, the paper
+%  says why it is interesting.
+%
+%  Package policy: nothing beyond a basic TeX Live install. No
+%  tcolorbox, no framed, no titlesec — the callout and code styles
+%  below are built from listings, xcolor and plain LaTeX boxes so the
+%  book compiles wherever pdflatex does.
+% =====================================================================
+\documentclass[11pt,a4paper,oneside]{book}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[margin=2.7cm,headheight=14pt]{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage{caption}
+\usepackage{listings}
+\usepackage[hidelinks,bookmarksnumbered]{hyperref}
+
+% --- palette ---------------------------------------------------------
+\definecolor{rosettablue}{HTML}{1F5C8B}
+\definecolor{rosettaorange}{HTML}{C05621}
+\definecolor{codebg}{HTML}{F6F6F4}
+\definecolor{codeframe}{HTML}{DDDDD8}
+\definecolor{kw}{HTML}{1F5C8B}
+\definecolor{str}{HTML}{2F6F3E}
+\definecolor{cmt}{HTML}{7A7A7A}
+\definecolor{notebar}{HTML}{1F5C8B}
+\definecolor{warnbar}{HTML}{C05621}
+
+% --- headers ---------------------------------------------------------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\itshape\nouppercase{\leftmark}}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancypagestyle{plain}{\fancyhf{}\fancyhead[R]{\small\thepage}%
+  \renewcommand{\headrulewidth}{0pt}}
+
+% --- inline code -----------------------------------------------------
+% \code{} is \texttt: underscores and other specials must be escaped in
+% the source (\_). Deliberate — it keeps the macro trivial and the
+% compiler catches every miss.
+%
+% Manifest names are long and full of underscores (compile_definitions,
+% cpp26_root, std::shared_ptr<Backend>), and TeX will not break inside a
+% typewriter run — so a single name can overrun the margin in a narrow
+% table cell. Rebinding \_ inside the group turns every escaped
+% underscore into a break opportunity. It is a rebinding rather than a
+% catcode change so it works on an argument that was already tokenised,
+% which is what happens inside a table cell or another macro.
+% \bk adds one by hand, for the paths and :: runs this cannot reach.
+\newcommand{\bk}{\discretionary{}{}{}}
+\newcommand{\bkus}{\char`\_\bk}
+\DeclareRobustCommand{\code}[1]{\texttt{\small\let\_\bkus #1}}
+\newcommand{\rosetta}{\textsc{Rosetta}}
+\DeclareRobustCommand{\field}[1]{\code{#1}}
+\DeclareRobustCommand{\lang}[1]{\code{#1}}
+
+% hyperref re-expands section titles into PDF bookmark strings, where
+% \let and font switches are meaningless. Strip the wrappers there and
+% keep the text.
+\makeatletter
+\pdfstringdefDisableCommands{%
+  \let\code\@firstofone
+  \let\field\@firstofone
+  \let\lang\@firstofone
+  \let\bk\@empty
+  \let\bkus\@empty
+  \def\_{\string_}%
+  \def\rosetta{Rosetta}%
+}
+\makeatother
+
+% --- listings --------------------------------------------------------
+\lstdefinelanguage{json}{
+  morestring=[b]",
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  literate=
+   *{:}{{{\color{kw}:}}}{1}
+    {[}{{{\color{kw}[}}}{1}
+    {]}{{{\color{kw}]}}}{1}
+    {\{}{{{\color{kw}\{}}}{1}
+    {\}}{{{\color{kw}\}}}}{1},
+}
+
+\lstdefinestyle{base}{
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{kw}\bfseries,
+  commentstyle=\color{cmt}\itshape,
+  stringstyle=\color{str},
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  framesep=5pt,
+  xleftmargin=6pt,
+  xrightmargin=0pt,
+  showstringspaces=false,
+  breaklines=true,
+  breakatwhitespace=true,
+  columns=fullflexible,
+  keepspaces=true,
+  captionpos=b,
+  aboveskip=\medskipamount,
+  belowskip=\medskipamount,
+}
+\lstdefinestyle{cpp}{style=base,language=C++,
+  morekeywords={consteval,constexpr,concept,requires,co_await,nullptr,override,final,noexcept}}
+% listings ships no JavaScript definition; this is the subset the book uses.
+\lstdefinelanguage{javascript}{
+  keywords={const,let,var,function,return,new,await,async,class,extends,
+            import,export,from,require,if,else,for,of,in,typeof},
+  ndkeywords={true,false,null,undefined,this},
+  sensitive=true,
+  comment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]',
+  morestring=[b]",
+  morestring=[b]`,
+}
+\lstdefinestyle{js}{style=base,language=javascript}
+\lstdefinestyle{py}{style=base,language=Python}
+\lstdefinestyle{json}{style=base,language=json}
+\lstdefinestyle{sh}{style=base,language=bash,
+  keywordstyle=\color{kw},morekeywords={cmake,rosetta_gen,npm,emcmake,jq,python,python3}}
+\lstdefinestyle{plain}{style=base,language={}}
+\lstset{style=plain}
+
+% --- callouts (no tcolorbox on a basic TeX Live) ----------------------
+% A coloured left rule plus an indented block. Built from primitives so
+% the book needs nothing beyond the packages above.
+\newenvironment{callout}[2]% #1 = bar colour, #2 = label
+{\par\medskip\noindent
+ \begingroup
+ \setlength{\fboxsep}{0pt}%
+ \begin{list}{}{\leftmargin=1.2em\rightmargin=0pt\itemindent=0pt\listparindent=0pt
+   \topsep=0pt\parsep=\parskip\partopsep=0pt}
+ \item[]\hspace*{-1.2em}\makebox[1.2em][l]{\textcolor{#1}{\rule[-0.3ex]{2.2pt}{1.1em}}}%
+ \textcolor{#1}{\textbf{\small\MakeUppercase{#2}}}\par\nopagebreak\smallskip}
+{\end{list}\endgroup\par\medskip}
+
+\newenvironment{note}{\begin{callout}{notebar}{note}}{\end{callout}}
+\newenvironment{warn}{\begin{callout}{warnbar}{watch out}}{\end{callout}}
+
+% --- table helpers ---------------------------------------------------
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+\newcommand{\yes}{\textcolor{str}{\textbf{yes}}}
+\newcommand{\no}{\textcolor{warnbar}{\textbf{no}}}
+\newcommand{\req}{$\bullet$}
+
+% --- line breaking ---------------------------------------------------
+% Belt and braces for the long typewriter runs \code's own break
+% opportunities cannot reach: let TeX stretch a line a little rather
+% than overrun the margin.
+\tolerance=1200
+\emergencystretch=2.5em
+
+% --- misc ------------------------------------------------------------
+\setlist[itemize]{itemsep=2pt,topsep=4pt,parsep=0pt}
+\setlist[enumerate]{itemsep=2pt,topsep=4pt,parsep=0pt}
+\setcounter{tocdepth}{1}
+\setcounter{secnumdepth}{2}
+\captionsetup{font=small,labelfont=bf}
+
+\title{\vspace{-2cm}\Huge\textbf{\rosetta}\\[0.4cm]
+       \LARGE A User's Guide\\[0.6cm]
+       \large Multi-language bindings for unmodified C++,\\
+       generated once with C++26 static reflection}
+\author{Frantz Maerten\\\small\texttt{fmaerten@gmail.com}}
+\date{\today}
+
+% =====================================================================
+\begin{document}
+
+\frontmatter
+\maketitle
+
+\input{ch/00-preface}
+
+\tableofcontents
+
+\mainmatter
+
+\part{Understanding rosetta}
+\input{ch/01-what-is-rosetta}
+\input{ch/02-pipeline}
+\input{ch/03-first-binding}
+
+\part{The manifest}
+\input{ch/04-manifest-anatomy}
+\input{ch/05-what-to-bind}
+\input{ch/06-targets}
+\input{ch/07-building}
+\input{ch/08-types}
+\input{ch/09-presets}
+
+\part{Annotations}
+\input{ch/10-annotations}
+
+\part{Driving the tool}
+\input{ch/11-rosetta-gen}
+\input{ch/12-coverage}
+
+\part{Beyond bindings}
+\input{ch/13-dynamic}
+\input{ch/14-scriptable}
+\input{ch/15-extending}
+
+\part{Worked examples}
+\input{ch/16-examples}
+
+\appendix
+\part{Reference}
+\input{ch/app-a-manifest}
+\input{ch/app-b-annotations}
+\input{ch/app-c-targets}
+\input{ch/app-d-troubleshooting}
+
+\end{document}

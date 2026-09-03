@@ -1,0 +1,498 @@
+\chapter{Declaring what to bind}
+\label{ch:whattobind}
+
+\section{Classes}
+
+\field{classes} is an array of per-class entries. Each binds one C++ type ---
+a \code{class}, a \code{struct}, or an \code{enum}.
+
+\begin{lstlisting}[style=json]
+"classes": [
+  { "name": "Model", "header": "Model.h", "doc": "the model class" },
+  { "header": "Point.h" },
+  { "name": "space::Vector3", "header": "Vector3.h",
+    "annotations": "Vector3.ann.json" }
+]
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcL{8.3cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Req.} & \textbf{Meaning} \\
+\midrule
+\field{header} & \req &
+  Filename emitted into \code{\#include "\ldots"}, resolved against
+  \field{user\_include}. May be a \textbf{glob}
+  (Section~\ref{sec:globs}). \\
+\field{name} & &
+  C++ type name, reachable after including \field{header}. May be
+  namespace-qualified. Defaults to the header's stem. \\
+\field{expose} & &
+  The \emph{binding} name --- what scripts see. Defaults to the unqualified
+  \field{name}. See Section~\ref{sec:expose}. \\
+\field{annotations} & &
+  Path (relative to the manifest) to an out-of-line annotation side-car.
+  See Section~\ref{sec:outofline}. \\
+\field{doc} & &
+  A description string, used by the document backends. \\
+\field{extensions} & &
+  Free functions exposed as instance methods. See
+  Section~\ref{sec:extensions}. \\
+\field{final} & &
+  Treat the class as non-overridable from the host language: no trampoline is
+  generated even when it has public virtual methods. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Inheritance, multiple constructors, enums, nested user types and
+\code{std::vector} members are discovered automatically. You do not list base
+classes --- list the most-derived type you want bound and the bases are
+flattened into it.
+
+\subsection{\field{final}: turning off trampolines}
+
+By default, a class with public virtual methods gets a \emph{trampoline}
+subclass in the backends that support host-language overriding (pybind11,
+N-API), so a Python or JavaScript subclass can override a C++ virtual. Marking
+the entry \code{"final": true} suppresses that: the virtuals still bind as
+ordinary callable methods, they just cannot be overridden from outside.
+
+It has a second, less obvious use. A class with virtuals is wrapped \emph{as
+its trampoline subclass}, and a Node member-object property
+(\code{mesh.vertices}) stores a \code{T*} --- which requires the wrapped type to
+actually be \code{T}, not \code{Js\_T}. \field{final} is what makes such a class
+eligible.
+
+\subsection{Members that will not bind}
+
+Some members cannot be compiled into a binding at all: a public field whose type
+is a non-copyable class, a method returning a reference to such a type, a
+by-value parameter of one. These are \textbf{skipped}, not fatal. The class
+still binds --- as an opaque handle plus whatever members do marshal --- and
+every skip is recorded in \code{coverage.json} with a reason.
+
+Extension methods (Section~\ref{sec:extensions}) are how you fill the gaps.
+
+\section{Binding a whole folder}
+\label{sec:globs}
+
+For the common library shape --- one class per header, named after its file ---
+an entry whose \field{header} is a \textbf{shell glob} stands for every header
+it matches: one class entry per file, its \field{name} derived from the file's
+stem.
+
+\begin{lstlisting}[style=json]
+"classes": [
+  { "header": "shapes/*.h" },
+  { "header": "solvers/**/*.h",
+    "exclude": ["solvers/detail/*.h", "solvers/*_impl.h"] }
+]
+\end{lstlisting}
+
+The pattern syntax is the same one \field{user\_sources} uses: \code{*},
+\code{?} and \code{[\ldots]} within a path component, and a component of exactly
+\code{**} matching zero or more directories.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcL{8.3cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Req.} & \textbf{Meaning} \\
+\midrule
+\field{header} & \req &
+  The glob, resolved against \textbf{every} \field{user\_include} root with the
+  composed \field{header\_dir} in front. \\
+\field{exclude} & &
+  A pattern, or a list of them, whose matches are dropped: headers declaring no
+  bound class, a \code{detail/} subtree, an \code{\_impl} convention. \\
+\field{final} & &
+  Applies to every matched class --- it is a uniform property. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\field{name}, \field{expose}, \field{annotations} and \field{extensions} are
+\textbf{rejected} on a glob entry: they are per-class and cannot mean anything
+for a folder.
+
+The rules:
+
+\begin{itemize}
+  \item Only \code{.h}, \code{.hh}, \code{.hpp} and \code{.hxx} are taken, so
+    \code{"**/*"} cannot drag in a \code{.cpp} or a \code{README}.
+  \item The derived name is the file's \textbf{stem}, qualified by the
+    \field{namespace} in scope exactly like a spelled-out entry with no
+    \field{name}. A glob works inside a group and takes that group's
+    \field{header\_dir} and \field{namespace}.
+  \item A header whose stem is not a C++ identifier (\code{my-utils.h}) is
+    skipped with a warning --- there is nothing to derive a name from.
+  \item A pattern matching nothing is a warning, not an error.
+\end{itemize}
+
+\subsection{The stem is the class name}
+
+The loader never opens a bound header --- it lists files. So a glob's only claim
+about a header is the one its \emph{name} makes, and that claim has to hold
+exactly:
+
+\begin{center}
+\emph{\code{Point.h} must declare a class named \code{Point}}, spelled
+identically, in the namespace in scope for the entry.
+\end{center}
+
+Nothing checks this at load time. A stem naming no such class surfaces as a
+\emph{compile error in the generated driver} --- \code{no member named 'vec3' in
+namespace 'geom'} --- which is why the cases below are worth knowing before
+pointing a glob at a folder.
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{3.9cm}L{3.7cm}L{5.2cm}@{}}
+\toprule
+\textbf{Your header tree} & \textbf{What the glob does} & \textbf{What to write} \\
+\midrule
+\code{Point.h} declares \code{Point} & binds \code{Point} &
+  \code{\{"header": "*.h"\}} --- nothing else \\
+\addlinespace
+\code{Point.h} declares \code{Point} \emph{and} \code{Aabb} &
+  binds \code{Point} only --- a file yields one entry &
+  list both explicitly (see the take-over rule) \\
+\addlinespace
+\code{types.h} declares \code{Tolerance}, \code{Mode} --- no \code{types} &
+  would bind a non-existent \code{types} &
+  list them; the take-over rule keeps the glob off the file \\
+\addlinespace
+\code{vec3.h} declares \code{Vec3} &
+  would bind a non-existent \code{vec3} &
+  list it, or \code{"exclude": ["vec3.h"]} \\
+\addlinespace
+\code{Point.h} declares \code{geom::detail::Point} &
+  binds \code{geom::Point} --- the glob applies the namespace \emph{in scope} &
+  list it, or put the glob in a group with \code{"namespace": "detail"} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{The take-over rule}
+
+An entry that names a class of a header \textbf{speaks for that whole header}:
+the glob then leaves the file alone. That is what makes the \code{types.h} and
+\code{vec3.h} rows work --- you name the classes, and no bogus stem entry
+appears beside them.
+
+Globbed entries land \emph{after} everything spelled out and yield to it, both
+by name and by header. So this composes as you would want:
+
+\begin{lstlisting}[style=json]
+"header_dir": "geom",
+"namespace": "geom",
+"classes": [
+  { "header": "*.h", "exclude": ["fwd.h"] },
+  { "header": "Mesh.h", "annotations": "Mesh.ann.json" },
+  { "header": "types.h", "name": "Tolerance" }
+]
+\end{lstlisting}
+
+Every \code{geom/*.h} but \code{geom/fwd.h} binds, with \code{geom/Mesh.h}
+taking its side-car and \code{geom/types.h} binding \code{geom::Tolerance}
+rather than a non-existent \code{geom::types}.
+
+The cost is the second row of the table: if a header declares \emph{both} a
+class named after the file and another one you list, taking the file over drops
+the first. \code{rosetta\_gen} says so rather than leaving it to be noticed:
+
+\begin{lstlisting}[style=plain]
+rosetta_gen: note: "Point.h" is listed explicitly (class "Aabb"), so the pattern
+that also matched it contributes nothing there -- class "Point" is NOT bound.
+List it too if the header declares both; name the header in the pattern's
+"exclude" if it does not (silences this)
+\end{lstlisting}
+
+The note fires on the \code{types.h} and \code{vec3.h} rows too, where losing
+the stem class is exactly what you wanted --- add those headers to
+\field{exclude} to say so once and quiet it. A name already taken is \emph{not}
+reported: a side-car entry beside a glob is the intended composition, not a
+loss.
+
+\begin{note}
+When stems and class names disagree often, \code{rosetta\_gen --init <src\_dir>}
+\emph{reads} the headers (a heuristic token scan) instead of trusting their
+names, and writes what it found into a manifest --- once, into a file you then
+edit.
+\end{note}
+
+\section{Renaming: \field{expose}}
+\label{sec:expose}
+
+Every class binds under \textbf{one module-level name}: its \field{expose}
+override, or its unqualified C++ identifier. Two entries resolving to the same
+name is an error --- the module attribute and the generated trampoline
+(\code{Py\_<name>} / \code{Js\_<name>}) would collide.
+
+That happens as soon as two bound namespaces declare the same identifier ---
+a slip-inversion \code{arch::Data} next to a stress-inversion
+\code{arch::sinv::Data}. Rename one side:
+
+\begin{lstlisting}[style=json]
+"classes": [
+  {"//": "stress inversion", "namespace": "sinv",
+   "header_dir": "stress-inversion", "entries": [
+      {"header": "Data.h"},
+      {"header": "GpsData.h"}
+  ]},
+  {"//": "slip inversion", "header_dir": "slip-inversion", "entries": [
+      {"header": "Data.h",    "expose": "SlipData"},
+      {"header": "GpsData.h", "expose": "SlipGpsData"}
+  ]}
+]
+\end{lstlisting}
+
+Python then sees \code{arch.Data} (the \code{sinv} one) and \code{arch.SlipData};
+C++ is untouched. Cross-references follow the rename automatically --- a
+TypeScript signature touching \code{arch::Data} says \code{SlipData} --- and the
+emitted C++ spells every bound class by its \emph{qualified} name, so the shared
+identifier never becomes ambiguous in the generated translation unit.
+
+\field{expose} is honoured by every backend: the runtime ones, the C-ABI ones
+(where it also names the generated \code{.cs} / \code{.java} file), the UI
+inspectors, \lang{rest} and \lang{openapi} (route paths and schema names), and
+the text outputs. It works on an \textbf{enum} entry, on a \textbf{free
+function}, and on an \textbf{extension method}. It must be a plain identifier.
+
+\section{Free functions}
+\label{sec:functions}
+
+\field{functions} binds free (non-member) functions without editing your
+headers. A namespace has no member list to enumerate, so unlike class members
+these must be named one by one.
+
+\begin{lstlisting}[style=json]
+"functions": [
+  { "name": "transform", "header": "common.h",
+    "doc": "Scale and swizzle a point into (x*2, z*3, y*4)" }
+]
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcL{8.6cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Req.} & \textbf{Meaning} \\
+\midrule
+\field{name} & \req & Function name, optionally namespace-qualified. \\
+\field{header} & \req & Header declaring it. \\
+\field{doc} & & Description --- free functions carry no in-source annotations. \\
+\field{expose} & & The binding name. Same rule as a class's. \\
+\field{signature} & & The C++ function type of the one overload to bind. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Free functions share the module namespace with classes, so \code{arch::solve}
+and \code{arch::sinv::solve} --- or a function and a class of the same name ---
+collide exactly like two classes do, and are fixed the same way:
+
+\begin{lstlisting}[style=json]
+"functions": [
+  { "name": "arch::solve",       "header": "slip.h" },
+  { "name": "arch::sinv::solve", "header": "stress.h", "expose": "solve_stress" }
+]
+\end{lstlisting}
+
+\subsection{Binding one overload: \field{signature}}
+\label{sec:signature}
+
+An overloaded free function has no reflection to name: \code{\^{}\^{}GEO::mesh\_union}
+is ill-formed the moment the namespace declares the name twice, so the entry
+could not be written at all. Give it the \emph{signature} of the one you want:
+
+\begin{lstlisting}[style=json]
+"functions": [
+  { "name": "GEO::mesh_union",
+    "header": "geogram/mesh/mesh_surface_intersection.h",
+    "signature": "void(GEO::Mesh&, const GEO::Mesh&, const GEO::Mesh&, bool)" }
+]
+\end{lstlisting}
+
+The signature is a C++ function type --- return type first, then the parameter
+list --- spliced into the generated driver \textbf{verbatim}. So it must resolve
+there: spell the types the way the header does, qualified. \code{rosetta\_gen}
+checks only its shape (a return type, balanced parentheses); the types are the
+compiler's business, and an error names your own spelling back to you.
+
+It is \textbf{not a filter} over the overload set. It names one member, and only
+that one binds. List the entry twice, with two signatures and two \field{expose}
+names, to bind two of them:
+
+\begin{lstlisting}[style=json]
+{ "name": "GEO::mesh_union", "header": "...", "expose": "mesh_union_flags",
+  "signature": "void(GEO::Mesh&, const GEO::Mesh&, const GEO::Mesh&,
+                     GEO::MeshBooleanOperationFlags)" }
+\end{lstlisting}
+
+Backends form the function pointer through a disambiguating
+\code{static\_cast}, so every backend that emits a pointer binds the selected
+overload. The one that spells the function's \emph{reflection} instead ---
+\lang{rest}, which emits \code{bind\_rest\_function<\^{}\^{}name>} --- skips the entry
+with a note on stderr: there is no reflection for one member of an overload set,
+and a skipped function is honest where an ambiguous one would not compile.
+
+\begin{note}
+Overload selection is a \field{functions} feature. An extension method cannot
+take a \field{signature} --- an extension reaches the backends as a
+\emph{method}, whose emitters spell its address in many more places than a free
+function's single address-of.
+\end{note}
+
+\section{Extension methods}
+\label{sec:extensions}
+
+Some libraries keep their real API where no binding generator can reach it:
+\code{GEO::Mesh}'s geometry lives behind public member objects with raw
+\code{double*} accessors, its I/O helpers are overloaded, its UV coordinates sit
+in an attribute template.
+
+Rather than hand-write a wrapper \emph{class}, list plain free functions ---
+whose \textbf{first parameter is \code{Cls\&}} (or \code{const Cls\&}) --- as
+\field{extensions} of the bound class. They appear to every backend as ordinary
+instance methods:
+
+\begin{lstlisting}[style=json]
+"classes": [{
+  "name": "GEO::Mesh", "header": "geogram/mesh/mesh.h",
+  "extensions": [
+    { "name": "georo::set_surface", "header": "mesh_ext.h",
+      "doc": "Set vertices + triangles from flat arrays." },
+    { "name": "georo::vertices",    "header": "mesh_ext.h",
+      "doc": "Vertex coordinates as a flat array." }
+  ]
+}]
+\end{lstlisting}
+
+\begin{lstlisting}[style=py]
+m = geogram.Mesh()
+m.set_surface(coords, triangles)   # calls georo::set_surface(m, ...)
+print(len(m.vertices()) // 3)
+\end{lstlisting}
+
+The receiver is dropped from the exposed signature; the remaining parameters and
+the return type marshal exactly like a free function's. The method name is the
+function's unqualified identifier, unless \field{expose} says otherwise.
+
+Supported by \lang{python}, \lang{nanobind}, \lang{node} and \lang{wasm}, plus
+all the text backends. Backends that can only emit member pointers ---
+\lang{qt}, \lang{qml}, \lang{csharp}, \lang{java} --- skip them, and say so in
+\code{coverage.json}.
+
+This is also the escape hatch for an overload a name-keyed target dropped: wrap
+it in an extension under a distinct name and it comes back.
+
+\section{Out-parameters}
+\label{sec:outparams}
+
+\begin{lstlisting}[style=cpp]
+bool get_doubles(const std::string &name, vector<double> &out, index_t &dim) const;
+\end{lstlisting}
+
+Three results, C++-style. No host language has that shape, and every backend
+skipped such a member --- the argument its runtime converts is a temporary,
+which cannot bind to a non-const reference. Name the outputs and they leave the
+exposed signature and join the return instead:
+
+\begin{lstlisting}[style=json]
+"out_params": {
+  "AttributesManager::get_doubles": [1, 2]
+}
+\end{lstlisting}
+
+Keys are \code{"Class::method"} or \code{"ns::function"}; values are
+\textbf{0-based parameter indices}. A key matching nothing is reported on
+stderr rather than ignored.
+
+\begin{lstlisting}[style=py]
+ok, uv, dim = mesh.facet_corners.attributes().get_doubles("tex_coord")
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{8.6cm}@{}}
+\toprule
+\textbf{Backend} & \textbf{Shape} \\
+\midrule
+\lang{python} / \lang{nanobind} & a tuple --- \code{(ok, uv, dim)} \\
+\lang{lua}        & Lua's own multiple returns \\
+\lang{node}       & an array --- \code{const [ok, uv, dim] = \ldots} \\
+\lang{wasm}       & an array too, built as an \code{emscripten::val} \\
+\lang{typescript} & a tuple type: \code{[boolean, number[], number]} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The return value comes first when the function has one; with a \code{void}
+return the outputs are all there is.
+
+\subsection*{Never inferred, and that is the design}
+
+These two are the same C++:
+
+\begin{lstlisting}[style=cpp]
+void assign_points(vector<double> &pts, index_t dim, bool steal); // an INPUT
+bool get_doubles(const std::string &, vector<double> &out, index_t &dim); // an OUTPUT
+\end{lstlisting}
+
+Guessing wrong silently drops an argument in one direction or a result in the
+other, so rosetta does not guess. An unmarked mutable reference keeps binding
+exactly as before --- input-only for a container, skipped for a scalar.
+
+Marking a \code{const} reference does nothing: the callee cannot write through
+it. A mutable reference to a \textbf{bound class} is not an out-parameter
+either --- it already crosses as a handle the callee writes through, which is
+the more faithful reading and needs no adapter.
+
+\section{Module init}
+\label{sec:moduleinit}
+
+A library is more than its API. geogram wants \code{GEO::initialize()}, a run of
+\code{CmdLine::import\_arg\_group()} calls and a C-function-pointer registration
+to have happened before anything works --- none of which is expressible as
+``bind this name''. \field{module\_init} names statements the generated module
+runs \textbf{when it loads}:
+
+\begin{lstlisting}[style=json]
+"module_init": {
+  "headers": ["geogram/basic/command_line.h",
+              "geogram/basic/command_line_args.h"],
+  "statements": [
+    "GEO::initialize(GEO::GEOGRAM_INSTALL_NONE)",
+    "GEO::CmdLine::import_arg_group(\"standard\")",
+    "GEO::CmdLine::import_arg_group(\"algo\")"
+  ]
+}
+\end{lstlisting}
+
+A bare array is shorthand for \field{statements} alone. The statements are
+spliced \textbf{verbatim} into the module entry point ---
+\code{PYBIND11\_MODULE}, \code{NB\_MODULE}, \code{Init},
+\code{EMSCRIPTEN\_BINDINGS}, \code{luaopen\_*}, \code{JLCXX\_MODULE} --- at the
+very top, before any binding is registered. So an I/O handler an init call
+installs is in place before a bound loader can be reached. A trailing \code{;}
+is optional and never doubled.
+
+\field{headers} are emitted as \code{\#include} lines \emph{ahead} of the bound
+classes' own, since an init statement usually names a namespace the bound
+headers never mention.
+
+\begin{warn}
+Because the statements are spliced verbatim, they must compile at that point:
+spell types qualified, and remember the module has no arguments to offer. This
+is \emph{fixed} start-up work, not a configurable entry point. Anything a caller
+should be able to vary --- a verbosity flag, a thread count --- still belongs in
+a bound function.
+\end{warn}
+
+Emitted by \lang{python}, \lang{nanobind}, \lang{node}, \lang{wasm}, \lang{lua}
+and \lang{julia} --- the backends with a module entry point. The C\#, Java,
+REST, UI and document backends have no single load-time hook and ignore the
+field.

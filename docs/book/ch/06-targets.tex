@@ -1,0 +1,236 @@
+\chapter{Targets}
+\label{ch:targets}
+
+\field{targets} lists the language backends to emit. One generator produces a
+\textbf{single combined module per target}, exposing every class --- not one
+module per class.
+
+\section{The two entry forms}
+
+A \textbf{bare string} uses \field{module\_name} (falling back to
+\field{generator\_name}) as the module name:
+
+\begin{lstlisting}[style=json]
+"targets": ["python", "node", "markdown"]
+\end{lstlisting}
+
+An \textbf{object} sets a per-target module name, and carries the per-target
+options:
+
+\begin{lstlisting}[style=json]
+"targets": [
+  { "lang": "python", "name": "pygeom" },
+  { "lang": "node",   "name": "jsgeom" },
+  { "lang": "markdown" }
+]
+\end{lstlisting}
+
+\field{name} is optional in the object form too. Mixing the forms in one array
+is fine.
+
+\section{The available \field{lang} values}
+
+Every compiled target is \textbf{expanded}: reflection runs once on the
+generation host and the emitted code builds with an off-the-shelf compiler.
+\lang{rest} and \lang{json} are the two exceptions --- both emit a project whose
+sources include a runtime visitor that still splices reflections, so those two
+need the C++26 toolchain to build.
+
+\begin{center}
+\small
+\begin{longtable}{@{}lL{5.4cm}L{4.6cm}@{}}
+\toprule
+\textbf{\code{lang}} & \textbf{Output} & \textbf{Builds with} \\
+\midrule
+\endhead
+\lang{python}     & pybind11 extension module & off-the-shelf compiler \\
+\lang{nanobind}   & nanobind extension module & off-the-shelf compiler \\
+\lang{node}       & N-API native addon & off-the-shelf compiler \\
+\lang{wasm}       & Emscripten / embind module & off-the-shelf emsdk \\
+\lang{qt}         & Qt Widgets property/method inspector & off-the-shelf compiler + Qt 6 \\
+\lang{qml}        & QML / QtQuick inspector & off-the-shelf compiler + Qt 6 \\
+\lang{imgui}      & Dear ImGui inspector app (GLFW + OpenGL3, auto-fetched) & off-the-shelf compiler \\
+\lang{csharp}     & C-ABI shared lib + P/Invoke wrappers & off-the-shelf compiler + .NET \\
+\lang{java}       & C-ABI + handle-backed FFM wrappers & off-the-shelf compiler + JDK \\
+\lang{julia}      & CxxWrap.jl / jlcxx shared module & off-the-shelf compiler + CxxWrap.jl \\
+\lang{lua}        & sol2 shared module, \code{require}-able & off-the-shelf compiler \\
+\lang{rest}       & cpp-httplib JSON server + browser client & \textbf{C++26 toolchain} \\
+\lang{openapi}    & OpenAPI 3.1 specification & text output \\
+\lang{json}       & nlohmann (de)serialisation + \code{demo.cpp} & \textbf{C++26 toolchain} \\
+\lang{typescript} & ambient \code{.d.ts} declarations & text output \\
+\lang{markdown}   & API reference document & text output \\
+\lang{html}       & styled API reference page & text output \\
+\lang{paraview}   & ParaView Server Manager plugin XML & text output \\
+\lang{dynamic}    & the IR as runtime data (Chapter~\ref{ch:dynamic}) & off-the-shelf compiler \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+Notes worth having:
+
+\begin{itemize}
+  \item \textbf{Qt / QML} need Qt 6, but no \code{moc} on the generated code.
+  \item \textbf{Lua} needs Lua 5.1--5.4 or LuaJIT --- sol2 does not support Lua
+    5.5 yet. sol2 itself is fetched at configure time.
+  \item The text-only outputs (\lang{markdown}, \lang{html}, \lang{typescript},
+    \lang{openapi}, \lang{paraview}) compile nothing, so the
+    C++26-vs-off-the-shelf distinction does not apply to them. \lang{json} is
+    \emph{not} one of them: besides the serialisation header it emits a
+    buildable \code{demo.cpp} at \code{CMAKE\_CXX\_STANDARD 26}.
+  \item Each name also accepts a deprecated \code{-expanded} spelling
+    (\code{lua-expanded}, \code{qt-expanded}, \ldots) resolving to the same
+    backend, so manifests written before the suffix was dropped keep working.
+\end{itemize}
+
+\begin{note}
+Until 2026-08, seven languages shipped a second, \emph{thin} backend whose
+generated code re-ran the reflection walk at the target's compile time. Those
+are gone: the short name now means what \code{-expanded} used to. No target
+spells \code{-expanded} any more, and every old spelling still resolves.
+\end{note}
+
+\section{Per-target linker flags}
+
+\field{link\_options} applies extra linker flags to \emph{this target only},
+emitted as \code{target\_link\_options(\ldots\ PRIVATE \ldots)} in the generated
+project.
+
+\begin{lstlisting}[style=json]
+"targets": [
+  { "lang": "python" },
+  { "lang": "wasm", "link_options": ["-lnodefs.js"] }
+]
+\end{lstlisting}
+
+It is per-target --- unlike \field{compile\_definitions}, which is global ---
+because link flags are toolchain-specific. geogram's \code{GEO::initialize()}
+mounts the host filesystem with NODEFS under Node, which needs emscripten's
+nodefs library on the \textbf{wasm} link line and would break a native link.
+
+The flags are emitted \emph{after} the template's own
+\code{target\_link\_options}, so on the wasm targets --- where emcc honours the
+\emph{last} occurrence of a repeated \code{-s} setting --- they can also
+override a template default, e.g. \code{"-sALLOW\_MEMORY\_GROWTH=0"} for a
+fixed-size heap.
+
+\section{Where the built artifact lands}
+\label{sec:outdir}
+
+A generated project drops its built module next to its own sources. Handy for a
+smoke test; useless when the \code{.so} belongs inside your Python package or
+the \code{.js} next to a web app's assets.
+
+\begin{lstlisting}[style=json]
+"targets": [
+  { "lang": "nanobind", "name": "implicit3d", "out_dir": "./dist" },
+  { "lang": "wasm",     "name": "implicit3d", "out_dir": "../www/assets" }
+],
+"out_dir": "./dist"
+\end{lstlisting}
+
+The top-level \field{out\_dir} is the default for every target that names none;
+a target's own entry wins. Paths resolve against the manifest's directory and
+are created if missing.
+
+\begin{warn}
+This is \textbf{not} where the generated project goes --- that is
+\code{rosetta\_gen}'s own output tree, controlled by \code{--bindings-dir}. It
+is where the \emph{loadable artifact} lands: \code{libfoo.so} / \code{foo.pyd},
+\code{foo.node}, \code{foo.so} for Lua, and for wasm \emph{both} halves, the
+\code{.js} loader and its \code{.wasm}.
+\end{warn}
+
+The copy is \code{copy\_if\_different}, so an unchanged build touches nothing
+downstream, and the existing next-to-the-sources copy still happens.
+
+Supported by every backend that builds a loadable module: \lang{python},
+\lang{nanobind}, \lang{node}, \lang{wasm}, \lang{lua}, \lang{julia}. The
+document backends have no artifact to place, and the application-shaped ones
+(\lang{qt}, \lang{qml}, \lang{imgui}, \lang{rest}, \lang{csharp}, \lang{java})
+are not covered.
+
+\section{Pinning the runtime}
+\label{sec:runtimepins}
+
+By default a generated project takes whatever the \code{PATH} gives it: the
+emitted CMake probes \code{python3} / \code{node}, with a 3.8 floor and N-API 8
+written in. Pin them per target instead:
+
+\begin{lstlisting}[style=json]
+"targets": [
+  { "lang": "nanobind", "name": "geom",
+    "python": "3.11", "requires_python": ">=3.10" },
+  { "lang": "node", "name": "geom",
+    "napi_version": 9, "node_engine": ">=18" }
+]
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{7.6cm}l@{}}
+\toprule
+\textbf{Field} & \textbf{Effect} & \textbf{Default} \\
+\midrule
+\field{python} &
+  The interpreter the binding is built for. A bare version (\code{"3.11"})
+  becomes \code{python3.11}, resolved on \code{PATH}; anything else is used as
+  written (\code{"/opt/py311/bin/python3"}). & probe \code{python3} \\
+\addlinespace
+\field{requires\_python} &
+  Minimum version. Feeds \textbf{both} \code{find\_package(Python \ldots)} and
+  \code{pyproject.toml}'s \code{requires-python}, so the build floor and the
+  wheel metadata cannot drift apart. & \code{>=3.8} \\
+\addlinespace
+\field{napi\_version} &
+  \code{NAPI\_VERSION=} for the addon. This is the real Node floor --- N-API 8
+  means Node 12.22+, N-API 9 means Node 18.17+. & \code{8} \\
+\addlinespace
+\field{node\_engine} &
+  \code{engines.node} in \code{package.json} --- documentation for npm rather
+  than a compile setting, which is why it is separate from
+  \field{napi\_version}. & absent \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+These are per-target, not top-level, so a manifest carrying both a
+\lang{python} and a \lang{nanobind} target can point them at different
+interpreters.
+
+Two things worth knowing:
+
+\begin{itemize}
+  \item \textbf{\code{--cmake-arg -DPython\_EXECUTABLE=\ldots} does not work},
+    which is why these fields exist. The generated CMake sets that variable with
+    \code{CACHE \ldots\ FORCE} after probing, overriding anything passed on the
+    command line. Before these fields, a venv or a \code{pyenv} shim was the
+    only way to choose an interpreter.
+  \item \textbf{\field{python} also drives the wheel.} A wheel is tagged for
+    whichever interpreter runs \code{make\_wheel.py}, so
+    \code{rosetta\_gen --build --wheel} packages with the pinned interpreter
+    rather than the probed one --- otherwise a 3.11 build would emit a
+    \code{cp312} wheel.
+\end{itemize}
+
+\section{Choosing targets}
+
+A few rules of thumb, since nineteen is a lot:
+
+\begin{description}[leftmargin=0cm,style=nextline,font=\normalfont\itshape]
+  \item[Python] \lang{python} (pybind11) is the safe default --- the most
+    permissive type gate, full overload sets, mature. \lang{nanobind} is leaner
+    and faster and produces \code{abi3} wheels on 3.12+, at the cost of a
+    slightly narrower feature set. Emitting both costs nothing but build time.
+  \item[JavaScript] \lang{node} for a native addon, \lang{wasm} for the browser.
+    Add \lang{typescript} in either case: it costs nothing to generate and
+    describes the Node addon's surface to an editor.
+  \item[Documentation] \lang{markdown} or \lang{html} are free --- no
+    compilation, no toolchain, and they stay in step with the code by
+    construction. There is little reason not to emit one.
+  \item[A user interface] \lang{qt}, \lang{qml} and \lang{imgui} each generate a
+    working inspector over your annotated types. If you want a UI that is a
+    \emph{query} rather than generated code, see Chapter~\ref{ch:dynamic}
+    instead.
+  \item[During development] Generate everything, but compile one or two:
+    \code{--only python,node} (Section~\ref{sec:onlyskip}).
+\end{description}

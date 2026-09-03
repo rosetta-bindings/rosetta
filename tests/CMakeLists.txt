@@ -278,6 +278,15 @@ target_include_directories(manifest_vars PRIVATE ${CMAKE_SOURCE_DIR}/../tools/ro
 target_link_libraries(manifest_vars PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
 gtest_discover_tests(manifest_vars)
 
+# Per-target packaging ("wheel" / "wheel_dir" on a python / nanobind target),
+# including the guard against the old top-level spelling. Same arrangement as
+# the two suites above — the loader itself, with no reflection involved.
+add_executable(manifest_wheel manifest_wheel.cpp
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/manifest.cpp)
+target_include_directories(manifest_wheel PRIVATE ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen)
+target_link_libraries(manifest_wheel PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
+gtest_discover_tests(manifest_wheel)
+
 add_executable(nested_enum nested_enum.cpp)
 target_include_directories(nested_enum PRIVATE ${CMAKE_SOURCE_DIR}/../include)
 target_compile_options(nested_enum PRIVATE -fannotation-attributes)

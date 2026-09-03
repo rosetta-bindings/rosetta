@@ -401,6 +401,7 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 <details>
 <summary>Quick start, the manifest / generate / annotation references, and the todo list <i>(expand)</i></summary>
 
+- [**The rosetta book**](docs/book) — the whole manual as a single PDF (~105 pages): what rosetta is, the pipeline, the complete manifest reference, annotations, the tool, the runtime object model, writing a backend, worked examples, and four reference appendices. `cd docs/book && make`
 - [Quick start](docs/QUICKSTART.md) — five-step guide to generating bindings for an existing library
 - [Extending](docs/EXTENDING_BACKEND.md) — how to extend the rosetta backend
 - [Manifest](docs/MANIFEST.md) — complete reference for `manifest.json`: every field, target and option

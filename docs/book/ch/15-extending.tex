@@ -1,0 +1,340 @@
+\chapter{Writing a backend}
+\label{ch:extending}
+
+Rosetta ships nineteen backends, but the generator is \textbf{open for
+extension}: you can teach it a new target without editing
+\code{rosetta::generate} or any core file. This chapter adds a Lua backend as a
+worked example --- Lua because it is small enough to show whole, and because the
+real one exists to compare against.
+
+\section{The mental model: two layers}
+
+A backend is two independent pieces that run at two different times, and keeping
+them straight is most of the work.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{4.4cm}L{3.9cm}c@{}}
+\toprule
+\textbf{Layer} & \textbf{File you write} & \textbf{Runs when} &
+  \textbf{Reflection?} \\
+\midrule
+\textbf{Runtime visitor} & \code{rosetta/visitors/lua.h} &
+  when the \emph{generated} binding is compiled & \yes \\
+\addlinespace
+\textbf{Generation backend} & a \code{rosetta::Backend} subclass &
+  when the driver runs & \no \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The split exists because \code{rosetta::generate<Ts\ldots>} \textbf{erases the
+type pack up front} into plain strings:
+
+\begin{lstlisting}[style=cpp]
+struct GenClass { std::string name; std::string header; std::string doc; };
+\end{lstlisting}
+
+So a \code{Backend} never sees a C++ type --- only \code{\{name, header, doc\}}
+per class. All the real reflection happens later, in your \emph{visitor}, when
+the generated \code{auto\_lua.cpp} is compiled.
+
+\begin{lstlisting}[style=plain]
+manifest.json -(rosetta_gen)-> gen/ -(build)-> ./generator -(run)-> bindings/lua/
+                                                   |                 auto_lua.cpp
+                                                   |                 CMakeLists.txt
+                                          LuaBackend::emit()   (compiling auto_lua.cpp
+                                                                runs the walk)
+\end{lstlisting}
+
+\section{Layer 1: the runtime visitor}
+
+This is where binding actually happens. It implements the \textbf{walk visitor
+concept}: three required member templates plus one optional, each receiving a
+\code{std::meta::info} of the member and its annotation pack.
+
+\begin{lstlisting}[style=cpp]
+// include/rosetta/visitors/lua.h
+#pragma once
+#include <experimental/meta>
+#include <rosetta/walk.h>
+#include <sol/sol.hpp>
+#include <string>
+
+namespace rosetta {
+
+    template <typename T> struct LuaVisitor {
+        sol::usertype<T> &ut;
+
+        // A data member. `Fld` is the reflected field; `Anns...` is its
+        // annotation pack (rosetta::doc / readonly / range / ...).
+        template <std::meta::info Fld, auto... Anns> void field(const char *name) {
+            using F = [:std::meta::type_of(Fld):];
+            if constexpr (ann::has<readonly>(Anns...)) {
+                ut[name] = sol::readonly_property(
+                    [](const T &s) -> F { return s.[:Fld:]; });
+            } else {
+                ut[name] = sol::property(
+                    [](const T &s) -> F { return s.[:Fld:]; },
+                    [](T &s, F v) { s.[:Fld:] = v; });
+            }
+        }
+
+        template <std::meta::info Fn, auto... Anns> void method_instance(const char *name) {
+            ut[name] = &[:Fn:];
+        }
+
+        template <std::meta::info Fn, auto... Anns> void method_static(const char *name) {
+            ut[name] = &[:Fn:];
+        }
+
+        // OPTIONAL: constructors. Omit the method entirely and the walk skips
+        // it -- it is detected with `requires`.
+        // template <std::meta::info Ctor, auto... Anns> void constructor() { ... }
+    };
+
+    // Entry point the generated code calls, one per class.
+    template <typename T> void bind_lua(sol::state &lua, const char *name) {
+        sol::usertype<T> ut = lua.new_usertype<T>(name);
+        LuaVisitor<T> v{ut};
+        walk<T>(v);
+    }
+
+} // namespace rosetta
+\end{lstlisting}
+
+The annotation helpers you will use inside a visitor:
+
+\begin{itemize}
+  \item \code{rosetta::ann::has<readonly>(Anns...)} --- is annotation \code{A}
+    present?
+  \item \code{rosetta::ann::get\_or<doc>(doc\{""\}, Anns...)} --- fetch
+    annotation \code{A}, or a fallback.
+\end{itemize}
+
+And the reflection splices: \code{[:std::meta::type\_of(Fld):]} for a field's
+type, \code{obj.[:Fld:]} to access it, \code{\&[:Fn:]} for a member-function
+pointer.
+
+\begin{note}
+If your target cannot marshal some parameter or return type, mirror the
+\code{napi\_supported} / \code{rest\_supported} pattern --- a \code{consteval}
+predicate plus an \code{if constexpr} guard in \code{field} and
+\code{method\_*} --- so unbindable members are \emph{skipped} instead of failing
+the build. And record them: see Section~\ref{ch:coverage}'s instrumentation
+recipe, which is one line per gate.
+\end{note}
+
+\section{Layer 2: the generation backend}
+
+This scaffolds the per-target project. It implements:
+
+\begin{lstlisting}[style=cpp]
+struct Backend {
+    virtual ~Backend() = default;
+    virtual void emit(const GenContext &) const = 0;
+};
+\end{lstlisting}
+
+with everything it needs handed over in \code{GenContext}:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.2cm}@{}}
+\toprule
+\code{out\_dir} & root of the generated tree (\code{bindings/}) \\
+\code{lib} & this target's module/library name, from the manifest entry \\
+\code{classes} & \code{std::vector<GenClass>} --- \code{\{name, header, doc\}}
+  per class \\
+\code{user\_include} & absolute directory holding the class headers \\
+\code{rosetta\_include} & absolute path to rosetta's \code{include/} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A minimal backend writes one \code{.cpp} that includes the visitor and calls
+\code{bind\_lua<T>} per class, plus a \code{CMakeLists.txt}:
+
+\begin{lstlisting}[style=cpp]
+#include <rosetta/generate.h>
+#include <filesystem>
+#include <fstream>
+
+struct LuaBackend : rosetta::Backend {
+    static void write(const std::filesystem::path &p, const std::string &s) {
+        std::filesystem::create_directories(p.parent_path());
+        std::ofstream(p) << s;
+    }
+
+    void emit(const rosetta::GenContext &c) const override {
+        std::string includes, binds;
+        for (const auto &k : c.classes) {
+            includes += "#include \"" + k.header + "\"\n";
+            using rosetta::exposed_of;
+            using rosetta::qualified_of;
+            binds += "    rosetta::bind_lua<" + qualified_of(k) +
+                     ">(lua, \"" + exposed_of(k) + "\");\n";
+        }
+
+        const auto dir = c.out_dir / "lua";
+        write(dir / "auto_lua.cpp",
+              "// Generated by rosetta -- do not edit by hand.\n" + includes +
+              "#include <rosetta/visitors/lua.h>\n"
+              "#include <sol/sol.hpp>\n\n"
+              "extern \"C\" int luaopen_" + c.lib + "(lua_State *L) {\n"
+              "    sol::state_view lua(L);\n" + binds +
+              "    return 0;\n}\n");
+
+        write(dir / "CMakeLists.txt", /* ... mirroring bindings/python's ... */);
+    }
+};
+\end{lstlisting}
+
+\begin{warn}
+Two names, never interchangeable. \code{qualified\_of(k)} gives the
+\textbf{C++} spelling --- \code{arch::sinv::Data} --- which is what anything the
+generated translation unit compiles must use. \code{exposed\_of(k)} gives the
+\textbf{host-language} name: the manifest's \field{expose} override, else the
+identifier. Getting these the wrong
+way round is how two same-named bound types become ambiguous in the generated
+source, and how a rename silently fails to take effect.
+\end{warn}
+
+\section{Registering it}
+
+\code{rosetta::generate} dispatches each target through a runtime registry keyed
+by the manifest's \field{lang} string:
+
+\begin{lstlisting}[style=cpp]
+std::map<std::string, std::shared_ptr<Backend>> &backend_registry();
+void register_backend(std::string lang, std::shared_ptr<Backend> backend);
+\end{lstlisting}
+
+Register at static-init time with the \code{BackendRegistrar} helper, in one
+self-contained plugin translation unit:
+
+\begin{lstlisting}[style=cpp]
+// lua_plugin.cpp -- your plugin, owned entirely by you
+#include "LuaBackend.h"
+
+static const rosetta::BackendRegistrar
+    lua_reg{"lua", std::make_shared<LuaBackend>()};
+\end{lstlisting}
+
+Because the registrar runs before \code{main}, the \code{"lua"} backend is
+present by the time the driver calls \code{generate} --- \textbf{no edit to
+\code{generate} required}. An unregistered target is warned about and skipped.
+
+\begin{note}
+Your backend does \emph{not} belong in \code{rosetta::backend}. That namespace
+is where rosetta's own implementations live, not a registration point. Put
+yours in your own namespace; what you inherit from is \code{rosetta::Backend},
+and what you call is the public API below.
+\end{note}
+
+\section{Wiring it into a project}
+
+Point the manifest at your plugin with \field{plugins}, and add a target.
+\code{rosetta\_gen} compiles each listed source into the generated driver's
+\code{add\_executable}, resolving paths relative to the manifest.
+
+\begin{lstlisting}[style=json]
+{
+  "user_include": "./geom",
+  "rosetta_include": "../../include",
+  "plugins": ["lua_plugin.cpp"],
+  "targets": [
+    { "lang": "python", "name": "pygeom" },
+    { "lang": "lua",    "name": "mygeom" }
+  ],
+  "classes": [
+    { "name": "Model", "header": "Model.h" },
+    { "header": "Point.h" }
+  ]
+}
+\end{lstlisting}
+
+Then the usual flow:
+
+\begin{lstlisting}[style=sh]
+../../bin/rosetta_gen manifest.json gen   # gen/ + your plugin in its CMakeLists
+cmake -S gen -B gen/build && cmake --build gen/build
+./generator bindings                      # emits bindings/python AND bindings/lua
+\end{lstlisting}
+
+\section{API reference}
+
+\subsection*{Generation layer (\code{<rosetta/generate.h>})}
+
+\begin{lstlisting}[style=cpp]
+struct GenClass { std::string name; std::string header; std::string doc; };
+
+struct GenContext {
+    std::filesystem::path out_dir;
+    std::string           lib;
+    std::vector<GenClass> classes;
+    std::string           user_include, rosetta_include;
+};
+
+struct Backend {
+    virtual void emit(const GenContext &) const = 0;
+};
+
+void register_backend(std::string lang, std::shared_ptr<Backend>);
+
+struct BackendRegistrar {
+    BackendRegistrar(std::string lang, std::shared_ptr<Backend>);
+};
+
+std::map<std::string, std::shared_ptr<Backend>> &backend_registry();
+\end{lstlisting}
+
+\subsection*{IR accessors --- how a backend spells a bound type}
+
+\begin{itemize}
+  \item \code{qualified\_of(const GenClass\&)} / \code{(const GenEnum\&)} --- the
+    \textbf{C++} spelling, for anything the generated TU compiles.
+  \item \code{exposed\_of(const GenClass\&)} / \code{(const GenEnum\&)} --- the
+    \textbf{host-language} name.
+  \item \code{exposed\_object\_of(const GenType\&, const GenContext\&)} --- the
+    exposed name of the type an IR entry \emph{references}.
+  \item \code{names\_type(const GenType\&, const K\&)} --- does this IR type name
+    that bound class or enum?
+\end{itemize}
+
+\begin{note}
+These six lived in \code{rosetta::gen\_detail} before 2026-08. That spelling
+still compiles --- the old names are \code{using}-declarations onto these --- but
+it was a ``detail'' namespace documented as an extension point, so they now sit
+in \code{rosetta::} with the rest of the backend API.
+\end{note}
+
+\subsection*{Runtime layer (\code{<rosetta/walk.h>}) --- the visitor concept}
+
+\begin{itemize}
+  \item \code{v.template field<Fld, Anns...>(const char *name);}
+  \item \code{v.template method\_instance<Fn, Anns...>(const char *name);}
+  \item \code{v.template method\_static<Fn, Anns...>(const char *name);}
+  \item \code{v.template constructor<Ctor, Anns...>();} ---
+    \textbf{optional}, called only if defined.
+  \item \code{rosetta::ann::has<A>(Anns...)} /
+    \code{rosetta::ann::get\_or<A>(fallback, Anns...)}
+\end{itemize}
+
+\section{Where to copy from}
+
+The built-in backends are a declaration header in
+\code{include/rosetta/backends/} with its implementation alongside in
+\code{include/rosetta/backends/inline/}. They live in \code{rosetta::backend}
+--- \code{backend::Python}, \code{backend::Node} --- so the directory, the file
+and the namespace each say ``backend'' once and the class says only which one.
+They are the reference for the CMake flags and the clang-p2996 link line.
+
+The reflection-free header-only runtimes those backends emit \code{\#include}
+lines for --- the N-API marshaller, the C\#/Java C-ABI shims, the Qt and ImGui
+widget kits --- live under \code{include/rosetta/runtime/}. They are compiled by
+the \emph{generated} project, never by the generator, which is why they are a
+directory of their own.
+
+The existing visitors in \code{include/rosetta/visitors/} are the templates to
+copy for layer~1.

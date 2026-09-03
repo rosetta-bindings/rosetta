@@ -1,0 +1,406 @@
+\chapter{Making the generated projects build}
+\label{ch:building}
+
+Chapter~\ref{ch:whattobind} said what to bind. This chapter is about the other
+half: getting the emitted projects to actually compile and link, which for a
+real library means telling rosetta where the \emph{definitions} are, what
+preprocessor state the headers expect, and which optimisation to build at.
+
+\section{The two ways to supply definitions}
+
+Your bound headers usually only \emph{declare} the API. The bodies live either
+in a pre-built library or in source files. Rosetta has one field for each, and
+they are independent --- use either, or both.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{10.2cm}@{}}
+\toprule
+\field{user\_lib} & Link the bindings against a pre-built \code{.so} /
+  \code{.dylib} / \code{.a}. \\
+\field{user\_sources} & Compile \code{.cpp} (or \code{.c}) files \emph{straight
+  into} each binding target. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Linking a pre-built library}
+
+\begin{lstlisting}[style=json]
+"user_lib": {
+  "name": "space",
+  "dir":  "../space/bin",
+  "link": "shared"
+}
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcL{8.4cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Req.} & \textbf{Meaning} \\
+\midrule
+\field{name} & \req & Library name --- the \code{space} in \code{libspace.dylib}. \\
+\field{dir}  & \req & Directory holding it, relative to the manifest; used for
+  \code{-L} and rpath. \\
+\field{link} & & \code{"shared"} (default), \code{"static"}, or
+  \code{"dynamic"} (an alias of shared). The \emph{preferred} form, with
+  fallback to whichever is actually built. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A bound library rarely stands alone. Give \field{user\_lib} an \textbf{array},
+one object per library:
+
+\begin{lstlisting}[style=json]
+"user_include": ["../mylib/include", "/opt/foo/include"],
+"user_lib": [
+  { "name": "mylib", "dir": "../mylib/bin", "link": "shared" },
+  { "name": "foo",   "dir": "/opt/foo/lib" },
+  { "name": "bar",   "dir": "/opt/foo/lib", "link": "static" }
+]
+\end{lstlisting}
+
+\begin{itemize}
+  \item \textbf{Order is the link order} --- list a library before the ones it
+    depends on, which is what static archives require.
+  \item Each entry keeps its own \field{link}, so a shared library and a static
+    dependency mix freely.
+  \item Every distinct \field{dir} lands in the binding's \code{BUILD\_RPATH} and
+    \code{INSTALL\_RPATH}, so the module loads without
+    \code{LD\_LIBRARY\_PATH} / \code{DYLD\_LIBRARY\_PATH}.
+  \item The \textbf{generator driver} links the same list --- it instantiates
+    the bound types during the reflection walk, so it needs the dependencies'
+    definitions too, not just yours.
+  \item Headers of the dependencies go in \field{user\_include}; their
+    configuration macros in \field{compile\_definitions}.
+\end{itemize}
+
+\begin{warn}
+On \lang{wasm}, every entry is taken as the static archive \code{lib<name>.a}
+built with the \textbf{same} emsdk. A native \code{.dylib} / \code{.so} cannot
+enter a wasm module, so a dependency you cannot rebuild for emscripten rules
+that target out.
+\end{warn}
+
+Flags that are not a \code{-L}/\code{-l} pair --- a framework, a
+\code{--start-group}, a package's own link line --- go through a target's
+\field{link\_options} (Chapter~\ref{ch:targets}); the two compose.
+
+\subsection{Compiling sources in}
+
+\begin{lstlisting}[style=json]
+"user_sources": [
+  "../src/widget.cpp",
+  "../src/shape.cpp"
+]
+\end{lstlisting}
+
+Always a list of paths, each relative to the manifest (or absolute); a single
+string is accepted as a one-element list. Every compiled backend adds them via
+\code{target\_sources(\ldots)}, so they build with the same include path and
+flags as the generated binding.
+
+Entries may be \textbf{shell globs}, expanded at generation time:
+
+\begin{lstlisting}[style=json]
+"user_sources": ["extern/arch/src/**/*.cxx"]
+\end{lstlisting}
+
+\code{*}, \code{?} and \code{[\ldots]} work within a path component, and a
+component that is exactly \code{**} matches \textbf{zero or more directories}
+--- so one pattern covers a whole source tree. Like the other wildcards,
+\code{**} does not enter hidden directories. Matches are sorted for reproducible
+output and the final list is de-duplicated, so mixing a literal path with a glob
+that also covers it is safe. A pattern matching nothing warns and is skipped.
+
+\begin{warn}
+Globs expand when \code{rosetta\_gen} runs. \textbf{Re-run it after adding or
+removing matching files} --- a new \code{.cpp} does not appear in the build by
+itself.
+\end{warn}
+
+Entries may also be \textbf{C sources}. When any \code{.c} file is listed, the
+generated \code{CMakeLists.txt} calls \code{enable\_language(C)} automatically,
+which is what makes a library's vendored dependencies work:
+
+\begin{lstlisting}[style=json]
+"user_sources": [
+  "./geogram/src/lib/geogram/mesh/*.cpp",
+  "./geogram/src/lib/geogram/third_party/rply/*.c",
+  "./geogram/src/lib/geogram/third_party/zlib/*.c"
+]
+\end{lstlisting}
+
+The text-only backends compile nothing and ignore the field.
+
+\section{Preprocessor definitions}
+
+Most often a third-party library's configuration macros. Each entry is
+\code{"NAME"} or \code{"NAME=VALUE"}:
+
+\begin{lstlisting}[style=json]
+"compile_definitions": [
+  "GEOGRAM_USE_BUILTIN_DEPS",
+  "GEOGRAM_WITH_HLBFGS"
+]
+\end{lstlisting}
+
+They are emitted as \code{target\_compile\_definitions(\ldots\ PRIVATE \ldots)}
+in \textbf{two} places, so the whole pipeline sees a consistent configuration:
+
+\begin{itemize}
+  \item the \textbf{generator driver} --- it includes the bound headers for the
+    reflection walk, which must see the same preprocessor state the bindings
+    will be built with;
+  \item \textbf{every compiled binding target}, where they reach the bound
+    headers and the \field{user\_sources} alike.
+\end{itemize}
+
+That first bullet is the one that matters. A macro that changes a class's member
+set --- and plenty do --- would otherwise produce a binding for a different
+class than the one you compile.
+
+A single string is accepted as a one-element list.
+
+\section{Build type and optimisation}
+\label{sec:buildtype}
+
+\begin{lstlisting}[style=json]
+"build_type": "Release",
+"optimization": "-O2"
+\end{lstlisting}
+
+Both optional and independent.
+
+\field{build\_type} is one of \code{Debug}, \code{Release},
+\code{RelWithDebInfo}, \code{MinSizeRel} (case-insensitive). It is emitted as a
+\emph{default} inside
+\code{if(NOT CMAKE\_BUILD\_TYPE AND NOT CMAKE\_CONFIGURATION\_TYPES)}, so
+\code{-DCMAKE\_BUILD\_TYPE=\ldots} at configure time still wins and multi-config
+generators (Visual Studio, Xcode) are left to pick a configuration at build
+time.
+
+\begin{note}
+\textbf{Omitted means \code{Release}.} It used to mean ``emit nothing'', which
+left CMake with no build type and hence no optimisation flags at all --- so the
+documented two-line build produced an unoptimised module, around eight times
+slower on a trivial pybind11 call. Pass \code{-DCMAKE\_BUILD\_TYPE=Debug}, or
+set \code{"build\_type": "Debug"}, when you want an unoptimised build.
+\end{note}
+
+\field{optimization} is an explicit level: \code{-O0} through \code{-O3},
+\code{-Os}, \code{-Oz}, \code{-Og} or \code{-Ofast} (the leading \code{-} may be
+omitted). It is emitted as \code{add\_compile\_options(\ldots)} and
+\code{add\_link\_options(\ldots)}, which land \emph{after} the build type's own
+per-config flags --- so this \code{-O} overrides the level the build type
+implies. \code{"build\_type": "Release", "optimization": "-O2"} builds
+\code{-DNDEBUG} but at \code{-O2} instead of Release's \code{-O3}. The link
+option matters for the wasm targets, where emscripten optimises at link time
+too.
+
+Both apply to the bindings and to any \field{user\_sources} compiled into them,
+in every compiled backend.
+
+\section{Headers the library's own build produces}
+\label{sec:generatedheaders}
+
+A header configured by the bound library's build system is simply absent when
+rosetta compiles that library's sources without running its build. geogram's
+\code{<geogram/version.h>} is the case in point --- configured by geogram's
+CMake from \code{version.h.in}.
+
+\begin{lstlisting}[style=json]
+"generated_headers": [
+  {
+    "path": "geogram/version.h",
+    "template": "./extern/geogram/src/lib/geogram/basic/version.h.in",
+    "substitutions": {
+      "VORPALINE_VERSION_MAJOR": "1",
+      "VORPALINE_VERSION_MINOR": "10",
+      "VORPALINE_VERSION_PATCH": "1",
+      "VORPALINE_VERSION": "1.10.1-rosetta",
+      "VORPALINE_BUILD_NUMBER": "",
+      "VORPALINE_BUILD_DATE": "",
+      "VORPALINE_SVN_REVISION": ""
+    }
+  }
+]
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcL{8.4cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Req.} & \textbf{Meaning} \\
+\midrule
+\field{path} & \req & The \emph{relative include path} --- exactly what the
+  sources \code{\#include}. \\
+\field{template} & one of & A file with \code{@KEY@} placeholders (CMake's
+  \code{configure\_file} form), resolved against the manifest's directory. \\
+\field{content} & one of & Literal lines, as an array of strings, for a header
+  with no template. \\
+\field{substitutions} & & \code{@KEY@} to value, applied to \field{template}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The file is written to \code{<bindings>/include/<path>} and that directory is
+placed \textbf{first} on every generated target's include path --- ahead of the
+library's own sources, so a stale checked-in copy of the same header cannot win
+the lookup.
+
+Substitution happens when the manifest is read, so a missing key is reported
+against your manifest (\code{no substitution for @VORPALINE\_VERSION@}) rather
+than compiling a literal \code{@KEY@} into the binding. Only the \code{@KEY@}
+form is recognised, since \code{\$\{KEY\}} would collide with the shell and CMake
+expansions such templates carry.
+
+\begin{note}
+A \code{-D} define is a different tool for a nearby job. geogram's
+\code{GEOGRAM\_VERSION} is passed by its CMake on the command line, not written
+into the header, so it belongs in \field{compile\_definitions}.
+\end{note}
+
+\section{Python wheels}
+\label{sec:wheels}
+
+The \lang{python} and \lang{nanobind} backends emit, alongside
+\code{CMakeLists.txt}, everything needed to build a redistributable wheel:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.6cm}@{}}
+\toprule
+\code{pyproject.toml} & scikit-build-core build config. It drives the generated
+  \code{CMakeLists.txt} itself, so the wheel and a plain \code{cmake --build}
+  compile the same target the same way --- there is no second build description
+  to keep in sync. \\
+\addlinespace
+\code{make\_wheel.py} & One-command builder: builds the wheel, then bundles
+  external shared libraries and fixes the platform tag. Python rather than a
+  shell script, so Linux, macOS and Windows are covered by one file. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}[style=sh]
+cd bindings/nanobind
+python make_wheel.py                    # -> dist/*.whl, dist/repaired/*.whl
+python3.11 make_wheel.py                # a specific interpreter
+python make_wheel.py --outdir /tmp/whl  # somewhere other than ./dist
+python make_wheel.py --no-repair        # skip the bundling / retagging step
+\end{lstlisting}
+
+The wheel is built for whichever interpreter runs the script --- there is no
+\code{--python} flag, just invoke the one you want (or pin it with the target's
+\field{python} field, Section~\ref{sec:runtimepins}).
+
+\field{version} is the distribution version stamped into the packaging
+artifacts, PEP 440 style (\code{"1.2.0"}, \code{"0.3.0rc1"}). Default
+\code{0.1.0}.
+
+Two fields make packaging automatic for a project that always ships wheels.
+They go \textbf{on the target}, beside the interpreter it is built for:
+
+\begin{lstlisting}[style=json]
+"targets": [
+  { "lang": "python",   "name": "pygeom", "python": "3.11" },
+  { "lang": "nanobind", "name": "nbgeom", "wheel": true, "wheel_dir": "./dist" }
+]
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.6cm}@{}}
+\toprule
+\field{wheel} & Build a wheel for \emph{this} target on every \code{--build},
+  without passing \code{--wheel}. \\
+\addlinespace
+\field{wheel\_dir} & Where this target's wheels go instead of its own
+  \code{dist/}. Implies \field{wheel}, and resolves against the manifest's
+  directory. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Only the two backends that emit a \code{make\_wheel.py} accept them:
+\field{wheel} on a \lang{markdown} or \lang{node} target is an error, not a
+no-op.
+
+Per-target rather than top-level, and for the same reason \field{out\_dir} is
+(Section~\ref{sec:outdir}): the two Python backends genuinely differ here.
+\lang{nanobind} produces one \code{abi3} wheel covering every CPython 3.12+
+where \lang{python} produces one per version, and \field{python}
+(Section~\ref{sec:runtimepins}) already pins per target which interpreter each
+is tagged for. Sharing one \field{wheel\_dir} between them is safe --- each
+\code{make\_wheel.py} repairs only the wheels it just produced.
+
+The \textbf{flags still win, in the direction of doing more}. \code{--wheel}
+packages every \lang{python} / \lang{nanobind} target whatever the manifest
+says, so a target spelling \code{"wheel": false} cannot turn off a run that
+asked for it; \code{--wheel-dir DIR} overrides every target's own directory,
+which is what makes ``collect them all in one place'' a single flag. With
+neither set anywhere, \code{--build} only compiles the extension module.
+
+\begin{warn}
+\field{wheel} and \field{wheel\_dir} were \textbf{top-level} keys. They are
+per-target now, and a top-level one is a load error naming the fix rather than
+a key that silently does nothing --- a manifest that used to ship wheels must
+not quietly stop.
+\end{warn}
+
+\begin{note}
+On 3.12+, nanobind wheels are tagged \code{abi3}, covering every later CPython
+with a single artifact.
+\end{note}
+
+\section{A realistic manifest}
+
+Putting the last four chapters together --- this is roughly the shape a real
+library's manifest takes:
+
+\begin{lstlisting}[style=json]
+{
+  "//": "Bindings for the geom library.",
+
+  "variables": [
+    { "name": "SRC", "value": "./extern/geom" }
+  ],
+
+  "user_include": ["$SRC/include", "./extern/eigen-3.4.0"],
+  "rosetta_include": "./extern/rosetta/include",
+  "generator_name": "geom_gen",
+  "module_name": "geom",
+
+  "user_sources": ["$SRC/src/**/*.cpp"],
+  "compile_definitions": ["GEOM_NO_ASSERT"],
+  "build_type": "Release",
+  "version": "1.2.0",
+
+  "interop": ["eigen"],
+  "sequences": [{ "type": "Eigen::VectorXd" }],
+
+  "namespace": "geom",
+  "header_dir": "geom",
+
+  "targets": [
+    { "lang": "python",   "name": "pygeom", "requires_python": ">=3.10" },
+    { "lang": "nanobind", "name": "nbgeom", "out_dir": "./dist",
+      "wheel": true, "wheel_dir": "./dist/wheels" },
+    { "lang": "node",     "name": "jsgeom" },
+    "typescript",
+    "markdown"
+  ],
+
+  "classes": [
+    { "header": "*.h", "exclude": ["fwd.h", "detail/*.h"] },
+    { "header": "Mesh.h", "annotations": "Mesh.ann.json" }
+  ],
+
+  "functions": [
+    { "name": "remesh", "header": "algorithms.h", "doc": "Isotropic remeshing." }
+  ]
+}
+\end{lstlisting}

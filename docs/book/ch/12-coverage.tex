@@ -1,0 +1,237 @@
+\chapter{Overloads and coverage}
+\label{ch:coverage}
+
+Two features that belong together, because the second is what makes the first
+readable: rosetta binds \textbf{overload sets}, and every generation writes a
+machine-readable \code{coverage.json} saying what bound, what did not, and why.
+
+\section{Overloads}
+
+The reflection walk deduplicates member functions by \textbf{(name,
+signature)}, so of
+
+\begin{lstlisting}[style=cpp]
+struct Grid {
+    double at(int i) const;
+    double at(int i, int j) const;
+};
+\end{lstlisting}
+
+the whole set arrives in the IR. What happens next depends on the target
+language, because ``two functions with one name'' is not something every runtime
+can express.
+
+\begin{center}
+\small
+\begin{tabular}{@{}llL{7.0cm}@{}}
+\toprule
+\textbf{Target} & \textbf{Policy} & \textbf{Why} \\
+\midrule
+\lang{python} & \textbf{all} & repeated \code{.def("at", \ldots)} builds one
+  overload set; pybind dispatches on argument types \\
+\lang{nanobind} & \textbf{all} & same model as pybind11 \\
+\lang{julia} & \textbf{all} & each becomes a Julia method; multiple dispatch
+  picks \\
+\lang{qt} & \textbf{all} & builds an independent widget row per method ---
+  nothing is keyed by name \\
+\addlinespace
+\lang{wasm} & first only & a second \code{.function("at", \ldots)} throws
+  \code{BindingError} at module init \\
+\lang{node} & first only & property descriptors are keyed by name; JS has no
+  type dispatch \\
+\lang{lua} & first only & \code{c["at"] = \ldots} is an assignment --- a second
+  one overwrites \\
+\lang{csharp} / \lang{java} & first only & the op table is a name-keyed map, and
+  marshalling goes through JSON \\
+\lang{typescript} & first only & the \code{.d.ts} describes the N-API module, so
+  it must not promise what \lang{node} did not bind \\
+\lang{rest} & first only & a route is a URL path; two overloads would register
+  the same path \\
+\lang{qml} & first only & \code{registerInvoker} is keyed by name, and QML calls
+  with an untyped \code{QVariantList} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+``First'' always means \textbf{first-declared}, which is stable across
+regenerations.
+
+Every dropped overload appears in \code{coverage.json} with the reason
+\code{overload\_not\_expressible}, so you can see exactly what a name-keyed
+target left behind --- and reach it with an
+\hyperref[sec:extensions]{extension method} under a distinct name if you need
+it.
+
+\begin{note}
+This is also the one thing the runtime object model buys back. Through the
+\lang{dynamic} projection, those same five name-keyed targets get their
+overloads \emph{back}, because resolution happens at call time rather than at
+generation time. See Chapter~\ref{ch:scriptable}.
+\end{note}
+
+\subsection{C++ name hiding is honoured}
+
+\begin{lstlisting}[style=cpp]
+struct Base    { int f(int) const; int f(int, int) const; };
+struct Derived : Base { int f(double) const; };
+\end{lstlisting}
+
+\code{Derived} binds \textbf{only} \code{f(double)}. That is what a C++ caller
+sees without a \code{using Base::f}, so binding the hidden base overloads would
+hand scripts a call the C++ API does not offer. Both hidden declarations are
+recorded as \code{hidden\_by\_derived} drops rather than vanishing.
+
+A diamond-shared base member is still emitted exactly once. Two \emph{different}
+bases declaring the same name both bind --- that call is ambiguous in C++
+without qualification, but the binding has no ambiguity to resolve (each entry is
+spliced from its own reflection), so binding both beats binding neither.
+
+\section{\code{coverage.json}}
+
+\code{generate()} writes it to \code{<out\_dir>/coverage.json} on every run,
+always. An empty skip list is itself the useful answer, and a file that is
+always present is one you can diff.
+
+\begin{lstlisting}[style=json]
+{
+  "rosetta_coverage": 1,
+  "reflection": [                       // never reached ANY backend
+    { "class": "Shape",
+      "dropped": [
+        {"member": "operator<", "signature": "bool(const Shape &) const",
+         "reason": "no_identifier"},
+        {"member": "debug", "signature": "", "reason": "function_template"}
+      ] }
+  ],
+  "targets": [
+    { "target": "wasm",
+      "bound": 3, "skipped": 1,
+      "classes": [
+        { "class": "Shape",
+          "bound":   [ {"member": "area", "signature": "double () const"} ],
+          "skipped": [ {"member": "scale", "signature": "void (double, double)",
+                        "reason": "overload_not_expressible",
+                        "detail": "the target binds methods by name and ..."} ] }
+      ] }
+  ]
+}
+\end{lstlisting}
+
+\subsection{The two stages}
+
+\textbf{\code{reflection}} lists members the walk never handed to any backend.
+These are backend-independent:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{8.8cm}@{}}
+\toprule
+\textbf{Reason} & \textbf{Meaning} \\
+\midrule
+\code{no\_identifier} & an operator or conversion function --- no name to bind
+  to \\
+\code{function\_template} & a member template: no fixed parameter pack to
+  splice \\
+\code{hidden\_by\_derived} & a base overload hidden by a derived declaration of
+  the name \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{\code{targets}} is what each backend's own gates decided:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{8.8cm}@{}}
+\toprule
+\textbf{Reason} & \textbf{Meaning} \\
+\midrule
+\code{unmarshalable\_signature} & no conversion for a type in the signature;
+  \code{detail} names it \\
+\code{overload\_not\_expressible} & the target keys methods by name and this one
+  lost the tie \\
+\code{sequence\_not\_adaptable} & a registered sequence with no
+  \code{std::vector} boundary adapter here \\
+\code{static\_callback\_receiver} & embind cannot give a static member the
+  receiver a callback adapter needs \\
+\code{extension\_has\_no\_member\_pointer} & this backend dispatches through a
+  member pointer \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Both the \textbf{bound} and the \textbf{skipped} side are recorded. Counting
+only skips cannot tell ``everything bound'' apart from ``this class never
+reached this backend'' --- and that is exactly the distinction that matters when
+a whole target silently produces nothing.
+
+Free functions get their own \code{"functions": \{"bound": [\ldots], "skipped":
+[\ldots]\}} array beside \code{"classes"}. On a library whose algorithms are
+free functions over one data structure, that is most of the API.
+
+\section{Using it}
+
+The point is the \emph{diff}. Check \code{coverage.json} into your repository
+next to the manifest, and a method that stops binding becomes a reviewable line
+in a pull request instead of an \code{AttributeError} a week later.
+
+To gate CI on it:
+
+\begin{lstlisting}[style=sh]
+jq -e '[.targets[].skipped] | add == 0' bindings/coverage.json
+\end{lstlisting}
+
+More usefully: allow known skips and fail on new ones by diffing against a
+committed baseline. A binding surface that only ever grows deliberately is worth
+the twenty lines of CI it costs.
+
+\begin{warn}
+One asymmetry to know before comparing numbers across targets:
+\lang{typescript} and \lang{dynamic} record bound \emph{fields}, while the other
+language backends record only methods. The top-level \code{bound} scalar is
+therefore not comparable across those two groups --- count methods by signature
+instead.
+\end{warn}
+
+\section{Instrumenting a backend of your own}
+
+Skips are recorded at the existing gate sites, one line each:
+
+\begin{lstlisting}[style=cpp]
+for (const auto &m : k.methods) {
+    if (!coverage::emit_overload(coverage::overloads::first_only,
+                                 "my-backend", k, m)) {
+        continue;                                   // records the dropped overload
+    }
+    if (!my_method_ok(m, c)) {
+        coverage::note_skip("my-backend", k, m, "unmarshalable_signature",
+                            my_skip_reason(m, c));  // a slug plus a sentence
+        continue;
+    }
+    segs.push_back(my_method(k, m));
+    coverage::note_bound("my-backend", k, m);
+}
+\end{lstlisting}
+
+Free functions use \code{note\_bound\_function} / \code{note\_skip\_function},
+fields \code{note\_bound\_field} / \code{note\_skip\_field}.
+
+\begin{note}
+Keep the reason function next to the predicate it explains. A reason that drifts
+out of step with the decision is worse than no reason at all.
+\end{note}
+
+\section{A note for backend authors}
+
+\code{\&T::name} names an \textbf{overload set}, not a function, so any emitter
+that spells a member pointer for an overloaded name must cast it to the exact
+signature. Use the shared helper:
+
+\begin{lstlisting}[style=cpp]
+const std::string mp = px_member_pointer(k, m);   // &T::f, or a static_cast
+\end{lstlisting}
+
+The gate is \code{GenMethod::is\_overloaded} --- does the \emph{C++ class}
+overload the name? --- and \textbf{not} \code{overload\_count}, which is how
+many entries reached the IR. A set whose siblings were all gated out still needs
+the cast.

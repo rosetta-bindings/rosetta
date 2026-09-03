@@ -1,0 +1,179 @@
+\chapter{Target reference}
+\label{app:targets}
+
+\section{Every \field{lang} value}
+
+\begin{center}
+\small
+\begin{longtable}{@{}lL{4.2cm}L{3.4cm}L{2.6cm}@{}}
+\toprule
+\textbf{\code{lang}} & \textbf{Output} & \textbf{Builds with} &
+  \textbf{Overloads} \\
+\midrule
+\endhead
+\lang{python} & pybind11 extension module & off-the-shelf compiler & all \\
+\lang{nanobind} & nanobind extension module & off-the-shelf compiler & all \\
+\lang{node} & N-API native addon & off-the-shelf compiler & first only \\
+\lang{wasm} & Emscripten / embind module & off-the-shelf emsdk & first only \\
+\lang{lua} & sol2 module, \code{require}-able & off-the-shelf compiler & first only \\
+\lang{julia} & CxxWrap.jl / jlcxx module & compiler + CxxWrap.jl & all \\
+\lang{csharp} & C-ABI lib + P/Invoke wrappers & compiler + .NET & first only \\
+\lang{java} & C-ABI + FFM wrappers & compiler + JDK & first only \\
+\lang{qt} & Qt Widgets inspector & compiler + Qt 6 & all \\
+\lang{qml} & QML / QtQuick inspector & compiler + Qt 6 & first only \\
+\lang{imgui} & Dear ImGui inspector app & off-the-shelf compiler & --- \\
+\lang{rest} & cpp-httplib server + client & \textbf{C++26 toolchain} & first only \\
+\lang{openapi} & OpenAPI 3.1 specification & text output & --- \\
+\lang{json} & nlohmann (de)serialisation & \textbf{C++26 toolchain} & --- \\
+\lang{typescript} & ambient \code{.d.ts} declarations & text output & first only \\
+\lang{markdown} & API reference document & text output & --- \\
+\lang{html} & styled API reference page & text output & --- \\
+\lang{paraview} & Server Manager plugin XML & text output & --- \\
+\lang{dynamic} & the IR as runtime data & off-the-shelf compiler & all, at
+  call time \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+Each name also accepts a deprecated \code{-expanded} spelling resolving to the
+same backend.
+
+\section{Feature support}
+
+Which manifest features reach which backend. A blank cell means the backend
+ignores the field rather than failing.
+
+\begin{center}
+\small
+\begin{longtable}{@{}lccccc@{}}
+\toprule
+\textbf{\code{lang}} & \field{module\_init} & \field{out\_dir} &
+  \field{extensions} & \field{sequences} & \field{out\_params} \\
+\midrule
+\endhead
+\lang{python}     & \yes & \yes & \yes & \yes & \yes \\
+\lang{nanobind}   & \yes & \yes & \yes & \yes & \yes \\
+\lang{node}       & \yes & \yes & \yes & \yes & \yes \\
+\lang{wasm}       & \yes & \yes & \yes & \yes & \yes \\
+\lang{lua}        & \yes & \yes &      & \yes & \yes \\
+\lang{julia}      & \yes & \yes &      &      &      \\
+\lang{csharp}     &      &      &      &      &      \\
+\lang{java}       &      &      &      &      &      \\
+\lang{qt}         &      &      &      &      &      \\
+\lang{qml}        &      &      &      &      &      \\
+\lang{imgui}      &      &      &      &      &      \\
+\lang{rest}       &      &      &      &      &      \\
+\lang{typescript} &      &      & \yes & \yes & \yes \\
+\lang{markdown}   &      &      & \yes &      &      \\
+\lang{html}       &      &      & \yes &      &      \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\section{Packaging}
+
+Only two backends emit a \code{make\_wheel.py}, so only those two accept the
+per-target \field{wheel} / \field{wheel\_dir} (Section~\ref{sec:wheels}); the
+field is an error on any other \field{lang}.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.4cm}@{}}
+\toprule
+\lang{python} & One wheel per CPython version --- pybind11 has no stable-ABI
+  mode. Covering several means running \code{make\_wheel.py} once per
+  interpreter. \\
+\lang{nanobind} & One \code{abi3} wheel covering every CPython 3.12+; below
+  3.12, tagged for the exact interpreter that built it. \\
+every other & No packaging step. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Interop and foreign types}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.4cm}@{}}
+\toprule
+\textbf{\code{lang}} & \textbf{\field{interop}: \code{["eigen"]}} \\
+\midrule
+\lang{python} & native numpy, through \code{<pybind11/eigen.h>} \\
+\lang{nanobind} & native numpy, through \code{<nanobind/eigen/dense.h>}
+  (dense only) \\
+every other & skips the member --- register the concrete type under
+  \field{sequences} / \field{matrices} to give them a flat array \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{4.4cm}L{4.6cm}@{}}
+\toprule
+\textbf{\code{lang}} & \textbf{\code{std::filesystem::path}} &
+  \textbf{\code{std::shared\_ptr<T>} returned} \\
+\midrule
+\lang{python} & native (\code{os.PathLike} in, \code{pathlib.Path} out) &
+  \code{py::class\_<T, shared\_ptr<T>>} \\
+\lang{nanobind} & native & native \\
+\lang{wasm} & string, via a copy adapter & \code{.smart\_ptr<\ldots>} on the
+  class \\
+\lang{lua} & string, via a copy adapter & native (sol2) \\
+\lang{node} & string, via a copy adapter & the JS object adopts the pointer;
+  untrampolined pointees only \\
+\lang{typescript} & \code{string} & the pointee type \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A \code{shared\_ptr<T>} \emph{parameter} is skipped everywhere --- take
+\code{const T\&}.
+
+\section{Build shapes for \code{--build}}
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{6.0cm}L{7.0cm}@{}}
+\toprule
+\textbf{Backend} & \textbf{Build} \\
+\midrule
+\lang{python}, \lang{nanobind}, \lang{rest}, \lang{json}, \lang{lua},
+  \lang{imgui} & plain \code{cmake} configure + build \\
+\lang{node} & \code{npm install} + \code{npm run build} \\
+\lang{wasm} & \code{emcmake cmake} + \code{cmake --build} \\
+\lang{julia} & \code{cmake} (locates JlCxx by running \code{julia}) \\
+\lang{csharp} & \code{cmake}, then \code{dotnet build} \\
+\lang{java} & \code{cmake}, then \code{mvn package} \\
+\lang{qt}, \lang{qml} & \code{cmake} with \code{-DQT\_DIR} \\
+\lang{markdown}, \lang{html}, \lang{typescript}, \lang{openapi},
+  \lang{paraview} & nothing to compile \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A missing toolchain is a \emph{skip with a note}, not a failure. A missing
+\code{dotnet} or \code{mvn} downgrades its backend to ``OK (native only)''.
+
+\section{External requirements}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.2cm}@{}}
+\toprule
+\lang{python} & pybind11 (\code{pip install pybind11}) \\
+\lang{nanobind} & nanobind; wheels are \code{abi3} on Python 3.12+ \\
+\lang{node} & npm, and \code{cmake-js} \\
+\lang{wasm} & an activated emsdk \\
+\lang{lua} & Lua 5.1--5.4 or LuaJIT --- \textbf{not} 5.5, which sol2 does not
+  support yet. sol2 itself is fetched at configure time \\
+\lang{julia} & CxxWrap.jl; the build runs \code{julia} to locate JlCxx \\
+\lang{csharp} & a .NET SDK \\
+\lang{java} & a JDK with the FFM API \\
+\lang{qt}, \lang{qml} & Qt 6 --- but no \code{moc} on the generated code \\
+\lang{imgui} & nothing; GLFW and OpenGL3 are auto-fetched \\
+\lang{rest} & cpp-httplib and nlohmann/json, fetched on first configure, plus
+  the C++26 toolchain \\
+\bottomrule
+\end{tabular}
+\end{center}

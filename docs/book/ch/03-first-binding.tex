@@ -1,0 +1,283 @@
+\chapter{Your first binding}
+\label{ch:first}
+
+This chapter goes from an unmodified header to an importable Python module and
+a loadable Node addon. It is deliberately complete: every command, in order,
+with what each one produces.
+
+\section{Prerequisites}
+
+\begin{itemize}
+  \item A \textbf{clang-p2996} build. Rosetta looks for it at
+    \code{\$ENV\{HOME\}/devs/c++/clang-p2996/build} by default; anywhere else
+    is fine, you just say where (Section~\ref{sec:toolchain-paths}).
+  \item \textbf{CMake} 3.28 or later, and Ninja or Make.
+  \item For the Python target, \code{pip install pybind11}. For Node,
+    \code{npm}. For WebAssembly, an activated emsdk.
+\end{itemize}
+
+The reflection flags rosetta's generated projects use, should you need to know
+them: \code{-freflection -freflection-latest -fexperimental-library}, plus
+\code{-fannotation-attributes} for anything using annotations.
+
+\begin{note}
+Only the \emph{generation host} needs the fork. Everything under
+\code{bindings/} builds with a stock compiler --- with the two documented
+exceptions, \lang{rest} and \lang{json}.
+\end{note}
+
+\section{Build the tool, once}
+
+\begin{lstlisting}[style=sh]
+cmake -G Ninja -S tools/rosetta_gen -B tools/rosetta_gen/build
+cmake --build tools/rosetta_gen/build
+\end{lstlisting}
+
+The binary always lands in \code{<repo>/bin/rosetta\_gen} --- not in the build
+tree. This step needs no reflection: \code{rosetta\_gen} is a JSON reader and a
+text templater, and builds with an off-the-shelf C++17 compiler.
+
+\section{The library --- leave it alone}
+
+\begin{lstlisting}[style=cpp]
+// my_lib/person.h
+#pragma once
+#include <string>
+
+struct Person {
+    std::string name;
+    int         age = 0;
+    std::string id;
+
+    Person() = default;
+    Person(std::string n, int a) : name(std::move(n)), age(a) {}
+
+    std::string greet(const std::string &salutation) const;
+};
+\end{lstlisting}
+
+Note what is \emph{not} there: no macro, no registration call, no rosetta
+include, no export annotation. That is the whole point.
+
+\section{The manifest}
+
+Put it wherever you like --- every relative path inside resolves from the
+manifest's own directory. Here, \code{my\_lib/rosetta/manifest.json}:
+
+\begin{lstlisting}[style=json]
+{
+  "user_include": "..",
+  "rosetta_include": "/path/to/rosetta/include",
+  "generator_name": "person_gen",
+  "module_name": "person",
+
+  "targets": [
+    { "lang": "python", "name": "person_py" },
+    { "lang": "node",   "name": "person_js" },
+    "typescript",
+    "markdown"
+  ],
+
+  "classes": [
+    { "name": "Person", "header": "person.h" }
+  ]
+}
+\end{lstlisting}
+
+Four required ideas and nothing else:
+
+\begin{description}[leftmargin=0cm,style=nextline,font=\normalfont\code]
+  \item[user\_include] where your headers live. One directory, or an array of
+    them.
+  \item[rosetta\_include] where rosetta's \code{include/} lives.
+  \item[targets] which backends to emit. A bare string uses
+    \field{module\_name}; the object form sets a per-target module name.
+  \item[classes] what to bind. \field{header} is required; \field{name}
+    defaults to the header's stem.
+\end{description}
+
+\field{generator\_name} is optional --- it names the emitted driver and
+defaults to the manifest's folder name.
+
+\begin{note}
+Do not want to write this by hand? \code{rosetta\_gen --init} writes a
+fully-commented starter manifest, and \code{rosetta\_gen --init manifest.json
+./src} pre-fills it from a scan of your source tree.
+See Section~\ref{sec:init}.
+\end{note}
+
+\section{Generate and build --- the one-command version}
+
+\begin{lstlisting}[style=sh]
+/path/to/rosetta/bin/rosetta_gen --build manifest.json
+\end{lstlisting}
+
+That emits the generator project, builds it (this is where reflection runs),
+runs it, and then compiles every backend. The run ends with a summary:
+
+\begin{lstlisting}[style=plain]
+== summary
+   python      OK
+   node        OK
+   typescript          OK (nothing to compile)
+   markdown            OK (nothing to compile)
+\end{lstlisting}
+
+A backend whose toolchain is missing is skipped with a note rather than failing
+the run:
+
+\begin{lstlisting}[style=plain]
+   wasm        SKIPPED (emcc not found -- activate emsdk)
+\end{lstlisting}
+
+\section{The same thing, one step at a time}
+
+Worth doing once, because it makes the pipeline concrete.
+
+\begin{lstlisting}[style=sh]
+# 1. manifest -> generator project (no reflection yet)
+rosetta_gen manifest.json gen
+
+# 2. build the generator -- REFLECTION HAPPENS HERE
+cmake -S gen -B gen/build && cmake --build gen/build
+
+# 3. run it -- one self-contained project per target
+./generator bindings
+\end{lstlisting}
+
+After step~1, look inside \code{gen/}. There are three files:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.2cm}@{}}
+\toprule
+\code{person\_gen.cpp} & a \code{main()} that calls
+  \code{rosetta::generate<Person>(\ldots)} --- the driver \\
+\code{bindings.h} & your headers included, plus any baked-in out-of-line
+  annotations \\
+\code{CMakeLists.txt} & knows where clang-p2996 is and which flags it needs \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+After step~3:
+
+\begin{lstlisting}[style=plain]
+bindings/
+  coverage.json
+  python/      auto_pybind.cpp  CMakeLists.txt  pyproject.toml  make_wheel.py
+  node/        auto_napi.cpp    CMakeLists.txt  package.json
+  typescript/  person.d.ts
+  markdown/    person.md
+\end{lstlisting}
+
+Open \code{auto\_pybind.cpp}. It is ordinary pybind11 --- explicit
+\code{.def()} calls, one per member, with no reflection anywhere. That file is
+shippable: it compiles on any machine with pybind11 and a normal C++
+compiler.
+
+\section{Build and use it}
+
+\subsection*{Python}
+
+\begin{lstlisting}[style=sh]
+cd bindings/python
+cmake -G Ninja -B build && cmake --build build
+\end{lstlisting}
+
+\begin{lstlisting}[style=py]
+import person_py
+
+p = person_py.Person("Alice", 30)
+p.name = "Alice B."
+print(p.greet("Hello"))
+print(p.age)
+\end{lstlisting}
+
+\subsection*{Node}
+
+\begin{lstlisting}[style=sh]
+cd bindings/node
+npm install && npx cmake-js compile
+\end{lstlisting}
+
+\begin{lstlisting}[style=js]
+const m = require('./build/Release/person_js.node');
+const p = new m.Person('Alice', 30);
+console.log(p.greet('Hello'));
+\end{lstlisting}
+
+\subsection*{The two you did not have to build}
+
+\code{bindings/typescript/person.d.ts} declares the Node addon's surface, so an
+editor autocompletes it. \code{bindings/markdown/person.md} is an API reference
+page. Neither compiles anything --- they are text, produced directly.
+
+\section{Read \code{coverage.json} once}
+
+Before moving on, open \code{bindings/coverage.json}. Even for a three-field
+class it tells you something worth having: exactly which members reached each
+backend and which did not, with a reason for every drop.
+
+\begin{lstlisting}[style=json]
+{
+  "rosetta_coverage": 1,
+  "reflection": [],
+  "targets": [
+    { "target": "python", "bound": 5, "skipped": 0, "classes": [ ... ] }
+  ]
+}
+\end{lstlisting}
+
+On a real library it will not be empty, and the habit of checking it is the
+difference between knowing your binding surface and guessing at it.
+Chapter~\ref{ch:coverage} is about reading it properly.
+
+\section{Enriching, if you want to}
+
+Everything above used reflection alone: names match the C++ identifiers, types
+map automatically, and you get no docstrings, no validation and no read-only
+semantics. Adding them is opt-in, member by member:
+
+\begin{lstlisting}[style=cpp]
+#include <rosetta/annotations.h>
+
+struct Person {
+    [[= rosetta::doc{"display name"}]]
+    std::string name;
+
+    [[= rosetta::doc{"age in years"}, = rosetta::range{0.0, 150.0}]]
+    int age = 0;
+
+    [[= rosetta::doc{"server-assigned id"}, = rosetta::readonly{}]]
+    std::string id;
+};
+\end{lstlisting}
+
+Now \code{help(person\_py.Person.name)} says something, assigning \code{200} to
+\code{age} raises, and \code{id} has no setter.
+
+\begin{warn}
+Writing annotations inline makes the header C++26-only --- every translation
+unit that includes it, including the generated binding, now needs the fork.
+If you want to keep the header plain C++ (and you usually do), use the JSON
+side-car instead: same metadata, same result, one manifest field.
+See Section~\ref{sec:outofline}.
+\end{warn}
+
+\section{Cleaning up}
+
+\begin{lstlisting}[style=sh]
+rosetta_gen --clean manifest.json
+\end{lstlisting}
+
+removes \code{gen/}, the generator binary, and the per-backend folders under
+\code{bindings/} \emph{that this manifest declares}. Anything else you parked
+there survives, and a folder whose \code{CMakeLists.txt} lacks the
+\code{Generated by rosetta} stamp is never touched. The manifest itself is
+never removed.
+
+\section{What to read next}
+
+You now have a working binding. Part~II is the manifest in full --- and the
+next chapter starts with the rules that apply to all of it.

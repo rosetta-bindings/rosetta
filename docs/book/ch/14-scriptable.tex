@@ -1,0 +1,198 @@
+\chapter{Scripting the metadata itself}
+\label{ch:scriptable}
+
+The \lang{dynamic} backend makes your library's metadata available \emph{to
+C++}. Every consumer of it in the repository is C++: the terminal interpreter,
+the Qt viewer, the ImGui runtime, the QML reflected object --- hand-written
+walkers, one per toolkit.
+
+The last step is to bind \emph{that API} through rosetta's own backends, so the
+walker can be written in Python, Lua or JavaScript instead. This is the
+Graphite/GOM move: expose the object model itself to the scripting layer, and
+the user interface becomes a script rather than a backend.
+
+\section{The trick, in one sentence}
+
+Run the pipeline twice, and make the first run's \emph{output} the second run's
+\emph{input library}.
+
+\begin{center}
+\begin{tikzpicture}[
+  node distance=5mm,
+  b/.style={draw,rounded corners=2pt,align=center,font=\scriptsize,inner sep=4pt,text width=30mm,minimum height=9mm},
+  user/.style={b,fill=blue!6,draw=rosettablue},
+  gen/.style={b,fill=black!4,draw=black!35,dashed},
+  fin/.style={b,fill=green!7,draw=green!45!black},
+  arr/.style={-{Stealth[length=2mm]},draw=black!55,font=\scriptsize}
+]
+\node[user] (h)  {\texttt{scene.h}\\\scriptsize your library};
+\node[gen,right=10mm of h] (d) {\texttt{auto\_dynamic.\{h,cpp\}}\\\scriptsize your types as DATA};
+\node[user,below=9mm of h] (s) {\texttt{<rosetta/script.h>}\\\scriptsize the fixed facade};
+\node[fin,right=10mm of s] (m) {one module per language\\\scriptsize names no bound type};
+\draw[arr] (h) -- node[above]{\ \ stage 1} (d);
+\draw[arr] (s) -- node[above]{\ \ stage 2} (m);
+\draw[arr] (d) -- node[right]{\texttt{user\_sources}} (m);
+\end{tikzpicture}
+\end{center}
+
+By stage~2 your types are \textbf{data}, not C++. So stage~2's manifest never
+names one, and the resulting module works for \emph{any} library that has been
+through stage~1.
+
+\section{Why a facade rather than binding \code{dynamic.h}}
+
+\code{rosetta::dyn} cannot be fed to the backends as it stands. Three shapes
+block it:
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{3.9cm}L{4.6cm}L{4.5cm}@{}}
+\toprule
+\textbf{In \code{dynamic.h}} & \textbf{Why it blocks} & \textbf{In
+  \code{script.h}} \\
+\midrule
+\code{MetaField *fields; size\_t n\_fields} &
+  pointer-and-count, so vector marshalling never fires &
+  \code{std::vector<FieldInfo> fields()} \\
+\addlinespace
+\code{const MetaClass *}, \code{const TypeDesc *} &
+  raw pointer to an unbound type --- the gate skips it &
+  value-semantics handles \\
+\addlinespace
+\code{using Thunk = Any (*)(\ldots)} &
+  function pointers marshal nowhere &
+  ordinary \code{get} / \code{set} / \code{call} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{<rosetta/script.h>} is that reshaping and nothing more. Each handle wraps
+\textbf{one \code{const} pointer} into the tables, so binding it copies no
+metadata --- the \code{.rodata} guarantee survives.
+
+\begin{note}
+Nothing in the facade is named \code{Class}, \code{Type}, \code{Object} or
+\code{Method}, because those collide in the target languages
+(\code{java.lang.Class}, JavaScript's \code{Object}, Lua's \code{type}). Hence
+\code{ClassInfo}, \code{TypeInfo}, \code{Instance}, \code{MethodInfo}.
+\end{note}
+
+Errors come back as \code{Outcome} (an ok flag plus text), never as an
+exception. Unwinding through a foreign VM's frames is how you get a crash
+instead of a \code{TypeError}.
+
+\section{The one hand-written piece}
+
+\code{Value} is type erasure --- one C++ type standing for ``whatever the host
+language just handed us''. Reflection can \emph{describe} it but cannot know
+that a Python \code{float}, a Lua number and a JavaScript \code{Number} should
+all become the same box. That mapping is per-language knowledge, so it is
+written per language, in
+\code{runtime/script/\{python,lua,node,wasm\}.h}.
+
+Only half of each caster is per-language, though:
+
+\begin{itemize}
+  \item \textbf{Reading} a host value is irreducible --- only Python knows what
+    \code{PyFloat\_Check} means.
+  \item \textbf{Writing} one is the same shape everywhere, so it lives once in
+    \code{rosetta::script::visit()}, and each caster supplies a sink of nine
+    small methods (\code{on\_none}, \code{on\_bool}, \code{on\_int},
+    \code{on\_real}, \code{on\_string}, \code{on\_enum}, \code{on\_list},
+    \code{on\_object}, \code{on\_unknown}).
+\end{itemize}
+
+No two casters can drift apart on whether an enum crosses as its integer, or on
+what an unclaimed type renders as.
+
+The casters reach the generated code through \field{module\_init}'s
+\field{headers}, which is the only hook that emits an \code{\#include}
+\emph{after} the framework header and \emph{before} the bound classes --- exactly
+the window a type caster needs. Because that list is global rather than
+per-target, each file guards its whole body on a macro only its own target
+defines.
+
+\begin{warn}
+One subtlety the type gate forces: \code{Value} must stay in the bound
+\field{classes} list. Bindability is decided at generation time and cannot know
+a caster will exist, so dropping \code{Value} would silently skip every member
+that mentions it --- \code{Outcome::value}, \code{Instance::set},
+\code{Instance::call}, all of it. The cost is one vestigial \code{Value} type
+per module that nothing ever produces.
+\end{warn}
+
+\section{What a project has to write}
+
+Nothing, beyond where its own files are. The binding surface is fixed, so it
+ships as manifest data in \code{include/rosetta/presets/scriptable.json} and a
+manifest names it:
+
+\begin{lstlisting}[style=json]
+{
+    "preset": "scriptable",
+    "rosetta_include": "../../include",
+    "user_include": ["../lib", "../lib/bindings/dynamic"],
+    "user_sources": ["../lib/bindings/dynamic/auto_dynamic.cpp"],
+    "module_init": { "headers": ["auto_dynamic.h"],
+                     "statements": ["bank::register_all()"] },
+    "targets": ["python", "lua", "node"]
+}
+\end{lstlisting}
+
+Six keys, every one about \emph{this} project. Read them against the diagram:
+\field{user\_sources} is stage~1's output, and \field{module\_init} is the
+\code{register\_all()} that publishes it.
+
+\section{What it buys}
+
+\begin{itemize}
+  \item \textbf{One wrapper per language instead of one per class.} Ship the
+    module once; any library that has been through the \lang{dynamic} backend
+    becomes scriptable with no further code generation.
+  \item \textbf{UI by query, not by codegen.} A property sheet is a walk over
+    \code{fields()}: \code{doc} to tooltip, \code{range} to slider bounds,
+    \code{combobox} and enumerators to a drop-down, \code{readonly} to a
+    disabled row. The dispatch that a C++ property panel spends a file on is
+    about ten lines of Python --- editable without recompiling anything.
+  \item \textbf{Overloads come back} for the name-keyed targets. Lua, Node,
+    Wasm, C\# and Java bind the first overload of a name and drop the siblings
+    at generation time; through this module they do not, because
+    \code{resolve()} scores the whole set at call time and can explain a
+    failure.
+  \item \textbf{Annotations are enforced once}, in the core, rather than
+    re-implemented per backend --- a \code{range} violation comes back as the
+    same message in every language.
+\end{itemize}
+
+That third point is worth dwelling on, because it is the sharpest evidence that
+the IR is genuinely target-neutral. The same reflected overload set survives
+into both projections; the expressiveness difference between them is
+attributable entirely to \emph{when} names are resolved, not to information
+lost on the way.
+
+\begin{center}
+\emph{The set of C++ members a target can express is not a property of the
+target language. It is a property of when the target resolves names.}
+\end{center}
+
+\section{Running the pipeline twice}
+
+\code{examples/plain-binding} runs it \textbf{once}: one library, one manifest,
+four language bindings. That is the base case, and it is what most of this book
+describes.
+
+\code{examples/scriptable-model} runs stages 1--2 once per \emph{manifest}, and
+it has two:
+
+\begin{enumerate}
+  \item \textbf{The user library to metadata.} The \lang{dynamic} backend turns
+    \code{scene.h} into \code{auto\_dynamic.\{h,cpp\}} --- the same information
+    the other backends spend on framework calls, emitted as plain data instead.
+  \item \textbf{\code{<rosetta/script.h>} to bindings.} A second pipeline that
+    binds rosetta's own reflection API, taking stage~1's output as its
+    \field{user\_sources}.
+\end{enumerate}
+
+Practically: two manifests, two \code{rosetta\_gen --build} invocations, in that
+order. Stage~2 must be re-run when stage~1's \emph{output location} changes ---
+but not when your library's \emph{classes} change, which is the whole point.

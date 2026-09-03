@@ -173,34 +173,37 @@ static int run_build(const BuildOptions &opt) {
         }
     };
 
-    // The manifest's "wheel" / "wheel_dir" are DEFAULTS for --wheel /
-    // --wheel-dir: a project that always ships wheels says so once instead of
-    // on every command line. The flags still win, and only ever toward doing
-    // MORE — a manifest cannot silently turn packaging off for a run that asked
-    // for it. A manifest "wheel_dir" implies wheeling, exactly as the flag does.
-    const bool     wheel     = opt.wheel || m.wheel || !m.wheel_dir.empty();
-    const fs::path wheel_dir = opt.wheel_dir.empty() ? m.wheel_dir : opt.wheel_dir;
+    // Does THIS target package? A target's own "wheel" / "wheel_dir" says so —
+    // a project that always ships states it once instead of on every command
+    // line — and --wheel turns it on for every wheel-capable target. The flag
+    // only ever moves toward doing MORE, so a target saying false cannot disarm
+    // a --wheel that was typed. A "wheel_dir" implies wheeling, as the flag does.
+    const auto wants_wheel = [&opt](const TargetEntry &t) {
+        return is_wheel_backend(t.lang) && (opt.wheel || t.wheel || !t.wheel_dir.empty());
+    };
+    // Where this target's wheels go. --wheel-dir overrides every target's own,
+    // which is what makes "collect them all in one place" a one-flag decision.
+    // Resolved against the *invocation* cwd, before any per-backend run_cmd
+    // changes directory — make_wheel.py chdirs to its own location, so a
+    // relative --outdir would land inside the binding dir and defeat the point.
+    const auto wheel_outdir = [&opt](const TargetEntry &t) {
+        const std::string d = opt.wheel_dir.empty() ? t.wheel_dir : opt.wheel_dir.string();
+        return d.empty() ? std::string{} : " --outdir " + q(fs::absolute(fs::path(d)));
+    };
 
-    // --wheel: resolved once, and only when asked for — the probe spawns a
-    // process. A --wheel that can never fire says so rather than doing nothing
-    // quietly; the check honours --only / --skip, since those are the likelier
-    // reason no wheel backend survives to be built.
-    const std::string python = wheel ? find_python() : std::string{};
-    // --wheel-dir: one directory for every backend's wheels instead of a dist/
-    // per binding dir. Resolved against the *invocation* cwd here, before any
-    // per-backend run_cmd changes directory — make_wheel.py chdirs to its own
-    // location, so a relative --outdir would land inside the binding dir and
-    // defeat the point of collecting them.
-    std::string wheel_out;
-    if (!wheel_dir.empty()) {
-        wheel_out = " --outdir " + q(fs::absolute(wheel_dir));
-    }
-    if (wheel &&
-        std::none_of(m.targets.begin(), m.targets.end(), [&](const TargetEntry &t) {
-            return is_wheel_backend(t.lang) &&
-                   (opt.only.empty() || contains(opt.only, t.lang)) &&
-                   !contains(opt.skip, t.lang);
-        })) {
+    // The interpreter probe spawns a process, so it runs only when something is
+    // actually going to package — and honours --only / --skip, since those are
+    // the likelier reason no wheel backend survives to be built. A --wheel that
+    // can never fire says so rather than doing nothing quietly.
+    const auto surviving = [&](const TargetEntry &t) {
+        return (opt.only.empty() || contains(opt.only, t.lang)) && !contains(opt.skip, t.lang);
+    };
+    const bool any_wheel = std::any_of(m.targets.begin(), m.targets.end(),
+                                       [&](const TargetEntry &t) {
+                                           return wants_wheel(t) && surviving(t);
+                                       });
+    const std::string python = any_wheel ? find_python() : std::string{};
+    if (opt.wheel && !any_wheel) {
         std::fprintf(stderr,
                      "rosetta_gen: --wheel has no effect — no python / nanobind "
                      "target is being built\n");
@@ -286,7 +289,7 @@ static int run_build(const BuildOptions &opt) {
             // python, nanobind, rest, json, lua, imgui, …
             if (!cmake_build(dir)) {
                 attempt(lang, false);
-            } else if (!wheel || !is_wheel_backend(lang)) {
+            } else if (!wants_wheel(t)) {
                 attempt(lang, true);
             } else if (target_python(t, python).empty()) {
                 record(lang, "OK (no wheel — no python interpreter found)");
@@ -296,8 +299,8 @@ static int run_build(const BuildOptions &opt) {
                 // so it neither reuses nor disturbs the build/ dir above.
                 std::fprintf(stderr, "== packaging %s\n", lang.c_str());
                 attempt(lang,
-                        run_cmd(q(target_python(t, python)) + " make_wheel.py" + wheel_out, dir) ==
-                            0,
+                        run_cmd(q(target_python(t, python)) + " make_wheel.py" + wheel_outdir(t),
+                                dir) == 0,
                         " (wheel)");
             }
         }

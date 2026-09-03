@@ -1,0 +1,365 @@
+\chapter{The \code{rosetta\_gen} tool}
+\label{ch:rosettagen}
+
+\code{rosetta\_gen} is the single binary that drives the whole pipeline. It
+reads a manifest and can take you from ``a folder of C++ headers'' to ``compiled
+bindings for every declared language'' in one command --- or one step at a time,
+when you want to inspect what each stage produces.
+
+The tool itself uses \textbf{no reflection}, only JSON parsing and text
+templating, so it builds with an off-the-shelf C++17 compiler. Only the
+\emph{generator} it emits --- and the \lang{rest} and \lang{json} targets ---
+needs the clang-p2996 toolchain.
+
+\section{Building it}
+
+One-time, from the repository root (CMake $\geq$ 3.28; it fetches the
+single-header nlohmann/json automatically):
+
+\begin{lstlisting}[style=sh]
+cmake -G Ninja -S tools/rosetta_gen -B tools/rosetta_gen/build
+cmake --build tools/rosetta_gen/build
+\end{lstlisting}
+
+The binary always lands in \textbf{\code{<repo>/bin/rosetta\_gen}}, not in the
+build tree. If you scaffolded your project with \code{tools/rosetta\_init.py},
+its bootstrap \code{CMakeLists.txt} does this for you and the binary appears at
+\code{extern/rosetta/bin/rosetta\_gen}.
+
+\section{The four modes}
+
+\begin{lstlisting}[style=plain]
+rosetta_gen <manifest.json> [out_dir]        # plain: emit the generator project only
+rosetta_gen --build <manifest.json> [opts]   # the whole pipeline in one command
+rosetta_gen --clean <manifest.json> [opts]   # remove everything generated
+rosetta_gen --init  [manifest.json] [src]    # write a starter manifest
+\end{lstlisting}
+
+\code{rosetta\_gen --help} prints the full built-in help; \code{--build --help}
+and \code{--clean --help} list each mode's options.
+
+\begin{lstlisting}[style=plain]
+--init --> manifest.json --> --build ------------> bindings/python  node  wasm ...
+ (start)    (you edit it)      |                          ^
+                               | = the three manual steps:|
+                               |   1. emit gen/           |
+                               |   2. cmake gen/, run it -+
+                               |   3. cmake / npm / emcmake each backend
+--clean <-- removes gen/ (or generated/), the generator binary and bindings/
+\end{lstlisting}
+
+\section{\code{--init}: starting a project}
+\label{sec:init}
+
+Writes a starter manifest (default \code{./manifest.json}). It \textbf{never
+overwrites} an existing file --- remove it first to regenerate.
+
+\subsection*{A blank, commented manifest}
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen --init
+\end{lstlisting}
+
+Emits a fully-commented example exercising every commonly-used field: a
+\field{variables} declaration feeding the \field{cpp26\_*} overrides, a
+multi-entry \field{user\_include}, \field{user\_sources},
+\field{compile\_definitions}, \field{build\_type} / \field{optimization}, a
+representative spread of targets, one class and one function. The idea is that
+you delete what you do not need rather than hunting the documentation for what
+exists.
+
+\subsection*{Pre-filled from a source scan}
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen --init manifest.json ./src
+\end{lstlisting}
+
+An argument naming an existing \textbf{directory} is the source tree to scan;
+the other, if any, is the manifest path. The scan walks for headers
+(\code{.h/.hh/.hpp/.hxx}) and sources (\code{.cpp/.cxx/.cc}) and pre-fills:
+
+\begin{itemize}
+  \item \field{classes} and \field{functions}, from the declarations found, with
+    shared \field{namespace} / \field{header\_dir} defaults factored out when
+    every entry agrees;
+  \item \field{user\_sources} --- every source file found, \textbf{except} any
+    defining \code{main()} (it would clash with the binding modules' entry
+    points; reported as a note);
+  \item \field{rosetta\_include}, guessed by walking up from the
+    \code{rosetta\_gen} binary; a \code{FIXME} comment otherwise.
+\end{itemize}
+
+\begin{warn}
+The scan is a comment- and string-aware \emph{token scan}, not a real C++ parse.
+Template classes, overloaded free functions and anonymous namespaces are
+skipped, each with a printed note. An overloaded free function is skipped
+because the scan has no signature to write, not because it cannot be bound ---
+add it by hand with a \field{signature} (Section~\ref{sec:signature}).
+\textbf{Review the result before building.}
+\end{warn}
+
+VCS directories, build trees and vendored code (\code{build/}, \code{extern/},
+\code{third\_party/}, \code{node\_modules/}, \ldots) are not descended into.
+
+\begin{note}
+For a whole \emph{project} skeleton --- a bootstrap \code{CMakeLists.txt} that
+fetches rosetta into \code{extern/}, a \code{.gitignore}, a \code{README.md} ---
+rather than just the manifest, use \code{tools/rosetta\_init.py}.
+\end{note}
+
+\section{\code{--build}: the whole pipeline}
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen --build manifest.json
+\end{lstlisting}
+
+runs, in order:
+
+\begin{enumerate}
+  \item \textbf{emit} the generator project into \code{<manifest dir>/gen/};
+  \item \textbf{build} it with CMake --- this step needs the clang-p2996
+    toolchain, and reflection runs here --- and \textbf{run} the resulting
+    generator, writing one self-contained project per target into
+    \code{<manifest dir>/bindings/<lang>/};
+  \item \textbf{compile every backend} the manifest declares, each with its own
+    build shape.
+\end{enumerate}
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{6.6cm}L{6.4cm}@{}}
+\toprule
+\textbf{Backend} & \textbf{Build} \\
+\midrule
+\lang{python}, \lang{nanobind}, \lang{rest}, \lang{json}, \lang{lua},
+  \lang{imgui}, \ldots & plain \code{cmake} configure + build \\
+\lang{node}   & \code{npm install} + \code{npm run build} \\
+\lang{wasm}   & \code{emcmake cmake} + \code{cmake --build} \\
+\lang{julia}  & \code{cmake} (locates JlCxx by running \code{julia}) \\
+\lang{csharp} & \code{cmake}, then \code{dotnet build} as a second stage \\
+\lang{java}   & \code{cmake}, then \code{mvn package} as a second stage \\
+\lang{qt}, \lang{qml} & \code{cmake} with \code{-DQT\_DIR} \\
+\lang{markdown}, \lang{html}, \lang{typescript}, \lang{openapi},
+  \lang{paraview} & nothing to compile \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A backend whose toolchain is \textbf{missing} --- no \code{npm}, no
+\code{emcc}, no \code{julia} --- is \emph{skipped with a note}, not an error.
+Likewise a missing \code{dotnet} or \code{mvn} downgrades \lang{csharp} /
+\lang{java} to ``OK (native only)''. A backend whose build \textbf{fails} is
+reported, and \code{--build} exits non-zero \emph{after trying the rest}.
+
+Every run ends with a per-backend summary:
+
+\begin{lstlisting}[style=plain]
+== summary
+   python      OK
+   node        OK
+   wasm        SKIPPED (emcc not found -- activate emsdk)
+   markdown            OK (nothing to compile)
+\end{lstlisting}
+
+\subsection{Options}
+
+\begin{lstlisting}[style=plain]
+--gen-dir DIR            generator project dir   (default: <manifest dir>/gen)
+--bindings-dir DIR       generated bindings dir  (default: <manifest dir>/bindings)
+--clang-p2996-root PATH  -DCLANG_P2996_ROOT for every CMake configure
+--qt-dir PATH            -DQT_DIR for the qt / qml builds
+--only a,b / --skip a,b  restrict the backend builds to / exclude these
+--cmake-arg ARG          extra argument for every CMake configure (repeatable)
+--jobs N, -jN            parallel build jobs (bare -j: one per core)
+--fresh                  wipe the gen and bindings dirs first
+--wheel                  also build a Python wheel for the python /
+                         nanobind targets
+--wheel-dir DIR          collect every wheel in DIR (implies --wheel)
+\end{lstlisting}
+
+\subsection{Iterating on one or two backends}
+\label{sec:onlyskip}
+
+While developing you rarely want the full matrix. \code{--only} and
+\code{--skip} filter \textbf{which backends get compiled} --- generation still
+emits them all, and the filters name the \field{lang} values:
+
+\begin{lstlisting}[style=sh]
+# just python and node, 8-way parallel
+bin/rosetta_gen --build manifest.json --only python,node -j8
+
+# everything except the slow wasm link
+bin/rosetta_gen --build manifest.json --skip wasm
+\end{lstlisting}
+
+\subsection{A custom reflection toolchain}
+
+\lang{rest} is the one target whose generated code still splices reflections, so
+it re-runs reflection when \emph{it} compiles. Its CMake configure needs to know
+where the clang-p2996 build lives if it is not at the manifest's default:
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen --build manifest.json \
+    --clang-p2996-root ~/devs/clang-p2996/build --fresh
+\end{lstlisting}
+
+\code{--fresh} wipes \code{gen/} and \code{bindings/} first --- the right move
+after toolchain or manifest-layout changes, when stale CMake caches would
+otherwise bite.
+
+\subsection{Qt and QML}
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen --build manifest.json --only qt,qml --qt-dir ~/Qt/6.8.3/macos
+\end{lstlisting}
+
+Equivalently, set \field{qt\_dir} in the manifest and drop the flag.
+
+\subsection{Passing flags to every configure}
+
+\code{--cmake-arg} is repeatable and applies to the generator's configure
+\emph{and} every backend's, including the emcmake configure for wasm:
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen --build manifest.json \
+    --cmake-arg -DCMAKE_BUILD_TYPE=Debug \
+    --cmake-arg -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+\end{lstlisting}
+
+\subsection{Python wheels}
+
+By default \code{--build} compiles the extension module and stops --- it
+produces an importable \code{.so} / \code{.pyd}, not a distributable artifact.
+\code{--wheel} adds the packaging step for the two backends that emit a
+\code{make\_wheel.py}:
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen --build manifest.json --only python,nanobind --wheel
+\end{lstlisting}
+
+Wheels land in \code{<bindings>/<lang>/dist}, with the repaired
+(redistributable) copies in \code{dist/repaired}. It is opt-in because
+packaging is a release action, not a development one: it pip-installs
+\code{build}, \code{scikit-build-core} and a repair tool into the environment,
+and takes noticeably longer than the compile \code{--build} is otherwise
+optimised for.
+
+\code{--wheel-dir} collects every backend's wheels in one place instead --- the
+shape you want when the next step is uploading them:
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen --build manifest.json --wheel-dir ./dist
+\end{lstlisting}
+
+\begin{lstlisting}[style=plain]
+dist/
+  pygeom-0.2.0-cp312-cp312-macosx_15_0_arm64.whl
+  nbgeom-0.2.0-cp312-abi3-macosx_15_0_arm64.whl
+  repaired/          <- the redistributable copies, same names
+\end{lstlisting}
+
+Sharing one output directory is safe: each \code{make\_wheel.py} repairs only
+the wheels \emph{it} just produced.
+
+Both flags have manifest counterparts --- \field{wheel} and
+\field{wheel\_dir} on the \lang{python} / \lang{nanobind} entry of
+\field{targets} (Section~\ref{sec:wheels}) --- so a project that always
+packages says so once. They are per-target, which is what lets a manifest ship
+the \lang{nanobind} wheel and not the \lang{python} one. The flags still win,
+and only ever toward packaging \emph{more}: a target spelling
+\code{"wheel": false} cannot disarm a \code{--wheel} you typed, and
+\code{--wheel-dir} overrides every target's own directory.
+
+\begin{note}
+The wheel build is \emph{independent} of the compile above it ---
+scikit-build-core re-runs the same \code{CMakeLists.txt} in its own tree, so it
+neither reuses nor disturbs \code{<lang>/build/}. The interpreter is probed on
+\code{PATH}; if none is found, the backend is recorded
+\code{OK (no wheel -- no python interpreter found)} rather than failing. A
+\code{--wheel} that cannot fire --- no such target, or none surviving
+\code{--only}/\code{--skip} --- says so instead of quietly doing nothing.
+\end{note}
+
+\section{Plain mode: one step at a time}
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen manifest.json [out_dir]
+\end{lstlisting}
+
+emits \textbf{only} the generator project (default \code{out\_dir}:
+\code{<manifest dir>/generated/}) and stops. Useful for inspecting
+\code{bindings.h}, hacking on the emitted driver, or wiring the steps into your
+own build system:
+
+\begin{lstlisting}[style=sh]
+# 1. manifest -> generator project
+bin/rosetta_gen manifest.json gen
+
+# 2. build the generator (clang-p2996) and run it
+cmake -S gen -B gen/build && cmake --build gen/build
+./generator bindings          # the binary is dropped NEXT TO the project dir
+
+# 3. build any backend by hand
+cmake -S bindings/python -B bindings/python/build
+cmake --build bindings/python/build
+\end{lstlisting}
+
+Two footguns the tool warns about:
+
+\begin{itemize}
+  \item a fresh checkout (or a \code{--clean}) leaves \code{out\_dir/build}
+    unconfigured, so \code{cmake --build} alone fails --- the \emph{configure}
+    step is printed as a \code{next:} hint;
+  \item if the emitted sources changed but a generator binary from a previous
+    emit still sits next to \code{out\_dir}, running it without rebuilding
+    \textbf{silently re-emits the old bindings}. The tool prints a rebuild note
+    when it detects this.
+\end{itemize}
+
+Re-emitting is idempotent: unchanged files are not rewritten, so the next
+\code{cmake --build} recompiles nothing.
+
+\section{\code{--clean}: back to sources}
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen --clean manifest.json [--gen-dir DIR] [--bindings-dir DIR]
+\end{lstlisting}
+
+Removes everything the pipeline generated for this manifest:
+
+\begin{itemize}
+  \item the generator project directory --- the explicit \code{--gen-dir}, or
+    \textbf{both} defaults (\code{gen/} from \code{--build} and
+    \code{generated/} from plain mode);
+  \item the generator binary dropped beside it, including per-config
+    subdirectories of multi-config generators;
+  \item the per-backend folders under \code{bindings/} \textbf{that the manifest
+    declares}. Anything else you parked there survives, and \code{bindings/}
+    itself is only removed once empty.
+\end{itemize}
+
+Never the manifest --- and never a folder whose \code{CMakeLists.txt} lacks the
+\code{Generated by rosetta} stamp the emitters write, so a hand-written folder
+sharing a name survives:
+
+\begin{lstlisting}[style=plain]
+not removing gen (no rosetta_gen marker in its CMakeLists)
+\end{lstlisting}
+
+\section{Exit status}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{4.6cm}L{5.6cm}@{}}
+\toprule
+\textbf{Mode} & \textbf{0} & \textbf{non-zero} \\
+\midrule
+plain & project emitted & manifest missing / invalid, emit error \\
+\code{--build} & every \emph{attempted} backend built (skips do not count) &
+  generator build or run failed, or at least one backend build failed \\
+\code{--clean} & clean ran (nothing to remove is fine) &
+  manifest missing / invalid \\
+\code{--init} & manifest written & target file already exists, bad arguments \\
+\bottomrule
+\end{tabular}
+\end{center}
