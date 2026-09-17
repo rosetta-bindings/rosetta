@@ -89,6 +89,20 @@ detail to copy from.
 \code{person.h}, a manifest of ten lines, and the pipeline. It is
 Chapter~\ref{ch:first} as a runnable directory.
 
+\section{Documentation, without writing any}
+
+\code{examples/doxygen} is chapter~\ref{ch:documentation} as a runnable
+project: a documented \code{polygon.h} that never mentions rosetta, a manifest
+that says nothing about documentation, and four targets showing where the
+comments land.
+
+Read its \code{test.py} rather than its README. It asserts, against the
+compiled module, not only that the docstrings and keyword arguments arrived but
+also the three cases where rosetta deliberately does \emph{less}: a default it
+refuses to repeat (an unqualified class constant), an enum default that works
+only because the enum is bound too, and two \code{scale} overloads that each
+keep their own comment while the \code{.d.ts} declares only the first.
+
 \section{A geometry library}
 
 \code{examples/geom-lib} is the first realistic shape: several classes, one

@@ -7,7 +7,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/C%2B%2B-26-blue.svg?logo=cplusplus" alt="C++26">
-  <img src="https://img.shields.io/badge/status-prototype-yellow.svg" alt="Status: prototype">
+  <img src="https://img.shields.io/badge/status-release-blue.svg" alt="Status: release">
   <a href="https://github.com/rosetta-bindings/rosetta/#1"><img src="https://img.shields.io/badge/slides-rosetta-blue?logo=marp" alt="Slides"></a>
   <a href="https://github.com/rosetta-bindings/rosetta/stargazers"><img src="https://img.shields.io/github/stars/xaliphostes/rosetta?style=social" alt="GitHub stars"></a>
 </p>
