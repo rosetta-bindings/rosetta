@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/rosetta-bindings/rosetta/docs/book/rosetta-book.pdf"><img src="https://img.shields.io/badge/UserGuide-rosetta-blue?logo=marp" alt="Book"></a>
+  <a href="https://github.com/rosetta-bindings/rosetta/tree/main/docs/book/rosetta-book.pdf"><img src="https://img.shields.io/badge/UserGuide-rosetta-blue?logo=marp" alt="Book"></a>
   <a href="https://github.com/rosetta-bindings/rosetta/#1"><img src="https://img.shields.io/badge/Slides-rosetta-green?logo=marp" alt="Slides"></a>
 </p>
 
