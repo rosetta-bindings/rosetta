@@ -8,8 +8,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/C%2B%2B-26-blue.svg?logo=cplusplus" alt="C++26">
   <img src="https://img.shields.io/badge/status-release-blue.svg" alt="Status: release">
-  <a href="https://github.com/rosetta-bindings/rosetta/#1"><img src="https://img.shields.io/badge/slides-rosetta-blue?logo=marp" alt="Slides"></a>
   <a href="https://github.com/rosetta-bindings/rosetta/stargazers"><img src="https://img.shields.io/github/stars/xaliphostes/rosetta?style=social" alt="GitHub stars"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/rosetta-bindings/rosetta/docs/book/rosetta-book.pdf"><img src="https://img.shields.io/badge/UserGuide-rosetta-blue?logo=marp" alt="Book"></a>
+  <a href="https://github.com/rosetta-bindings/rosetta/#1"><img src="https://img.shields.io/badge/Slides-rosetta-green?logo=marp" alt="Slides"></a>
 </p>
 
 <p align="center">
@@ -91,27 +95,27 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 
 ## Backends (one combined module per target, from a single generator)
 
-| # | Target | Ok |
-|---|---|:---:|
-| 1 | **Python** (`python`) — pybind11 extension module | ✅ | 
-| 2 | **Python** (`nanobind`) — leaner/faster pybind11 successor | ✅ |
-| 3 | **Node** (`node`) — N-API native addon | ✅ |
-| 4 | **Julia** (`julia`) — CxxWrap.jl / jlcxx shared module, `std::vector` included | ✅ |
-| 5 | **WebAssembly** (`wasm`) — Emscripten/embind module | ✅ |
-| 6 | **Lua** (`lua`) — sol2 module, `require`-able (off-the-shelf C++17) | ✅ |
-| 7 | **C#** (`csharp`) — native C-ABI shared library + handle-backed P/Invoke wrappers | ✅ |
-| 8 | **Java** (`java`) — native C-ABI + handle-backed FFM wrappers | ✅ |
-| 9 | **Qt Widgets** (`qt`) — generated property/method inspector via `runtime/qt_widgets.h` | ✅ |
-| 10 | **QML** (`qml`) — fills a generic `ReflectedObject` explicitly | ✅ |
-| 11 | **Dear ImGui** (`imgui`) — immediate-mode inspector app (GLFW + OpenGL3, auto-fetched) | ✅ |
-| 12 | **REST** (`rest`) — cpp-httplib JSON server + generated browser client| — |
-| 13 | **OpenAPI** (`openapi`) — OpenAPI 3.1 spec describing the REST surface | ✅ |
-| 14 | **JSON** — reflection-based nlohmann (de)serialization (`visitors/json.h`) | — |
-| 15 | **TypeScript** (`typescript`) — ambient `.d.ts` type declarations | ✅ |
-| 16 | **Markdown** (`markdown`) — API reference document | ✅ |
-| 17 | **HTML** (`html`) — self-contained, styled API reference page | ✅ |
-| 18 | **ParaView** (`paraview`) — Server Manager XML for a plugin | ✅ |
-| 19 | **Dynamic** (`dynamic`) — the IR as runtime *data*: a `MetaClass` per type + one thunk per member, queried and called by name ([details](examples/dynamic)) | ✅ |
+| #   | Target                                                                                                                                                      |  Ok   |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | :---: |
+| 1   | **Python** (`python`) — pybind11 extension module                                                                                                           |   ✅   |
+| 2   | **Python** (`nanobind`) — leaner/faster pybind11 successor                                                                                                  |   ✅   |
+| 3   | **Node** (`node`) — N-API native addon                                                                                                                      |   ✅   |
+| 4   | **Julia** (`julia`) — CxxWrap.jl / jlcxx shared module, `std::vector` included                                                                              |   ✅   |
+| 5   | **WebAssembly** (`wasm`) — Emscripten/embind module                                                                                                         |   ✅   |
+| 6   | **Lua** (`lua`) — sol2 module, `require`-able (off-the-shelf C++17)                                                                                         |   ✅   |
+| 7   | **C#** (`csharp`) — native C-ABI shared library + handle-backed P/Invoke wrappers                                                                           |   ✅   |
+| 8   | **Java** (`java`) — native C-ABI + handle-backed FFM wrappers                                                                                               |   ✅   |
+| 9   | **Qt Widgets** (`qt`) — generated property/method inspector via `runtime/qt_widgets.h`                                                                      |   ✅   |
+| 10  | **QML** (`qml`) — fills a generic `ReflectedObject` explicitly                                                                                              |   ✅   |
+| 11  | **Dear ImGui** (`imgui`) — immediate-mode inspector app (GLFW + OpenGL3, auto-fetched)                                                                      |   ✅   |
+| 12  | **REST** (`rest`) — cpp-httplib JSON server + generated browser client                                                                                      |   —   |
+| 13  | **OpenAPI** (`openapi`) — OpenAPI 3.1 spec describing the REST surface                                                                                      |   ✅   |
+| 14  | **JSON** — reflection-based nlohmann (de)serialization (`visitors/json.h`)                                                                                  |   —   |
+| 15  | **TypeScript** (`typescript`) — ambient `.d.ts` type declarations                                                                                           |   ✅   |
+| 16  | **Markdown** (`markdown`) — API reference document                                                                                                          |   ✅   |
+| 17  | **HTML** (`html`) — self-contained, styled API reference page                                                                                               |   ✅   |
+| 18  | **ParaView** (`paraview`) — Server Manager XML for a plugin                                                                                                 |   ✅   |
+| 19  | **Dynamic** (`dynamic`) — the IR as runtime *data*: a `MetaClass` per type + one thunk per member, queried and called by name ([details](examples/dynamic)) |   ✅   |
 
 > New backends register without touching the generator, thanks to the visitor pattern — see [EXTENDING_BACKEND](docs/EXTENDING_BACKEND.md).
 > **C++26** = targets generated against the reflection toolchain.
@@ -360,27 +364,27 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 <details>
 <summary><b>19 worked examples</b> — manifest-driven, expanded targets, the dynamic object model, trampolines, mini-moc, the three UI inspectors, hand-written references <i>(expand)</i></summary>
 
-| Path                       | What it shows                                       |
-|----------------------------|-----------------------------------------------------|
-| `examples/manifest`        | Manifest-driven generation for `Person` (no class modification) |
-| `examples/annotate-manifest`| Out-of-line annotations from an external JSON file, wired by the manifest's `annotations` field ([details](docs/OUT_OF_LINE_ANNOTATIONS.md)) |
-| `examples/doxygen`         | The documentation a library already has: plain Doxygen comments and default arguments in an untouched header become Python docstrings + keyword arguments, TSDoc, OpenAPI descriptions and a Markdown reference ([details](docs/MANIFEST.md#doc-comments-doc_comments)) |
-| `examples/geom-lib`        | Manifest-driven bindings for a small geometry library (nested types, vectors) |
-| `examples/geom-expanded`   | Reflection-free `python` / `nanobind` / `node` / `wasm` / `qt` / `qml` / `csharp` / `java` / `lua` / `julia` bindings (off-the-shelf compiler, emsdk and Qt, any Lua 5.1–5.4, CxxWrap.jl) with out-of-line annotations |
-| `examples/dynamic`         | The `dynamic` backend end to end: one set of generated metadata driving a terminal interpreter *and* a Qt viewer (3D view + property panel + console), neither naming a bound type |
-| `examples/trampoline-python` | Overriding C++ virtuals from Python — generated pybind11 trampolines from `virtual_spec` |
-| `examples/trampoline-node` | Overriding C++ virtuals from JavaScript — generated N-API trampolines from `virtual_spec` |
-| `examples/moc`             | Qt-flavoured meta-object demo on `mini_moc.h` (properties + signals) |
-| `examples/docgen`          | Reflection-driven Markdown / HTML reference generator |
-| `examples/paraview`        | ParaView plugin property-panel XML from an annotated `vtkThreshold` spec (every backend feature) |
-| `examples/qt`              | Building a Qt widget form from a reflected struct   |
-| `examples/qml`             | Exposing a reflected C++ object to QML              |
-| `examples/imgui`           | Dear ImGui inspector for `Algo` with out-of-line annotations (`Algo.ann.json`: `doc` / `range` / `combobox`) — builds with an off-the-shelf C++20 compiler, deps auto-fetched |
-| `examples/bindings/python` | Hand-written pybind11 backend (reference)           |
-| `examples/bindings/node`   | Hand-written N-API backend (reference)              |
-| `examples/bindings/julia`  | Hand-written CxxWrap/jlcxx backend (reference, requires CxxWrap.jl) |
-| `examples/bindings/rest`   | Hand-written HTTP/REST backend (reference)          |
-| `examples/bindings/web`    | Hand-written WebAssembly backend (requires reflection-aware emsdk) |
+| Path                         | What it shows                                                                                                                                                                                                                                                           |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `examples/manifest`          | Manifest-driven generation for `Person` (no class modification)                                                                                                                                                                                                         |
+| `examples/annotate-manifest` | Out-of-line annotations from an external JSON file, wired by the manifest's `annotations` field ([details](docs/OUT_OF_LINE_ANNOTATIONS.md))                                                                                                                            |
+| `examples/doxygen`           | The documentation a library already has: plain Doxygen comments and default arguments in an untouched header become Python docstrings + keyword arguments, TSDoc, OpenAPI descriptions and a Markdown reference ([details](docs/MANIFEST.md#doc-comments-doc_comments)) |
+| `examples/geom-lib`          | Manifest-driven bindings for a small geometry library (nested types, vectors)                                                                                                                                                                                           |
+| `examples/geom-expanded`     | Reflection-free `python` / `nanobind` / `node` / `wasm` / `qt` / `qml` / `csharp` / `java` / `lua` / `julia` bindings (off-the-shelf compiler, emsdk and Qt, any Lua 5.1–5.4, CxxWrap.jl) with out-of-line annotations                                                  |
+| `examples/dynamic`           | The `dynamic` backend end to end: one set of generated metadata driving a terminal interpreter *and* a Qt viewer (3D view + property panel + console), neither naming a bound type                                                                                      |
+| `examples/trampoline-python` | Overriding C++ virtuals from Python — generated pybind11 trampolines from `virtual_spec`                                                                                                                                                                                |
+| `examples/trampoline-node`   | Overriding C++ virtuals from JavaScript — generated N-API trampolines from `virtual_spec`                                                                                                                                                                               |
+| `examples/moc`               | Qt-flavoured meta-object demo on `mini_moc.h` (properties + signals)                                                                                                                                                                                                    |
+| `examples/docgen`            | Reflection-driven Markdown / HTML reference generator                                                                                                                                                                                                                   |
+| `examples/paraview`          | ParaView plugin property-panel XML from an annotated `vtkThreshold` spec (every backend feature)                                                                                                                                                                        |
+| `examples/qt`                | Building a Qt widget form from a reflected struct                                                                                                                                                                                                                       |
+| `examples/qml`               | Exposing a reflected C++ object to QML                                                                                                                                                                                                                                  |
+| `examples/imgui`             | Dear ImGui inspector for `Algo` with out-of-line annotations (`Algo.ann.json`: `doc` / `range` / `combobox`) — builds with an off-the-shelf C++20 compiler, deps auto-fetched                                                                                           |
+| `examples/bindings/python`   | Hand-written pybind11 backend (reference)                                                                                                                                                                                                                               |
+| `examples/bindings/node`     | Hand-written N-API backend (reference)                                                                                                                                                                                                                                  |
+| `examples/bindings/julia`    | Hand-written CxxWrap/jlcxx backend (reference, requires CxxWrap.jl)                                                                                                                                                                                                     |
+| `examples/bindings/rest`     | Hand-written HTTP/REST backend (reference)                                                                                                                                                                                                                              |
+| `examples/bindings/web`      | Hand-written WebAssembly backend (requires reflection-aware emsdk)                                                                                                                                                                                                      |
 
 </details>
 
@@ -389,13 +393,13 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 <details>
 <summary>Real libraries bound with rosetta — <b>PMP, geogram, Arch, Cassini</b> — each from a single <code>manifest.json</code>, no hand-written wrappers <i>(expand)</i></summary>
 
-| Project | Bound library | Targets |
-|---|---|---|
-| [pmp-rosetta](https://github.com/rosetta-bindings/pmp-rosetta) | [PMP](https://www.pmp-library.org) — the Polygon Mesh Processing library (remeshing, smoothing, subdivision, decimation) | Python, Node.js, WebAssembly, TypeScript |
-| [geogram-rosetta](https://github.com/rosetta-bindings/geogram-rosetta) | [geogram](https://github.com/BrunoLevy/geogram) — Bruno Lévy's geometry-processing library (reconstruction, remeshing, parameterization, booleans/CSG) | Python, Node.js, WebAssembly, TypeScript, Lua |
-| [arch-rosetta](https://github.com/rosetta-bindings/arch-rosetta) *(private)* | Arch — a 3-D boundary-element (BEM) geomechanics code | Python, Node.js, WebAssembly, TypeScript |
-| [cassini-rosetta](https://github.com/rosetta-bindings/cassini-rosetta) *(private)* | Cassini — FEM geomechanical restoration, bound through a single high-level C++ facade | Python, Node.js, WebAssembly, TypeScript |
-| [triax-rosetta](https://github.com/rosetta-bindings/triax-rosetta) | Triax — a discrete-element (DEM) triaxial compression simulator for granular packings | Python, Node.js, WebAssembly |
+| Project                                                                            | Bound library                                                                                                                                          | Targets                                       |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| [pmp-rosetta](https://github.com/rosetta-bindings/pmp-rosetta)                     | [PMP](https://www.pmp-library.org) — the Polygon Mesh Processing library (remeshing, smoothing, subdivision, decimation)                               | Python, Node.js, WebAssembly, TypeScript      |
+| [geogram-rosetta](https://github.com/rosetta-bindings/geogram-rosetta)             | [geogram](https://github.com/BrunoLevy/geogram) — Bruno Lévy's geometry-processing library (reconstruction, remeshing, parameterization, booleans/CSG) | Python, Node.js, WebAssembly, TypeScript, Lua |
+| [arch-rosetta](https://github.com/rosetta-bindings/arch-rosetta) *(private)*       | Arch — a 3-D boundary-element (BEM) geomechanics code                                                                                                  | Python, Node.js, WebAssembly, TypeScript      |
+| [cassini-rosetta](https://github.com/rosetta-bindings/cassini-rosetta) *(private)* | Cassini — FEM geomechanical restoration, bound through a single high-level C++ facade                                                                  | Python, Node.js, WebAssembly, TypeScript      |
+| [triax-rosetta](https://github.com/rosetta-bindings/triax-rosetta)                 | Triax — a discrete-element (DEM) triaxial compression simulator for granular packings                                                                  | Python, Node.js, WebAssembly                  |
 
 </details>
 
