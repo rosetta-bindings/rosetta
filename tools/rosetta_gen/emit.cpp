@@ -274,6 +274,36 @@ static std::string render_project_gen_cpp(const Manifest &m) {
         field("requires_python", t.requires_python);
         field("napi_version", t.napi_version);
         field("node_engine", t.node_engine);
+        // Wheel contents (manifest "wheel_files" / "wheel_dependencies" /
+        // "wheel_scripts"). Raw string literals, as for compile_definitions:
+        // a path may carry a backslash and a requirement a quote.
+        const auto raw = [](const std::string &v) {
+            return "R\"ROSETTA(" + v + ")ROSETTA\"";
+        };
+        if (!t.wheel_files.empty()) {
+            out << ", .wheel_files = {";
+            for (std::size_t i = 0; i < t.wheel_files.size(); ++i) {
+                out << (i ? ", " : "") << "{" << raw(t.wheel_files[i].path) << ", "
+                    << raw(t.wheel_files[i].dest) << "}";
+            }
+            out << "}";
+        }
+        if (!t.wheel_dependencies.empty()) {
+            out << ", .wheel_dependencies = {";
+            for (std::size_t i = 0; i < t.wheel_dependencies.size(); ++i) {
+                out << (i ? ", " : "") << raw(t.wheel_dependencies[i]);
+            }
+            out << "}";
+        }
+        if (!t.wheel_scripts.empty()) {
+            out << ", .wheel_scripts = {";
+            bool first = true;
+            for (const auto &[cmd, entry] : t.wheel_scripts) {
+                out << (first ? "" : ", ") << "{" << raw(cmd) << ", " << raw(entry) << "}";
+                first = false;
+            }
+            out << "}";
+        }
         out << "},\n";
     }
     out << "    };\n";

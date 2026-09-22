@@ -356,6 +356,64 @@ On 3.12+, nanobind wheels are tagged \code{abi3}, covering every later CPython
 with a single artifact.
 \end{note}
 
+\subsection{Bundling files in the wheel}
+\label{sec:wheelfiles}
+
+A binding rarely ships alone. There is usually a pure-Python layer that
+belongs with it --- helpers more naturally written in Python than bound from
+C++, a bridge process, a data file the module reads --- and without a way to
+put it \emph{in} the wheel it becomes a second package users have to know
+about. Three more per-target fields, same backends and same rules as
+\field{wheel}, say what the wheel holds beyond the module:
+
+\begin{lstlisting}[style=json]
+"targets": [
+  { "lang": "nanobind", "name": "exocore", "wheel": true,
+    "wheel_files": [
+      "../python/exocore_py",
+      {"path": "../js/native.js", "dest": "exocore_py/web"}
+    ],
+    "wheel_dependencies": ["numpy>=1.20"],
+    "wheel_scripts": {"exocore-web-bridge": "exocore_py.web_bridge:main"} }
+]
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.6cm}@{}}
+\toprule
+\field{wheel\_files} & Files and directories copied into the wheel next to
+  the module. A bare string is a source with the default destination
+  \code{"."} (the wheel root); the object form adds \field{dest}, a directory
+  \emph{inside} the wheel. Sources resolve against the manifest and must
+  exist at load time. A directory is copied as a tree (minus
+  \code{\_\_pycache\_\_}, \code{*.pyc}, \code{*.egg-info}), so a package
+  directory at the root is importable from the same wheel as the module. \\
+\addlinespace
+\field{wheel\_dependencies} & PEP 508 requirement strings written to
+  \code{pyproject.toml}'s \code{[project] dependencies}: the bundled code's
+  own imports, declared where pip reads them. \\
+\addlinespace
+\field{wheel\_scripts} & Console entry points, command name $\to$
+  \code{"module:function"}, written to \code{[project.scripts]}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The mechanism is the one the module itself already uses: scikit-build-core
+packages \textbf{what CMake installs}, so each \field{wheel\_files} entry
+becomes an \code{install(DIRECTORY \ldots)} / \code{install(FILES \ldots)}
+rule in the generated \code{CMakeLists.txt}, guarded by \code{if(SKBUILD)}.
+A plain \code{cmake --build} copies nothing, and nothing is snapshotted at
+generation time either --- the wheel takes the files as they are when
+\code{make\_wheel.py} runs, so editing the Python layer needs no regeneration.
+
+A \field{dest} must stay inside the wheel --- an absolute path or a
+\code{..} component is an error --- and a listed source that does not exist
+fails the load rather than producing a wheel that is quietly missing a
+package. Like \field{wheel}, the three fields are per-target and
+\lang{python} / \lang{nanobind} only.
+
 \section{A realistic manifest}
 
 Putting the last four chapters together --- this is roughly the shape a real

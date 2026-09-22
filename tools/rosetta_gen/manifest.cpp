@@ -555,7 +555,8 @@ Manifest load(const fs::path &manifest_path) {
             // manifest asking a markdown target for a wheel has made a mistake
             // worth naming rather than ignoring.
             const bool packages = e.lang == "python" || e.lang == "nanobind";
-            for (const char *key : {"wheel", "wheel_dir"}) {
+            for (const char *key :
+                 {"wheel", "wheel_dir", "wheel_files", "wheel_dependencies", "wheel_scripts"}) {
                 if (t.contains(key) && !packages) {
                     throw std::runtime_error(
                         std::string("a \"") + e.lang + "\" target cannot take \"" + key +
@@ -571,6 +572,93 @@ Manifest load(const fs::path &manifest_path) {
                     throw std::runtime_error("a target's \"wheel_dir\" must not be empty");
                 }
                 e.wheel_dir = fs::weakly_canonical(base / fs::path(d)).string();
+            }
+            // Wheel contents (see TargetEntry::wheel_files). A source that does
+            // not exist is an error at LOAD time: the manifest promised to ship
+            // it, and the wheel would otherwise be quietly incomplete. The
+            // destination is kept inside the wheel — an absolute path or a
+            // ".." would escape the install prefix scikit-build-core packages.
+            if (t.contains("wheel_files")) {
+                if (!t.at("wheel_files").is_array()) {
+                    throw std::runtime_error("\"wheel_files\" must be an array");
+                }
+                for (const auto &f : t.at("wheel_files")) {
+                    WheelFileEntry w;
+                    std::string    src;
+                    if (f.is_string()) {
+                        src = f.get<std::string>();
+                    } else if (f.is_object() && f.contains("path")) {
+                        src = f.at("path").get<std::string>();
+                        if (f.contains("dest")) {
+                            w.dest = f.at("dest").get<std::string>();
+                        }
+                    } else {
+                        throw std::runtime_error(
+                            "each \"wheel_files\" entry is a path string or "
+                            "{\"path\": ..., \"dest\": ...}");
+                    }
+                    if (src.empty()) {
+                        throw std::runtime_error("a \"wheel_files\" path must not be empty");
+                    }
+                    w.path = fs::weakly_canonical(base / fs::path(src)).string();
+                    if (!fs::exists(w.path)) {
+                        throw std::runtime_error("\"wheel_files\" entry does not exist: " +
+                                                 w.path + " (from \"" + src + "\")");
+                    }
+                    if (w.dest.empty()) {
+                        w.dest = ".";
+                    }
+                    const fs::path dest(w.dest);
+                    if (dest.is_absolute()) {
+                        throw std::runtime_error(
+                            "a \"wheel_files\" dest must be relative to the wheel root, got \"" +
+                            w.dest + "\"");
+                    }
+                    for (const auto &part : dest) {
+                        if (part == "..") {
+                            throw std::runtime_error(
+                                "a \"wheel_files\" dest must stay inside the wheel, got \"" +
+                                w.dest + "\"");
+                        }
+                    }
+                    w.dest = dest.lexically_normal().generic_string();
+                    if (w.dest.size() > 1 && w.dest.back() == '/') {
+                        w.dest.pop_back();
+                    }
+                    if (w.dest.empty()) {
+                        w.dest = ".";
+                    }
+                    e.wheel_files.push_back(std::move(w));
+                }
+            }
+            if (t.contains("wheel_dependencies")) {
+                if (!t.at("wheel_dependencies").is_array()) {
+                    throw std::runtime_error("\"wheel_dependencies\" must be an array of "
+                                             "requirement strings");
+                }
+                for (const auto &d : t.at("wheel_dependencies")) {
+                    std::string req = d.get<std::string>();
+                    if (req.empty()) {
+                        throw std::runtime_error(
+                            "\"wheel_dependencies\" entries must not be empty");
+                    }
+                    e.wheel_dependencies.push_back(std::move(req));
+                }
+            }
+            if (t.contains("wheel_scripts")) {
+                if (!t.at("wheel_scripts").is_object()) {
+                    throw std::runtime_error("\"wheel_scripts\" must be an object mapping a "
+                                             "command name to \"module:function\"");
+                }
+                for (const auto &[cmd, target] : t.at("wheel_scripts").items()) {
+                    const std::string entry = target.get<std::string>();
+                    if (cmd.empty() || entry.find(':') == std::string::npos) {
+                        throw std::runtime_error("a \"wheel_scripts\" entry must map a command "
+                                                 "name to \"module:function\", got \"" +
+                                                 cmd + "\": \"" + entry + "\"");
+                    }
+                    e.wheel_scripts[cmd] = entry;
+                }
             }
         }
         m.targets.push_back(std::move(e));
@@ -599,11 +687,12 @@ Manifest load(const fs::path &manifest_path) {
     // field with the same shape, is per-target. A top-level key here would now
     // silently do nothing, which is the one outcome worth an error: a manifest
     // that used to ship wheels would quietly stop.
-    for (const char *key : {"wheel", "wheel_dir"}) {
+    for (const char *key :
+         {"wheel", "wheel_dir", "wheel_files", "wheel_dependencies", "wheel_scripts"}) {
         if (j.contains(key)) {
             throw std::runtime_error(
                 std::string("top-level \"") + key +
-                "\" is no longer supported — move it onto the python / nanobind "
+                "\" is not supported — it belongs on the python / nanobind "
                 "entries of \"targets\"");
         }
     }

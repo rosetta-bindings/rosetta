@@ -883,7 +883,77 @@ endif()
                 c.node_engine.empty()
                     ? std::string{}
                     : ",\n  \"engines\": {\n    \"node\": \"" + c.node_engine + "\"\n  }";
+            // {{WHEEL_FILES_BLOCK}} — the manifest's "wheel_files" as install()
+            // rules. scikit-build-core packages exactly what CMake installs
+            // (the module itself already goes in that way), so a directory
+            // installed at "." is an importable package at the wheel root and
+            // a file lands wherever `dest` says. Guarded by SKBUILD: a plain
+            // build has no install step to speak of and must not start one.
+            // A directory is copied as a tree minus the byte-code and
+            // packaging litter a working checkout accumulates.
+            const auto cmake_str = [](const std::string &v) {
+                std::string out = "\"";
+                for (char ch : v) {
+                    if (ch == '\\' || ch == '"') {
+                        out += '\\';
+                    }
+                    out += ch;
+                }
+                return out + "\"";
+            };
+            std::string wheel_files_block;
+            if (!c.wheel_files.empty()) {
+                wheel_files_block =
+                    "\n\n# Extra files bundled into the wheel (manifest \"wheel_files\"), "
+                    "installed\n# next to the module. Wheel builds only: a plain build "
+                    "leaves them in place.\nif(SKBUILD)\n";
+                for (const auto &w : c.wheel_files) {
+                    std::error_code ec;
+                    if (std::filesystem::is_directory(w.path, ec)) {
+                        wheel_files_block += "    install(DIRECTORY " + cmake_str(w.path) +
+                                             " DESTINATION " + cmake_str(w.dest) +
+                                             "\n        PATTERN \"__pycache__\" EXCLUDE"
+                                             "\n        PATTERN \"*.pyc\" EXCLUDE"
+                                             "\n        PATTERN \"*.egg-info\" EXCLUDE)\n";
+                    } else {
+                        wheel_files_block += "    install(FILES " + cmake_str(w.path) +
+                                             " DESTINATION " + cmake_str(w.dest) + ")\n";
+                    }
+                }
+                wheel_files_block += "endif()";
+            }
+            // {{WHEEL_PROJECT_EXTRA}} — pyproject.toml's [project] dependencies
+            // and [project.scripts], for the bundled code's own imports and
+            // console commands. The scripts table comes LAST: TOML closes the
+            // [project] table at the first sub-table header, so any [project]
+            // key emitted after it would silently belong to the wrong table.
+            const auto toml_str = [](const std::string &v) {
+                std::string out = "\"";
+                for (char ch : v) {
+                    if (ch == '\\' || ch == '"') {
+                        out += '\\';
+                    }
+                    out += ch;
+                }
+                return out + "\"";
+            };
+            std::string wheel_project_extra;
+            if (!c.wheel_dependencies.empty()) {
+                wheel_project_extra += "dependencies = [";
+                for (std::size_t i = 0; i < c.wheel_dependencies.size(); ++i) {
+                    wheel_project_extra += (i ? ", " : "") + toml_str(c.wheel_dependencies[i]);
+                }
+                wheel_project_extra += "]\n";
+            }
+            if (!c.wheel_scripts.empty()) {
+                wheel_project_extra += "\n[project.scripts]\n";
+                for (const auto &[cmd, entry] : c.wheel_scripts) {
+                    wheel_project_extra += toml_str(cmd) + " = " + toml_str(entry) + "\n";
+                }
+            }
             return subst(tmpl, {{"LIB", c.lib},
+                                {"WHEEL_FILES_BLOCK", wheel_files_block},
+                                {"WHEEL_PROJECT_EXTRA", wheel_project_extra},
                                 {"PYTHON_CMD", python_cmd},
                                 {"PYTHON_MIN", python_min},
                                 {"REQUIRES_PYTHON", requires_python},
@@ -3104,7 +3174,9 @@ namespace rosetta {
                                         gen_detail::collect_interop(classes, functions),
                                         t.artifact_dir, t.python, t.requires_python,
                                         t.napi_version, t.node_engine,
-                                        opt.init_headers, opt.init_statements});
+                                        opt.init_headers, opt.init_statements,
+                                        t.wheel_files, t.wheel_dependencies,
+                                        t.wheel_scripts});
         }
 
         // The coverage report, once every target has emitted and had its say.

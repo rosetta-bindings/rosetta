@@ -192,6 +192,13 @@ including inside groups and entries.
   \S\ref{sec:wheels} \\
 \field{wheel\_dir} & & Where this target's wheels go instead of its own
   \code{dist/}. Implies \field{wheel}. \\
+\field{wheel\_files} & & Files / directories bundled into the wheel next to
+  the module (a pure-Python package, data files); a string, or
+  \code{\{"path", "dest"\}}. \S\ref{sec:wheelfiles} \\
+\field{wheel\_dependencies} & & \code{[project] dependencies} of the
+  emitted \code{pyproject.toml}. \\
+\field{wheel\_scripts} & & Console entry points, name $\to$
+  \code{"module:function"}. \\
 \bottomrule
 \end{tabular}
 \end{center}

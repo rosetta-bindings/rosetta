@@ -114,9 +114,24 @@
 //       { "lang": "python", "name": "pygeom" },     // per-target module name
 //       { "lang": "nanobind", "name": "nbgeom",     // optional per-target
 //         "wheel": true,                            //   packaging: build a wheel
-//         "wheel_dir": "./dist" },                  //   on every --build, into
+//         "wheel_dir": "./dist",                    //   on every --build, into
 //                                                   //   this dir (python /
 //                                                   //   nanobind only)
+//         "wheel_files": [                          // optional: extra files
+//           "../python/mylib_py",                   //   BUNDLED in the wheel next
+//           {"path": "../js/native.js",             //   to the module — a pure-
+//            "dest": "mylib_py/web"} ],             //   Python package, data
+//                                                   //   files. Relative to the
+//                                                   //   manifest; a dir is copied
+//                                                   //   as a tree. `dest` is the
+//                                                   //   subdir inside the wheel
+//                                                   //   ("." = the root, where a
+//                                                   //   package is importable)
+//         "wheel_dependencies": ["numpy>=1.20"],    // optional: pyproject
+//                                                   //   [project] dependencies
+//         "wheel_scripts": {                        // optional: console entry
+//           "mylib-serve": "mylib_py.serve:main" }  //   points ([project.scripts])
+//       },
 //       { "lang": "wasm-expanded",                  // optional per-target linker
 //         "link_options": ["-lnodefs.js"] },        //   flags (only THIS target's
 //       "node"                                      //   link line — flags are
@@ -283,6 +298,15 @@ struct UserLibEntry {
     std::string link; // "shared" (default) | "static"; wasm always static
 };
 
+// One entry of a target's "wheel_files": a file or directory copied INTO the
+// wheel, next to the extension module. This is how a pure-Python layer that
+// belongs with the binding — helpers, a bridge, data files — ships in the same
+// artifact instead of as a second package the user has to know about.
+struct WheelFileEntry {
+    std::string path; // absolute source path (file or directory), must exist
+    std::string dest; // relative destination inside the wheel; "." = the root
+};
+
 struct TargetEntry {
     std::string lang; // "python", "node", "rest", "web"
     std::string name; // module / library name for this backend
@@ -348,6 +372,27 @@ struct TargetEntry {
     // is still safe — each make_wheel.py repairs only the wheels it produced.
     bool        wheel = false;
     std::string wheel_dir;
+
+    // Optional wheel CONTENTS, same two backends (see WheelFileEntry):
+    //
+    //   "wheel_files"        — files / directories bundled into the wheel. A
+    //                          directory lands as a tree, so "../python/pkg"
+    //                          with the default dest "." is an importable
+    //                          package at the wheel root, next to the module.
+    //                          Emitted as install() rules that fire only under
+    //                          SKBUILD — a plain build copies nothing.
+    //   "wheel_dependencies" — PEP 508 requirement strings for pyproject's
+    //                          [project] dependencies, so the bundled code's
+    //                          own imports are declared where pip reads them.
+    //   "wheel_scripts"      — console entry points, name -> "module:function",
+    //                          written to [project.scripts].
+    //
+    // Per-target like `wheel`: the bundled layer may differ between the two
+    // python backends (or exist for only one), and the extension module it
+    // sits next to is per-target by construction.
+    std::vector<WheelFileEntry>        wheel_files;
+    std::vector<std::string>           wheel_dependencies;
+    std::map<std::string, std::string> wheel_scripts;
 };
 
 struct Manifest {

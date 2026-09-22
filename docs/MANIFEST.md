@@ -139,6 +139,7 @@ cmake -B build && cmake --build build
 | `sequences` | — | `[]` | Foreign sequence containers that marshal like `std::vector<T>` — a qualified template name with one type parameter (`"GEO::vector"`), or a concrete type spelled exactly (`{ "type": "Eigen::VectorXd" }`). See [Foreign sequence containers](#foreign-sequence-containers-sequences). |
 | `python` / `requires_python` / `napi_version` / `node_engine` | — | — | Per-target runtime pins: which Python the binding is built for, its minimum version, the N-API level and the npm `engines.node` entry. See [Pinning the runtime](#pinning-the-runtime-python-requires_python-napi_version-node_engine). |
 | `wheel` / `wheel_dir` | — | — | **Per-target** (`python` / `nanobind` only): build a wheel for this target on every `--build`, and where it lands. See [Python wheels](#python-wheels-version). |
+| `wheel_files` / `wheel_dependencies` / `wheel_scripts` | — | — | **Per-target** (`python` / `nanobind` only): what else the wheel holds — files and directories bundled next to the module (a pure-Python package, data files), its `dependencies`, and console entry points. See [Bundling files in the wheel](#bundling-files-in-the-wheel-wheel_files-wheel_dependencies-wheel_scripts). |
 | `out_dir` | — | — | Where every target's **built artifact** is copied after each build (the `.so` / `.pyd` / `.node` / `.js`+`.wasm`). Per-target `out_dir` overrides it. See [Artifact output directory](#artifact-output-directory-out_dir). |
 | `matrices` | — | `[]` | Foreign 2-D matrices (same two entry forms as `sequences`) that marshal as an array of row arrays. See [Foreign matrices](#foreign-matrices-matrices). |
 | `interop` | — | `[]` | Foreign libraries whose types the target's binding framework marshals itself (`["eigen"]`). `python` / `nanobind` bind them natively (numpy); backends with no caster skip those members. See [Foreign-library interop](#foreign-library-interop-interop). |
@@ -1357,6 +1358,32 @@ A few things worth knowing:
 - **`user_lib` and wheel repair.** The generated CMake links [`user_lib`](#linking-external-libraries-user_lib) entries by absolute path, so a freshly built module refers to a directory that does not exist on the installing machine. `make_wheel.py` runs the platform's repair tool — `delocate` (macOS), `auditwheel` (Linux), `delvewheel` (Windows) — to copy those libraries *into* the wheel and rewrite the load paths; results land in `dist/repaired`. On Linux this also retags the wheel `manylinux_*`, without which PyPI rejects it. On Windows the `user_lib` directories are baked into the script as `USER_LIB_DIRS` and handed to `delvewheel --add-path`: a `.pyd` records no search path for its DLLs (Windows has no rpath), so unlike the other two tools delvewheel cannot discover them by following a load command. Repair failing is a warning, not an error — a wheel with nothing external to bundle is already correct. Declaring `"link": "static"` sidesteps the whole question.
 - **Wheels are redistributable; sdists are not.** The generated `CMakeLists.txt` embeds the header and library paths the manifest resolved on the generating machine. Ship wheels, or re-run the generator wherever you build.
 - **Matrix builds.** For several Python versions and platforms in one go, use [cibuildwheel](https://cibuildwheel.pypa.io/) (`pipx run cibuildwheel --platform auto`) instead of looping over the script. This is where the `-expanded` backends pay off: the generated source needs no reflection toolchain, so off-the-shelf CI runners — including Windows/MSVC — can build it.
+
+### Bundling files in the wheel (`wheel_files`, `wheel_dependencies`, `wheel_scripts`)
+
+A binding rarely ships alone. There is usually a pure-Python layer that belongs with it — helpers written more naturally in Python than bound from C++, a bridge process, a data file the module reads — and without a way to put it *in* the wheel it becomes a second package users have to know about. Three per-target keys, same backends and same rules as `wheel`, describe what the wheel holds beyond the module:
+
+```json
+"targets": [
+  { "lang": "nanobind", "name": "exocore", "wheel": true,
+    "wheel_files": [
+      "../python/exocore_py",
+      {"path": "../js/native.js", "dest": "exocore_py/web"}
+    ],
+    "wheel_dependencies": ["numpy>=1.20"],
+    "wheel_scripts": {"exocore-web-bridge": "exocore_py.web_bridge:main"} }
+]
+```
+
+| Field | Meaning |
+|---|---|
+| `wheel_files` | Files and directories copied into the wheel next to the module. A bare string is a source with the default destination `"."` (the wheel root); the object form adds `dest`, a directory *inside* the wheel. Sources resolve against the manifest and must exist at load time. A directory is copied as a tree (minus `__pycache__`, `*.pyc`, `*.egg-info`), so a package directory installed at the root is importable — `import exocore_py` — from the same wheel as `import exocore`. |
+| `wheel_dependencies` | PEP 508 requirement strings written to `pyproject.toml`'s `[project] dependencies`: the bundled code's own imports, declared where pip reads them. |
+| `wheel_scripts` | Console entry points, command name → `"module:function"`, written to `[project.scripts]`. |
+
+The mechanism is the one the module itself already uses: scikit-build-core packages **what CMake installs**, so each `wheel_files` entry becomes an `install(DIRECTORY …)` / `install(FILES …)` rule in the generated `CMakeLists.txt`, guarded by `if(SKBUILD)` — a plain `cmake --build` copies nothing, and the in-tree module next to the sources is unchanged. Nothing is copied at generation time either: the wheel picks up the files as they are when `make_wheel.py` runs, so editing the Python layer needs no regeneration.
+
+A `dest` must stay inside the wheel — an absolute path or a `..` component is an error — and a listed source that does not exist fails the load rather than producing a wheel that is quietly missing a package. The three keys are per-target and `python` / `nanobind` only, exactly like `wheel`: on any other target, or at the top level, they are an error.
 
 ---
 

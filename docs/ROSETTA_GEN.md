@@ -219,6 +219,8 @@ The wheel build is *independent* of the one above it — scikit-build-core re-ru
 
 For finer control (a different output directory, skipping the repair step) run the script directly: `python make_wheel.py --outdir … --no-repair`.
 
+What the wheel *contains* is also the manifest's call: `wheel_files` bundles a pure-Python package or data files next to the module, `wheel_dependencies` declares what they import and `wheel_scripts` adds console commands — see [MANIFEST.md](MANIFEST.md#bundling-files-in-the-wheel-wheel_files-wheel_dependencies-wheel_scripts).
+
 ---
 
 ## Plain mode — one step at a time

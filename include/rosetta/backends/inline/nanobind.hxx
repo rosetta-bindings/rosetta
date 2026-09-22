@@ -81,7 +81,7 @@ target_include_directories({{LIB}} PRIVATE
 {{USER_LIB_BLOCK}}
 # Wheel builds (scikit-build-core sets SKBUILD) package what CMake *installs*,
 # so the module must be installed at the wheel root for `import {{LIB}}` to work.
-install(TARGETS {{LIB}} LIBRARY DESTINATION . RUNTIME DESTINATION .)
+install(TARGETS {{LIB}} LIBRARY DESTINATION . RUNTIME DESTINATION .){{WHEEL_FILES_BLOCK}}
 
 # Convenience for the in-tree build only: drop the module next to the sources so
 # it can be imported from this directory. Skipped under SKBUILD, whose build tree
@@ -116,12 +116,13 @@ name = "{{LIB}}"
 version = "{{VERSION}}"
 description = "Auto-generated nanobind bindings for {{LIB}}."
 requires-python = "{{REQUIRES_PYTHON}}"
-
+{{WHEEL_PROJECT_EXTRA}}
 [tool.scikit-build]
 cmake.version = ">=3.18"
 cmake.build-type = "Release"
-# The extension module is installed at the wheel root by CMake's install() —
-# there is no Python package directory to copy alongside it.
+# The extension module is installed at the wheel root by CMake's install(), and
+# so is anything the manifest's "wheel_files" bundles next to it — nothing is
+# copied by scikit-build-core itself.
 wheel.packages = []
 sdist.include = ["auto_nanobind.cpp", "CMakeLists.txt"]
 

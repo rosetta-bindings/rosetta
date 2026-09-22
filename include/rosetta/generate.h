@@ -76,6 +76,17 @@ namespace rosetta {
      * @brief One output target: a backend language and the module /
      * library name to bake into that backend's generated bindings.
      */
+    /**
+     * @brief One file or directory bundled into a python / nanobind wheel
+     * (manifest target "wheel_files"). `path` is absolute and exists; `dest`
+     * is the destination inside the wheel, relative to its root ("." = the
+     * root itself, where a package directory becomes importable).
+     */
+    struct WheelFile {
+        std::string path;
+        std::string dest;
+    };
+
     struct TargetSpec {
         std::string lang; // "python", "node", "rest", "web"
         std::string name; // module / library name for this backend
@@ -103,6 +114,15 @@ namespace rosetta {
         std::string requires_python;
         std::string napi_version;
         std::string node_engine;
+
+        // Wheel CONTENTS beyond the module itself (manifest "wheel_files" /
+        // "wheel_dependencies" / "wheel_scripts"; python / nanobind only).
+        // `wheel_files` are copied into the wheel by install() rules that fire
+        // only under SKBUILD; `wheel_dependencies` and `wheel_scripts` land in
+        // the emitted pyproject.toml. Empty ⇒ the wheel holds the module alone.
+        std::vector<WheelFile>             wheel_files;
+        std::vector<std::string>           wheel_dependencies;
+        std::map<std::string, std::string> wheel_scripts;
     };
 
     /**
@@ -879,6 +899,15 @@ namespace rosetta {
         // `functions` that scripts must remember to call first.
         std::vector<std::string> init_headers;
         std::vector<std::string> init_statements;
+
+        // Wheel contents (TargetSpec::wheel_files and friends), consumed by
+        // render_meta's {{WHEEL_FILES_BLOCK}} (install() rules in the CMake
+        // template) and {{WHEEL_PROJECT_EXTRA}} (dependencies and console
+        // scripts in pyproject.toml). Both render empty when unset, so the
+        // python / nanobind templates name the placeholders unconditionally.
+        std::vector<WheelFile>             wheel_files;
+        std::vector<std::string>           wheel_dependencies;
+        std::map<std::string, std::string> wheel_scripts;
     };
 
     /**

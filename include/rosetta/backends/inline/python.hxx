@@ -62,7 +62,7 @@ target_include_directories({{LIB}} PRIVATE
 
 # Wheel builds (scikit-build-core sets SKBUILD) package what CMake *installs*,
 # so the module must be installed at the wheel root for `import {{LIB}}` to work.
-install(TARGETS {{LIB}} LIBRARY DESTINATION . RUNTIME DESTINATION .)
+install(TARGETS {{LIB}} LIBRARY DESTINATION . RUNTIME DESTINATION .){{WHEEL_FILES_BLOCK}}
 
 # Convenience for the in-tree build only: drop the module next to the sources so
 # it can be imported from this directory. Skipped under SKBUILD, whose build tree
@@ -98,12 +98,13 @@ name = "{{LIB}}"
 version = "{{VERSION}}"
 description = "Auto-generated pybind11 bindings for {{LIB}}."
 requires-python = "{{REQUIRES_PYTHON}}"
-
+{{WHEEL_PROJECT_EXTRA}}
 [tool.scikit-build]
 cmake.version = ">=3.18"
 cmake.build-type = "Release"
-# The extension module is installed at the wheel root by CMake's install() —
-# there is no Python package directory to copy alongside it.
+# The extension module is installed at the wheel root by CMake's install(), and
+# so is anything the manifest's "wheel_files" bundles next to it — nothing is
+# copied by scikit-build-core itself.
 wheel.packages = []
 sdist.include = ["auto_pybind.cpp", "CMakeLists.txt"]
 )TOML";
@@ -347,6 +348,11 @@ python make_wheel.py --outdir /tmp/whl  # somewhere other than ./dist
 The builder is Python, not a shell script, so it runs on Linux, macOS and
 Windows alike — building a wheel needs an interpreter anyway. The wheel is built
 for whichever interpreter runs the script.
+
+The wheel holds the extension module, plus whatever the manifest's `wheel_files`
+bundled next to it (a pure-Python package, data files — see the `if(SKBUILD)`
+install rules in CMakeLists.txt); `wheel_dependencies` and `wheel_scripts` from
+the manifest become the `dependencies` and `[project.scripts]` of pyproject.toml.
 
 {{ABI_NOTE}}
 
