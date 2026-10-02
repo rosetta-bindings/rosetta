@@ -158,6 +158,15 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 if (m->ret_is_ref) {
                     continue;
                 }
+                // A virtual returning std::unique_ptr<T> (`clone()`): a JS
+                // override would have to hand C++ ownership of an object JS
+                // holds, and from_napi has no such conversion — the override
+                // did not compile, which broke the WHOLE module for any class
+                // declaring one. Skipped: C++ keeps calling the base version,
+                // and only a JS subclass's override of it goes unseen.
+                if (m->ret.is_unique_ptr) {
+                    continue;
+                }
                 const bool  is_void = (m->ret_cpp == "void");
                 // Exact spellings re-qualified per the IR: an unqualified user
                 // token ("Data &") is ambiguous once two bound namespaces
@@ -216,7 +225,38 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
         }
 
 
+        // A value with no identity of its own: scalars, bool, strings, enums,
+        // and vectors / maps / optionals of those. It is what may ride INSIDE a
+        // std::map or std::optional: to_napi / from_napi convert one by copy
+        // without consulting a wrapper. A bound class is deliberately not in
+        // the set — to_napi would need its ctor_ref, which this context-free
+        // gate cannot check is registered.
+        inline bool nx_plain_value(const GenType &t) {
+            if (t.is_pointer || t.is_callback || t.is_shared_ptr) {
+                return false;
+            }
+            if (t.kind == "number" || t.kind == "boolean" || t.kind == "string" ||
+                t.kind == "enum") {
+                return true;
+            }
+            if (t.kind == "vector") {
+                return !t.element.empty() && nx_plain_value(t.element.front());
+            }
+            if (t.is_map || t.is_optional) {
+                return std_wrapper_ok(t) && std::all_of(t.element.begin(), t.element.end(),
+                                                        [](const GenType &e) {
+                                                            return nx_plain_value(e);
+                                                        });
+            }
+            return false;
+        }
+
         inline bool nx_marshalable(const GenType &t) {
+            // std::map -> plain JS object, std::optional -> value or undefined
+            // (runtime/inline/node.hxx), by copy in both directions.
+            if (t.is_map || t.is_optional) {
+                return nx_plain_value(t);
+            }
             if (t.kind == "unknown") {
                 return false;
             }
@@ -258,6 +298,9 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             }
             if (t.kind == "vector") {
                 return !t.element.empty() && nx_cb_convertible(t.element.front());
+            }
+            if (t.is_map || t.is_optional) {
+                return nx_plain_value(t); // same to_napi / from_napi pair
             }
             return false;
         }
@@ -537,6 +580,18 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                    "    }\n";
         }
 
+        // A factory's by-value std::unique_ptr<T> return: to_napi moves it into
+        // a std::shared_ptr the JS object adopts — the shared_ptr return path,
+        // under the same two conditions (T bound, T without virtuals: the
+        // adopting Wrap stores a T*, not a trampoline subclass).
+        inline bool nx_unique_ret_ok(const GenType &ret, bool ret_is_ref, const GenContext &c) {
+            if (!unique_return_ok(ret, ret_is_ref, c)) {
+                return false;
+            }
+            const GenClass *pk = nx_bound_class(unique_pointee(ret), c);
+            return pk != nullptr && node_virtual_methods(*pk).empty();
+        }
+
         inline bool nx_method_ok(const GenMethod &m, const GenContext &c) {
             // Overload set: `&T::name` in the thunk template argument would be
             // ambiguous. The emitter routes such a method through the free
@@ -546,7 +601,8 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             if (m.is_overloaded) {
                 return false;
             }
-            if (!nx_ret_ok(m.ret, c, nx_alias_return(m, c))) {
+            if (!nx_unique_ret_ok(m.ret, m.ret_is_ref, c) &&
+                !nx_ret_ok(m.ret, c, nx_alias_return(m, c))) {
                 return false;
             }
             for (const auto &p : m.params) {
@@ -819,6 +875,8 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             for (const auto &f : c.functions) {
                 GenMethod probe;
                 probe.ret    = f.ret;
+                // Only the unique_ptr gate reads it here (see GenFunction::ret_is_ref).
+                probe.ret_is_ref = f.ret.is_unique_ptr && f.ret_is_ref;
                 probe.params = f.params;
                 if (seq_touches(probe)) {
                     if (seq_adaptable(probe) && nx_seq_rest_ok(probe, c)) {
@@ -836,7 +894,7 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                     }
                     continue;
                 }
-                bool ok = nx_ret_ok(f.ret, c);
+                bool ok = nx_unique_ret_ok(f.ret, f.ret_is_ref, c) || nx_ret_ok(f.ret, c);
                 for (const auto &p : f.params) {
                     ok = ok && nx_pass_ok(p);
                 }

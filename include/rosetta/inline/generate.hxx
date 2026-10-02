@@ -988,6 +988,66 @@ endif()
             return subst(tmpl, {{"LIB", c.lib}, {"INCLUDES", includes_of(c)}, {"BINDINGS", binds}});
         }
 
+        // ---- std::unique_ptr (GenType::is_unique_ptr) ---------------------------
+        // The pointee of a unique_ptr, or the type itself — like shared_pointee,
+        // so a caller can ask unconditionally.
+        inline const GenType &unique_pointee(const GenType &t) {
+            return (t.is_unique_ptr && !t.element.empty()) ? t.element.front() : t;
+        }
+
+        // The one shape every opted-in backend accepts: a BY-VALUE unique_ptr
+        // return whose pointee is a class bound in this module. The host-side
+        // object takes ownership. (Backend-specific limits — node's
+        // no-virtuals rule — are layered on top by the backend.)
+        inline bool unique_return_ok(const GenType &ret, bool ret_is_ref, const GenContext &c) {
+            if (!ret.is_unique_ptr || ret_is_ref || ret.element.empty()) {
+                return false;
+            }
+            const GenType &p = ret.element.front();
+            if (p.kind != "object") {
+                return false;
+            }
+            for (const auto &k : c.classes) {
+                if (p.object_qualified.empty() ? (k.name == p.object)
+                                               : (qualified_of(k) == p.object_qualified)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // ---- std::map / std::optional (GenType::is_map / is_optional) ---------
+        // The structural rules every opted-in backend shares; each backend then
+        // asks its own question of the elements. A key must be a string, a
+        // number or an enum: those are the keys a Python dict hashes and a JS
+        // object or JSON document can spell (a number key travels as its
+        // decimal string there). Raw pointers and callbacks stay out of both
+        // wrappers: the copy that carries the value across would have to
+        // decide ownership of a pointee or build an adapter mid-container.
+        inline bool map_key_ok(const GenType &t) {
+            return t.kind == "string" || t.kind == "number" || t.kind == "enum";
+        }
+
+        inline bool std_wrapper_ok(const GenType &t) {
+            if (t.is_map) {
+                if (t.element.size() != 2 || !map_key_ok(t.element[0])) {
+                    return false;
+                }
+            } else if (t.is_optional) {
+                if (t.element.size() != 1) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+            for (const auto &e : t.element) {
+                if (e.is_pointer || e.is_callback) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         // Can a value of this type cross a JSON boundary (REST / OpenAPI)?
         // Scalars, bools, strings, enums (as their underlying int), and vectors
         // of those qualify; user object types and std::function do not. Shared
@@ -1067,6 +1127,20 @@ endif()
 
         template <typename T> struct is_vec : std::false_type {};
         template <typename U, typename A> struct is_vec<std::vector<U, A>> : std::true_type {};
+
+        template <typename T> struct is_map : std::false_type {};
+        template <typename K, typename V, typename C, typename A>
+        struct is_map<std::map<K, V, C, A>> : std::true_type {};
+        template <typename K, typename V, typename H, typename E, typename A>
+        struct is_map<std::unordered_map<K, V, H, E, A>> : std::true_type {};
+
+        template <typename T> struct is_unique : std::false_type {};
+        template <typename P>
+            requires(!std::is_array_v<P>)
+        struct is_unique<std::unique_ptr<P, std::default_delete<P>>> : std::true_type {};
+
+        template <typename T> struct is_opt : std::false_type {};
+        template <typename U> struct is_opt<std::optional<U>> : std::true_type {};
 
         template <typename T> struct is_shared : std::false_type {};
         template <typename U> struct is_shared<std::shared_ptr<U>> : std::true_type {};
@@ -1204,6 +1278,20 @@ endif()
                 fill_callback_sig<U>(g);
             } else if constexpr (is_vec<U>::value) {
                 g.kind = "vector";
+                g.element.push_back(type_descriptor<typename U::value_type>());
+            } else if constexpr (is_map<U>::value) {
+                // kind stays "unknown" (see GenType::is_map): only a backend
+                // that opts in marshals it, as a dict / plain object.
+                g.is_map = true;
+                g.element.push_back(type_descriptor<typename U::key_type>());
+                g.element.push_back(type_descriptor<typename U::mapped_type>());
+            } else if constexpr (is_unique<U>::value) {
+                // kind stays "unknown" (see GenType::is_unique_ptr): only a
+                // by-value return crosses, on a backend that opts in.
+                g.is_unique_ptr = true;
+                g.element.push_back(type_descriptor<typename U::element_type>());
+            } else if constexpr (is_opt<U>::value) {
+                g.is_optional = true;
                 g.element.push_back(type_descriptor<typename U::value_type>());
             } else if constexpr (rosetta::is_sequence<U>::value) {
                 // Trait-registered foreign container: `kind` stays "unknown"
@@ -1438,6 +1526,7 @@ endif()
         template <typename Sig> struct fn_sig_of;
         template <typename R, typename... A> struct fn_sig_of<R(A...)> {
             static GenType               ret() { return type_descriptor<std::remove_cvref_t<R>>(); }
+            static constexpr bool        ret_is_ref = std::is_lvalue_reference_v<R>;
             static std::vector<GenParam> params() { return params_from_types<A...>(); }
         };
 
@@ -2920,6 +3009,7 @@ namespace rosetta {
         gf.header    = header;
         gf.ret       = gen_detail::type_descriptor<
             std::remove_cvref_t<typename[:std::meta::return_type_of(F):]>>();
+        gf.ret_is_ref = std::is_lvalue_reference_v<typename[:std::meta::return_type_of(F):]>;
         gf.params = gen_detail::params_of<F>();
         gf.doc    = doc;
         return gf;
@@ -2944,6 +3034,7 @@ namespace rosetta {
         }
         gf.header  = header;
         gf.ret     = gen_detail::fn_sig_of<Sig>::ret();
+        gf.ret_is_ref = gen_detail::fn_sig_of<Sig>::ret_is_ref;
         gf.params  = gen_detail::fn_sig_of<Sig>::params();
         gf.doc     = doc;
         gf.sig_cpp = sig_cpp;
@@ -3077,6 +3168,11 @@ namespace rosetta {
             m.name          = ext.fn.name;
             m.doc           = ext.fn.doc;
             m.ret           = ext.fn.ret;
+            // Carried over for a unique_ptr return only, which is gated on it.
+            // Every other extension keeps the ret_is_ref it always had (false):
+            // the python family reads the flag to pick a return policy, so a
+            // wider change would alter what existing fluent extensions return.
+            m.ret_is_ref    = ext.fn.ret.is_unique_ptr && ext.fn.ret_is_ref;
             m.params        = {ext.fn.params.begin() + 1, ext.fn.params.end()};
             m.is_extension  = true;
             m.ext_qualified = ext.fn.qualified;

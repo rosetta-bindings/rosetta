@@ -37,7 +37,10 @@ struct CovThing {
     int    value = 0;
     int    get() const { return value; }
     int    get(int scale) const { return value * scale; }   // dropped by name-keyed targets
-    void   listen(std::function<void(int)> cb) { cb(value); } // no N-API/embind conversion
+    void   listen(std::function<void(int)> cb) { cb(value); } // node wraps the JS function
+    // A callback handed a bound CLASS: node refuses, since its to_napi wraps by
+    // copy and the JS side would see a fresh object, not the one being visited.
+    void   visit(std::function<void(CovThing &)> cb) { cb(*this); }
     void   take(CovNoCopy c) { value = c.x; }                 // pybind cannot copy the argument
     bool   operator==(const CovThing &o) const { return value == o.value; } // no bindable name
 };
@@ -135,14 +138,24 @@ TEST(Coverage, BoundMembersAreRecordedNotJustSkips) {
 }
 
 TEST(Coverage, AnUnmarshalableSignatureIsSkippedWithAReason) {
-    // std::function has no N-API conversion; the report must say so rather than
-    // leave the method's absence to be noticed.
+    // A callback whose signature names a bound class has no N-API conversion;
+    // the report must say so rather than leave the method's absence to be
+    // noticed.
     const json node = class_node(report_for("node"), "node", "CovThing");
     ASSERT_FALSE(node.is_null());
-    const json skip = find_skip(node, "listen");
+    const json skip = find_skip(node, "visit");
     ASSERT_FALSE(skip.is_null()) << "the skipped callback method is missing from the report";
     EXPECT_EQ(skip.at("reason"), "unmarshalable_signature");
     EXPECT_FALSE(std::string(skip.at("detail")).empty()) << "a reason slug needs a human sentence";
+}
+
+TEST(Coverage, NodeBindsACallbackOfPlainValues) {
+    // `listen` used to be the skip example above, until node learned to wrap a
+    // JS function into a std::function whose signature is all plain values.
+    const json node = class_node(report_for("node"), "node", "CovThing");
+    ASSERT_FALSE(node.is_null());
+    EXPECT_TRUE(lists_member(node.at("bound"), "listen"));
+    EXPECT_TRUE(find_skip(node, "listen").is_null());
 }
 
 TEST(Coverage, PythonSkipReasonNamesTheOffendingType) {

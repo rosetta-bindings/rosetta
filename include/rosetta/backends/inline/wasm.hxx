@@ -133,6 +133,82 @@ namespace emscripten {
 }
 )VEC";
 
+        // Emitted verbatim into auto_emscripten.cpp, after WASMX_VECTOR_HELPER.
+        //
+        // std::map / std::unordered_map on the emval wire as a PLAIN OBJECT —
+        // register_map, embind's own answer, is an opaque handle class with
+        // get/set/keys, the same gratuitous difference the vector helper
+        // removes. A number or enum key is written through its number, which
+        // JS stores under that number's canonical string, and read back
+        // through Number(key). An enum VALUE stays an embind enum object, as it
+        // is everywhere else in this module.
+        //
+        // std::optional needs no helper: <emscripten/val.h> ships its
+        // BindingType (value or undefined), and register_optional<T>() — one
+        // per optional type, emitted into EMSCRIPTEN_BINDINGS — is the other
+        // half. On the way in only `undefined` reads as empty; that is
+        // embind's rule, not ours.
+        constexpr std::string_view WASMX_MAP_HELPER =
+            R"MAP(
+namespace rosetta_wx {
+    template <typename K> emscripten::val map_key_to_val(const K &k) {
+        if constexpr (std::is_enum_v<K>) {
+            return emscripten::val(static_cast<std::underlying_type_t<K>>(k));
+        } else {
+            return emscripten::val(k);
+        }
+    }
+    template <typename K> K map_key_from_val(const emscripten::val &k) {
+        if constexpr (std::is_same_v<K, std::string>) {
+            return k.as<std::string>();
+        } else if constexpr (std::is_enum_v<K>) {
+            return static_cast<K>(
+                emscripten::val::global("Number")(k).as<std::underlying_type_t<K>>());
+        } else {
+            return emscripten::val::global("Number")(k).as<K>();
+        }
+    }
+    template <typename M> emscripten::val map_to_val(const M &m) {
+        emscripten::val o = emscripten::val::object();
+        for (const auto &[k, x] : m) {
+            o.set(map_key_to_val(k), emscripten::val(x));
+        }
+        return o;
+    }
+    template <typename M> M map_from_val(const emscripten::val &o) {
+        using K = typename M::key_type;
+        using V = typename M::mapped_type;
+        const emscripten::val keys = emscripten::val::global("Object").call<emscripten::val>("keys", o);
+        const unsigned        n    = keys["length"].as<unsigned>();
+        M out;
+        for (unsigned i = 0; i < n; ++i) {
+            const emscripten::val k = keys[i];
+            out.emplace(map_key_from_val<K>(k), o[k].as<V>());
+        }
+        return out;
+    }
+}
+namespace emscripten {
+    namespace internal {
+        template <typename M> struct MapValBinding {
+            using ValBinding = BindingType<val>;
+            using WireType   = ValBinding::WireType;
+            static WireType toWireType(const M &m, rvp::default_tag) {
+                return ValBinding::toWireType(rosetta_wx::map_to_val(m), rvp::default_tag{});
+            }
+            static M fromWireType(WireType w) {
+                return rosetta_wx::map_from_val<M>(val::take_ownership(w));
+            }
+        };
+        template <typename K, typename V, typename C, typename A>
+        struct BindingType<std::map<K, V, C, A>> : MapValBinding<std::map<K, V, C, A>> {};
+        template <typename K, typename V, typename H, typename E, typename A>
+        struct BindingType<std::unordered_map<K, V, H, E, A>>
+            : MapValBinding<std::unordered_map<K, V, H, E, A>> {};
+    }
+}
+)MAP";
+
         // Emitted verbatim into auto_emscripten.cpp: converts an emscripten::val
         // to/from C++ and wraps a JS function into a std::function of any
         // val-convertible signature. `to_val`/`from_val` handle scalars, strings,
@@ -250,6 +326,16 @@ namespace rosetta_wx {
             if (t.is_pointer) {
                 return wx_is_bound(t, c);
             }
+            // std::map (plain object, WASMX_MAP_HELPER) and std::optional
+            // (embind's own value-or-undefined): every element must itself be
+            // marshalable, and a class inside one is copied in and out.
+            if (t.is_map || t.is_optional) {
+                return std_wrapper_ok(t) &&
+                       std::all_of(t.element.begin(), t.element.end(), [&](const GenType &e) {
+                           return !e.is_shared_ptr && wx_marshalable(e, c) &&
+                                  (e.kind != "object" || e.copy_constructible);
+                       });
+            }
             if (t.kind == "unknown") {
                 return false;
             }
@@ -303,6 +389,13 @@ namespace rosetta_wx {
             if (t.kind == "vector") {
                 return !t.element.empty() && !t.element.front().is_pointer &&
                        wx_val_convertible(t.element.front(), c);
+            }
+            if (t.is_map || t.is_optional) {
+                // val(x) / v.as<T>() reach the same BindingTypes.
+                return std_wrapper_ok(t) &&
+                       std::all_of(t.element.begin(), t.element.end(), [&](const GenType &e) {
+                           return wx_val_convertible(e, c);
+                       });
             }
             if (t.kind == "object") {
                 // display_string_of drops the std:: prefix (see qualify_std), so a
@@ -500,7 +593,11 @@ namespace rosetta_wx {
             if (m.is_overloaded && !sig_spellable(m)) {
                 return false;
             }
-            if (m.ret.kind != "void" && !wx_marshalable(m.ret, c)) {
+            // A factory's by-value std::unique_ptr<T>: embind's own
+            // GenericBindingType releases it into a JS handle that owns the
+            // object (freed by .delete()), exactly like a `new`ed instance.
+            const bool unique_ret = unique_return_ok(m.ret, m.ret_is_ref, c);
+            if (!unique_ret && m.ret.kind != "void" && !wx_marshalable(m.ret, c)) {
                 return false;
             }
             // embind's toWireType COPIES a class return (also for an lvalue-ref
@@ -626,21 +723,53 @@ namespace rosetta_wx {
                 }
                 wx_collect_vectors(t.element.front(), out); // vector<vector<...>>
             }
+            if (t.is_map || t.is_optional) {
+                for (const auto &e : t.element) {
+                    wx_collect_vectors(e, out); // map<string, vector<double>>
+                }
+            }
         }
 
-        inline std::vector<GenType> wx_all_vectors(const GenContext &c) {
-            std::vector<GenType> out;
+        // The distinct std::map / std::optional types reachable from one type,
+        // each needing its own registration (register_type for a map,
+        // register_optional for an optional). Keyed by exact spelling: the
+        // comparator and allocator are part of the type id embind checks.
+        inline void wx_collect_wrappers(const GenType &t, std::vector<GenType> &out) {
+            if (t.is_callback) {
+                for (const auto &s : t.callback_sig) {
+                    wx_collect_wrappers(s, out);
+                }
+                return;
+            }
+            if (t.is_map || t.is_optional) {
+                const std::string key  = qualify_std(t.spelling);
+                bool              seen = false;
+                for (const auto &w : out) {
+                    seen = seen || qualify_std(w.spelling) == key;
+                }
+                if (!seen) {
+                    out.push_back(t);
+                }
+            }
+            for (const auto &e : t.element) {
+                wx_collect_wrappers(e, out);
+            }
+        }
+
+        // Every type on the bound surface, handed to `visit` (fields, methods
+        // that bind, constructors whose parameters all bind, free functions).
+        template <typename F> inline void wx_surface_types(const GenContext &c, F &&visit) {
             for (const auto &k : c.classes) {
                 for (const auto &f : k.fields) {
-                    wx_collect_vectors(f.type, out);
+                    visit(f.type);
                 }
                 for (const auto &m : k.methods) {
                     if (!wx_method_ok(m, c) && !wx_seq_eligible(m, c)) {
                         continue;
                     }
-                    wx_collect_vectors(m.ret, out);
+                    visit(m.ret);
                     for (const auto &p : m.params) {
-                        wx_collect_vectors(p.type, out);
+                        visit(p.type);
                     }
                 }
                 for (const auto &params : k.ctors) {
@@ -652,16 +781,30 @@ namespace rosetta_wx {
                         continue;
                     }
                     for (const auto &p : params) {
-                        wx_collect_vectors(p.type, out);
+                        visit(p.type);
                     }
                 }
             }
             for (const auto &f : c.functions) {
-                wx_collect_vectors(f.ret, out);
+                visit(f.ret);
                 for (const auto &p : f.params) {
-                    wx_collect_vectors(p.type, out);
+                    visit(p.type);
                 }
             }
+        }
+
+        inline std::vector<GenType> wx_all_vectors(const GenContext &c) {
+            std::vector<GenType> out;
+            wx_surface_types(c, [&](const GenType &t) { wx_collect_vectors(t, out); });
+            return out;
+        }
+
+        inline std::vector<GenType> wx_all_wrappers(const GenContext &c) {
+            std::vector<GenType> out;
+            wx_surface_types(c, [&](const GenType &t) { wx_collect_wrappers(t, out); });
+            // Fields are walked whether or not they bind; a wrapper that cannot
+            // marshal (map<Item *, int>) gets no registration either.
+            std::erase_if(out, [&](const GenType &w) { return !wx_marshalable(w, c); });
             return out;
         }
 
@@ -669,6 +812,11 @@ namespace rosetta_wx {
         inline std::string wx_ts_name(const GenType &t) {
             if (t.kind == "vector" && !t.element.empty()) {
                 return "Array<" + wx_ts_name(t.element.front()) + ">";
+            }
+            if (t.is_map && t.element.size() == 2) {
+                return "Record<" +
+                       std::string(t.element[0].kind == "string" ? "string" : "number") + ", " +
+                       wx_ts_name(t.element[1]) + ">";
             }
             if (t.kind == "number") {
                 return "number";
@@ -1034,12 +1182,26 @@ namespace rosetta_wx {
                 body += "    emscripten::register_type<" + wx_cpp_type(vt) + ">(\"" +
                         wx_vector_name(vt) + "\");\n";
             }
+            for (const auto &w : wx_all_wrappers(c)) {
+                // A map: an emval passthrough, like the vectors above (see
+                // WASMX_MAP_HELPER). An optional: embind's own registration,
+                // keyed on the value type.
+                if (w.is_map) {
+                    body += "    emscripten::register_type<" + qualify_std(w.spelling) + ">(\"" +
+                            wx_ts_name(w) + "\");\n";
+                } else {
+                    body += "    emscripten::register_optional<" +
+                            qualify_std(w.element.front().spelling) + ">();\n";
+                }
+            }
             for (const auto &k : c.classes) {
                 body += wx_class(k, c);
             }
             for (const auto &f : c.functions) {
                 GenMethod probe;
                 probe.ret    = f.ret;
+                // Only the unique_ptr gate reads it here (see GenFunction::ret_is_ref).
+                probe.ret_is_ref = f.ret.is_unique_ptr && f.ret_is_ref;
                 probe.params = f.params;
                 if (seq_touches(probe)) {
                     if (wx_seq_eligible(probe, c)) {
@@ -1056,7 +1218,7 @@ namespace rosetta_wx {
                     }
                     continue;
                 }
-                bool ok = (f.ret.kind == "void" ||
+                bool ok = (f.ret.kind == "void" || unique_return_ok(f.ret, f.ret_is_ref, c) ||
                            (wx_marshalable(f.ret, c) &&
                             (f.ret.kind != "object" || f.ret.copy_constructible)));
                 bool raw_ptr = wx_type_has_raw_ptr(f.ret);
@@ -1086,10 +1248,13 @@ namespace rosetta_wx {
             out += "#include <array>\n";
             out += "#include <filesystem>\n";
             out += "#include <functional>\n";
+            out += "#include <map>\n";
             out += "#include <memory>\n";
+            out += "#include <optional>\n";
             out += "#include <stdexcept>\n";
             out += "#include <string>\n";
             out += "#include <type_traits>\n";
+            out += "#include <unordered_map>\n";
             out += "#include <vector>\n";
             // pybind-free: just the user's (stock) headers below.
             auto add = [&](const std::string &h) { append_include(out, h); };
@@ -1110,6 +1275,7 @@ namespace rosetta_wx {
             }
             out += using_namespaces_of(c); // `using namespace` for namespaced user types
             out += WASMX_VECTOR_HELPER;    // std::vector<T> <-> JS Array on the emval wire
+            out += WASMX_MAP_HELPER;       // std::map / unordered_map <-> plain JS object
             out += WASMX_CALLBACK_HELPER;  // rosetta_wx::make_fn / to_val / from_val
             out += "\nEMSCRIPTEN_BINDINGS(" + c.lib + ") {\n";
             out += init_block(c);

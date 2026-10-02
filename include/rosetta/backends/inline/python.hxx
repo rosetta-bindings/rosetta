@@ -533,18 +533,32 @@ script once per interpreter.)MD";
             if (!worth) {
                 return {};
             }
-            std::vector<bool> with_default(kept.size(), false);
+            // An empty std::optional default (`= std::nullopt`, `= {}`) is the
+            // one non-scalar default with a Python spelling of its own: None,
+            // which the optional caster turns back into nullopt.
+            auto none_default = [](const GenParam &p) {
+                const std::string &d = p.default_text;
+                return p.type.is_optional &&
+                       (d == "std::nullopt" || d == "nullopt" || d == "{}");
+            };
+            std::vector<std::string> defaults(kept.size());
             for (std::size_t i = kept.size(); i-- > 0;) {
-                if (kept[i]->default_text.empty() || !px_default_ok(kept[i]->type, c)) {
+                if (kept[i]->default_text.empty()) {
                     break;
                 }
-                with_default[i] = true;
+                if (none_default(*kept[i])) {
+                    defaults[i] = std::string(ns) + "::none()";
+                } else if (px_default_ok(kept[i]->type, c)) {
+                    defaults[i] = kept[i]->default_text;
+                } else {
+                    break;
+                }
             }
             std::string out;
             for (std::size_t i = 0; i < kept.size(); ++i) {
                 out += ", " + std::string(ns) + "::arg(\"" + kept[i]->name + "\")";
-                if (with_default[i]) {
-                    out += " = " + kept[i]->default_text;
+                if (!defaults[i].empty()) {
+                    out += " = " + defaults[i];
                 }
             }
             return out;
@@ -565,7 +579,8 @@ script once per interpreter.)MD";
                 "unordered_map","unordered_set","map",     "multimap",    "set",
                 "multiset",     "pair",        "tuple",    "array",       "list",
                 "deque",        "optional",    "variant",  "hash",        "less",
-                "equal_to",     "size_t",      "ptrdiff_t","initializer_list"};
+                "equal_to",     "size_t",      "ptrdiff_t","initializer_list",
+                "default_delete"};
             auto ident_char = [](char ch) {
                 return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
                        (ch >= '0' && ch <= '9') || ch == '_';
@@ -774,6 +789,10 @@ script once per interpreter.)MD";
             if (t.kind == "object") {
                 return t.copy_constructible && t.copy_assignable;
             }
+            if (t.is_map || t.is_optional) {
+                return std::all_of(t.element.begin(), t.element.end(),
+                                   [](const GenType &e) { return px_copyable(e); });
+            }
             if (t.kind == "vector") {
                 return t.element.empty() || px_copyable(t.element.front());
             }
@@ -803,6 +822,18 @@ script once per interpreter.)MD";
                 // and no copy. Nothing else to check here: the caster, not
                 // pybind's generic machinery, decides what the boundary costs.
                 return px_interop_caster(t.interop);
+            }
+            if (t.is_map || t.is_optional) {
+                // <pybind11/stl.h> (and nanobind's stl/map.h, stl/optional.h)
+                // convert a map to a dict and an optional to None-or-value, by
+                // COPY in both directions — so every element must be
+                // marshalable and copyable, and a map key must be something a
+                // dict can hash (shared rule: map_key_ok).
+                return std_wrapper_ok(t) && std::all_of(t.element.begin(), t.element.end(),
+                                                        [&](const GenType &e) {
+                                                            return px_marshalable(e, c) &&
+                                                                   px_copyable(e);
+                                                        });
             }
             if (t.kind == "unknown" && !is_adapted(t)) {
                 // A raw C array (Matrix33::data() -> double[3][3]&) or another
@@ -856,6 +887,18 @@ script once per interpreter.)MD";
             if (m.is_overloaded && !sig_spellable(m)) {
                 return false;
             }
+            // A factory's std::unique_ptr<T>: Python takes ownership (see
+            // px_unique_shared for the one holder that needs a conversion).
+            if (unique_return_ok(m.ret, m.ret_is_ref, c)) {
+                for (const auto &p : m.params) {
+                    if (!px_marshalable(p.type, c) ||
+                        (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) ||
+                        (p.type.kind == "vector" && !px_copyable(p.type))) {
+                        return false;
+                    }
+                }
+                return true;
+            }
             if (!px_marshalable(m.ret, c)) {
                 return false;
             }
@@ -893,6 +936,12 @@ script once per interpreter.)MD";
         // a reason that drifts out of step with the decision is worse than no
         // reason, so the two are meant to be read (and edited) side by side.
         inline std::string px_skip_reason(const GenMethod &m, const GenContext &c) {
+            if (m.ret.is_unique_ptr && !unique_return_ok(m.ret, m.ret_is_ref, c)) {
+                return m.ret_is_ref ? "returns a reference to a std::unique_ptr, which hands "
+                                      "over no ownership"
+                                    : "returns a std::unique_ptr to a class this module does "
+                                      "not bind";
+            }
             if (!px_marshalable(m.ret, c)) {
                 return "no pybind11 type-caster for the return type '" +
                        (m.ret_cpp.empty() ? m.ret.spelling : m.ret_cpp) + "'";
@@ -1350,6 +1399,55 @@ script once per interpreter.)MD";
             return "static_cast<" + fp + ">(" + mp + ")";
         }
 
+        // Does this unique_ptr return need converting to std::shared_ptr? Only
+        // when its pointee is registered with a shared_ptr HOLDER (it also
+        // travels as a shared_ptr somewhere — see shared_pointees): pybind11
+        // casts a unique_ptr return only into the default holder, and into a
+        // shared one it does not refuse — the module CRASHES on the call. The
+        // conversion is a move, so the object is not copied either way.
+        inline bool px_unique_shared(const GenType &ret, const GenContext &c) {
+            if (!ret.is_unique_ptr) {
+                return false;
+            }
+            const auto need = shared_pointees(c);
+            return std::find(need.begin(), need.end(), unique_pointee(ret).object_qualified) !=
+                   need.end();
+        }
+
+        // `[](decls) { return std::shared_ptr<T>(call); }` — the converting
+        // wrapper px_unique_shared asks for. `receiver` is the class for an
+        // instance or extension method ("" for statics and free functions).
+        inline std::string px_unique_shared_lambda(const GenType &ret, const std::string &receiver,
+                                                   bool is_const,
+                                                   const std::vector<GenParam>   &params,
+                                                   const std::vector<std::string> &param_cpp,
+                                                   const std::string             &callee,
+                                                   bool                           ext_self) {
+            std::vector<std::string> decls, args;
+            if (!receiver.empty()) {
+                decls.push_back(std::string(is_const ? "const " : "") + receiver + " &self");
+            }
+            const bool exact = param_cpp.size() == params.size();
+            for (std::size_t j = 0; j < params.size(); ++j) {
+                const std::string an = "arg" + std::to_string(j);
+                const GenType    &t  = params[j].type;
+                if (exact) {
+                    decls.push_back(qualify_objects(qualify_std(param_cpp[j]), t) + " " + an);
+                } else if (t.kind == "object") {
+                    decls.push_back(px_cpp_type(t) + " &" + an);
+                } else {
+                    decls.push_back(px_cpp_type(t) + " " + an);
+                }
+                args.push_back(an);
+            }
+            const std::string a = join(args, ", ");
+            const std::string call =
+                ext_self ? callee + "(self" + (a.empty() ? "" : ", " + a) + ")"
+                         : callee + "(" + a + ")";
+            return "[](" + join(decls, ", ") + ") { return std::shared_ptr<" +
+                   unique_pointee(ret).object_qualified + ">(" + call + "); }";
+        }
+
         inline std::string expanded_method(const GenClass &k, const GenMethod &m,
                                            const GenContext &c) {
             const std::string dq = doc_arg(px_method_doc(m));
@@ -1363,6 +1461,20 @@ script once per interpreter.)MD";
                     ? (m.is_static ? ", py::return_value_policy::reference"
                                    : ", py::return_value_policy::reference_internal")
                     : "";
+            if (px_unique_shared(m.ret, c)) {
+                const std::string kq = qualified_of(k);
+                const std::string fn =
+                    m.is_extension
+                        ? px_unique_shared_lambda(m.ret, kq, false, m.params, {}, m.ext_qualified,
+                                                  true)
+                    : m.is_static
+                        ? px_unique_shared_lambda(m.ret, "", false, m.params, m.param_cpp,
+                                                  kq + "::" + m.name, false)
+                        : px_unique_shared_lambda(m.ret, kq, m.is_const, m.params, m.param_cpp,
+                                                  "self." + m.name, false);
+                return std::string("    c.") + (m.is_static ? "def_static" : "def") + "(\"" +
+                       m.name + "\", " + fn + ka + dq + aq + ");\n";
+            }
             if (m.is_extension) {
                 return "    c.def(\"" + m.name + "\", &" + m.ext_qualified + policy + ka + dq +
                        aq + ");\n";
@@ -1613,6 +1725,8 @@ script once per interpreter.)MD";
             for (const auto &f : c.functions) {
                 GenMethod probe; // free functions go through the same gates
                 probe.ret    = f.ret;
+                // Only the unique_ptr gate reads it here (see GenFunction::ret_is_ref).
+                probe.ret_is_ref = f.ret.is_unique_ptr && f.ret_is_ref;
                 probe.params = f.params;
                 if (px_touches(probe)) {
                     if (seq_adaptable(probe) && px_seq_rest_ok(probe, c)) {
@@ -1646,7 +1760,12 @@ script once per interpreter.)MD";
                                                  "signature");
                     continue;
                 }
-                body += "    m.def(\"" + f.name + "\", " + fn_addr(f) + doc_arg(px_method_doc(f)) +
+                const std::string fa =
+                    px_unique_shared(f.ret, c)
+                        ? px_unique_shared_lambda(f.ret, "", false, f.params, {},
+                                                  fn_call_expr(f), false)
+                        : fn_addr(f);
+                body += "    m.def(\"" + f.name + "\", " + fa + doc_arg(px_method_doc(f)) +
                         px_arg_list(f.params, "py", c) + ");\n";
                 coverage::note_bound_function("python", f);
             }

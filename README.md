@@ -65,6 +65,8 @@ Everything below is discovered by **reflection** from your unmodified headers �
 - **Enums** — `enum` / `enum class`, with enumerators surfaced as named constants.
 - **Free (non-member) functions** — declared in the [manifest](./docs/MANIFEST.md), no edit to your headers ([details](docs/FREE_FUNCTIONS.md)).
 - **Nested user types & `std::vector`** — `Surface` returning `Point`/`Triangle`, vector members, etc. are marshalled across the language boundary.
+- **Factories returning `std::unique_ptr<T>`** — the script-side object takes ownership (python, nanobind, node, wasm, lua). A `unique_ptr` parameter, field or reference is not bound.
+- **`std::map` / `std::unordered_map` / `std::optional`** — a `dict` / `None`-or-value in Python, a plain object / value-or-`undefined` in Node and WebAssembly, a table / `nil`-or-value in Lua, `Record<K, V>` / `T | undefined` in TypeScript. Other targets skip such members for now (reported in the [coverage report](docs/COVERAGE.md)).
 - **Parameter names & default arguments** — read from the declaration, so a binding offers `mesh.remesh(edge_length=0.5)` rather than `remesh(arg0)`, and a C++ default reaches the host language as one ([details](docs/MANIFEST.md#doc-comments-doc_comments)).
 - **The documentation your library already has** — `///` and `/** @param … @return … */` blocks are read out of the headers and become Python docstrings, TSDoc, Javadoc, C# XML docs and OpenAPI descriptions. Nothing to write, nothing to annotate; turn it off with `"doc_comments": false`.
 - Members a backend can't marshal (e.g. `std::function` params) are **skipped**, not fatal.

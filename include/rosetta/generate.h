@@ -25,6 +25,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <any>
 #include <cstdio>
 #include <experimental/meta>
@@ -34,6 +35,7 @@
 #include <initializer_list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <rosetta/annotations.h>
 #include <rosetta/interop.h>
 #include <rosetta/matrix.h>
@@ -41,6 +43,7 @@
 #include <rosetta/walk.h>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -174,7 +177,7 @@ namespace rosetta {
         // it against the bound-class list use this instead. Empty only when
         // `object` is empty.
         std::string          object_qualified;
-        std::vector<GenType> element; // 0 or 1 entry, the element when "vector"
+        std::vector<GenType> element; // the element when "vector" (1 entry); key, value for is_map
         bool                 integer = false; // kind == "number" and integral (vs floating)
         std::string          spelling; // prettified C++ type spelling (for human docs)
         std::vector<GenEnumerator> enumerators; // populated when kind == "enum"
@@ -234,6 +237,29 @@ namespace rosetta {
         // the only access the registration promises.
         bool        is_matrix = false;
         std::string mat_cpp;
+
+        // True when the (cvref-stripped) type is a std::map / std::unordered_map
+        // (is_map) or a std::optional (is_optional). Like is_sequence, `kind`
+        // stays "unknown", so a backend that does not opt in keeps skipping the
+        // member: until these flags existed both fell into the class branch as
+        // "object", which the backends then read as a bound class (node took a
+        // std::map parameter by unwrapping it as a wrapped object). A backend
+        // that opts in marshals the value by COPY, recursing into `element`:
+        // {key, value} for a map, {value} for an optional.
+        bool is_map      = false;
+        bool is_optional = false;
+
+        // True when the (cvref-stripped) type is a std::unique_ptr<T> with the
+        // default deleter, T not an array. `kind` stays "unknown" and `element`
+        // holds the pointee, like is_map. It used to be described as a class
+        // named "unique_ptr<T, default_delete<T>>", which pybind and node then
+        // bound for a `const unique_ptr<T>&` PARAMETER — pybind throwing on
+        // every call, node reinterpreting the JS wrapper as a unique_ptr. Only
+        // a BY-VALUE RETURN crosses (a factory handing over ownership); a
+        // backend opts in for exactly that and the host object becomes the
+        // owner. Parameters, fields and references to a unique_ptr stay out:
+        // the script side would have to give up an object it still holds.
+        bool is_unique_ptr = false;
 
         // Non-empty when the type belongs to a foreign library the manifest
         // opted into ("interop": ["eigen"] — see rosetta/interop.h); holds that
@@ -468,6 +494,12 @@ namespace rosetta {
         std::vector<GenParam> params;
         std::string           doc;     // from the manifest, or harvested from the header
         std::string           returns; // harvested `@return` text — see GenMethod::returns
+
+        // True when the function returns an lvalue reference (see
+        // GenMethod::ret_is_ref). Read by the unique_ptr gate, which binds only
+        // a by-value return: a `std::unique_ptr<T>&` is ownership the caller
+        // does not get.
+        bool ret_is_ref = false;
 
         // Non-empty when the manifest picked ONE overload of an overloaded free
         // function by spelling its signature ("signature": "void(Mesh&, bool)").

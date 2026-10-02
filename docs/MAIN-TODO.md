@@ -16,7 +16,7 @@ No threading story at all. Zero hits for gil_scoped_release, call_guard, or Thre
 
 Callbacks are a 3-of-27 feature. is_callback is honored only in lua_expanded, python_expanded, wasm_expanded. Node, Julia, C#, Java skip any method taking a std::function — so "register a progress handler" doesn't exist there.
 
-Reference/ownership semantics are half-built. MAIN-TODOs #2 is accurate: node's Wrap<T> stores by value so borrowed sub-object handles can't be represented, wasm returns raw pointers with no parent pin (dangling handle if the owner dies first), and there's no dangling policy stated anywhere. unique_ptr returns aren't handled at all.
+Reference/ownership semantics are half-built. MAIN-TODOs #2 is accurate: node's Wrap<T> stores by value so borrowed sub-object handles can't be represented, wasm returns raw pointers with no parent pin (dangling handle if the owner dies first), and there's no dangling policy stated anywhere. ~~unique_ptr returns aren't handled at all.~~ **Fixed** for by-value factory returns on python, nanobind, node, wasm and lua (`tests/unique_ptr.cpp`); unique_ptr parameters (ownership handed *to* C++) remain unbound.
 
 # 3. The structural limit: 27 × N
 
@@ -33,7 +33,7 @@ Validation is the weakest link relative to the claim. 18 test files, macOS-only,
 If I had to pick three
 
 1. Overload support + a machine-readable coverage report — kills the largest silent-failure class, and the report is cheap.
-2. std::optional / std::map in type_descriptor — the most common reason a real API's methods disappear today.
+2. ~~std::optional / std::map in type_descriptor~~ **Started.** Flagged in the IR (`is_map` / `is_optional`) and bound by python, nanobind, node, wasm, lua and typescript (`tests/std_wrappers.cpp`); the other backends still skip them. `variant` / `tuple` / `pair` remain.
 3. A generated-module smoke test in CI on Linux — one backend, one example, import and call. It defends the core claim.
 
 Threading/GIL is fourth only because it's expensive; it's the one that will hurt most once someone binds a library that actually computes.

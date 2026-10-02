@@ -46,6 +46,17 @@ namespace rosetta {
         } else if constexpr (std::is_enum_v<U>) {
             return Napi::Number::New(
                 env, static_cast<double>(static_cast<std::underlying_type_t<U>>(v)));
+        } else if constexpr (is_std_map<U>::value) {
+            // A plain object, as JSON would have it. A number / enum key is set
+            // through its JS number, which JS stores under that number's
+            // canonical string — the same string from_napi reads back.
+            Napi::Object obj = Napi::Object::New(env);
+            for (const auto &[k, x] : v) {
+                obj.Set(to_napi(env, k), to_napi(env, x));
+            }
+            return obj;
+        } else if constexpr (is_std_optional<U>::value) {
+            return v ? to_napi(env, *v) : env.Undefined();
         } else if constexpr (is_std_tuple<U>::value) {
             // The shape an out-parameter adapter returns: the return value (when
             // there is one) followed by the out-parameters. JS has no tuple, so
@@ -59,6 +70,19 @@ namespace rosetta {
                 },
                 v);
             return arr;
+        } else if constexpr (is_unique_ptr<U>::value) {
+            // A factory's by-value return, and the ONLY way a unique_ptr gets
+            // here: the backend binds no unique_ptr parameter, field, reference
+            // return or container element (nx_unique_ret_ok). So `v` is the
+            // call helper's own result object, about to be destroyed, and
+            // moving out of it is safe — which is what lets the JS object own
+            // the pointee through the shared_ptr adopt path below, with no copy.
+            if (!v) {
+                return env.Null();
+            }
+            using P      = typename U::element_type;
+            auto *holder = new std::shared_ptr<P>(std::move(const_cast<U &>(v)));
+            return ctor_ref<P>().New({Napi::External<void>::New(env, holder)});
         } else if constexpr (is_shared_ptr<U>::value) {
             // Hand the OWNERSHIP across, not a copy: the JS object adopts the
             // shared_ptr and keeps the C++ object alive for as long as it lives.
@@ -99,6 +123,29 @@ namespace rosetta {
         } else if constexpr (std::is_enum_v<T>) {
             return static_cast<T>(
                 static_cast<std::underlying_type_t<T>>(v.As<Napi::Number>().Int64Value()));
+        } else if constexpr (is_std_map<T>::value) {
+            using K           = typename T::key_type;
+            using V           = typename T::mapped_type;
+            Napi::Object obj  = v.As<Napi::Object>();
+            Napi::Array  keys = obj.GetPropertyNames();
+            T            out;
+            for (uint32_t i = 0; i < keys.Length(); ++i) {
+                const Napi::Value key = keys.Get(i);
+                // Property names are strings; a numeric key is parsed back
+                // through JS's own ToNumber.
+                if constexpr (std::is_same_v<K, std::string>) {
+                    out.emplace(key.As<Napi::String>().Utf8Value(), from_napi<V>(obj.Get(key)));
+                } else {
+                    out.emplace(from_napi<K>(key.ToNumber()), from_napi<V>(obj.Get(key)));
+                }
+            }
+            return out;
+        } else if constexpr (is_std_optional<T>::value) {
+            // undefined and null both read as "no value".
+            if (v.IsUndefined() || v.IsNull()) {
+                return T{};
+            }
+            return T{from_napi<typename T::value_type>(v)};
         } else if constexpr (is_std_function<T>::value) {
             // Must precede the generic class branch: a std::function IS a class,
             // and unwrapping a JS function as a bound object would reinterpret

@@ -148,11 +148,59 @@ local {{LIB}} = require("{{LIB}}")
             return false;
         }
 
+        // A container sol2 hands out as userdata and will not build from a
+        // plain Lua table on its own: a vector or a map.
+        inline bool lx_tableish(const GenType &t) {
+            return t.kind == "vector" || t.is_map;
+        }
+
+        // Does a std::map appear anywhere in this type? sol2 v3.5.0 cannot PUSH
+        // a map as container userdata — usertype_container's associative
+        // `next` calls a member its iterator does not have, a compile error
+        // inside sol2 — so a map only ever leaves C++ as a plain table
+        // (sol::as_nested), and only from where the emitted code can wrap it:
+        // a return or a field getter. Inside a vector, or as a callback
+        // argument, sol2 would push it itself, so those stay out.
+        inline bool lx_has_map(const GenType &t) {
+            return t.is_map || std::any_of(t.element.begin(), t.element.end(),
+                                           [](const GenType &e) { return lx_has_map(e); });
+        }
+
+        inline bool lx_marshalable(const GenType &t, const GenContext &c);
+        inline bool lx_copyable(const GenType &t);
+
+        // std::map / std::unordered_map: a plain Lua table both ways — out
+        // through sol::as_nested (never as container userdata, see
+        // lx_has_map), in through the sol::nested overload every vector
+        // parameter already gets (lx_has_vector_param). std::optional:
+        // sol2's own nil-or-value conversion. Its value is kept to what sol2
+        // can read straight off the stack — a scalar, string, enum or bound
+        // class: a container inside an optional would need a table read, and
+        // sol2's optional getter turns a failed read into an EMPTY optional,
+        // silently, rather than an error.
+        inline bool lx_wrapper_ok(const GenType &t, const GenContext &c) {
+            if (!std_wrapper_ok(t)) {
+                return false;
+            }
+            for (const auto &e : t.element) {
+                if (e.is_shared_ptr || !lx_marshalable(e, c) || !lx_copyable(e)) {
+                    return false;
+                }
+                if (t.is_optional && (e.kind == "vector" || e.is_map || e.is_optional)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         inline bool lx_marshalable(const GenType &t, const GenContext &c) {
             // Bare raw pointer to a bound class: sol2 treats T* as a non-owning
             // handle to the registered usertype.
             if (t.is_pointer) {
                 return lx_is_bound(t.object, c);
+            }
+            if (t.is_map || t.is_optional) {
+                return lx_wrapper_ok(t, c);
             }
             if (t.kind == "unknown") {
                 return false; // callbacks are allowed per-parameter, see lx_param_ok
@@ -185,6 +233,9 @@ local {{LIB}} = require("{{LIB}}")
                 if (t.element.front().is_pointer) {
                     return false;
                 }
+                if (lx_has_map(t.element.front())) {
+                    return false; // sol2 would push each map as userdata
+                }
                 return lx_marshalable(t.element.front(), c);
             }
             return true; // number / boolean / string / enum / void
@@ -199,7 +250,7 @@ local {{LIB}} = require("{{LIB}}")
                 return false;
             }
             auto convertible = [&](const GenType &s) {
-                return !s.is_pointer && !s.is_callback && lx_marshalable(s, c);
+                return !s.is_pointer && !s.is_callback && !lx_has_map(s) && lx_marshalable(s, c);
             };
             const GenType &ret = t.callback_sig.front();
             if (!(ret.kind == "void" || convertible(ret))) {
@@ -228,6 +279,10 @@ local {{LIB}} = require("{{LIB}}")
             if (t.kind == "vector") {
                 return t.element.empty() || lx_copyable(t.element.front());
             }
+            if (t.is_map || t.is_optional) {
+                return std::all_of(t.element.begin(), t.element.end(),
+                                   [](const GenType &e) { return lx_copyable(e); });
+            }
             return true;
         }
 
@@ -243,7 +298,11 @@ local {{LIB}} = require("{{LIB}}")
             if (m.is_overloaded && !sig_spellable(m)) {
                 return false;
             }
-            if (m.ret.kind != "void" && !lx_marshalable(m.ret, c)) {
+            // A factory's by-value std::unique_ptr<T>: sol2 pushes it as a
+            // unique usertype — the Lua userdata owns the object and frees it
+            // when collected.
+            const bool unique_ret = unique_return_ok(m.ret, m.ret_is_ref, c);
+            if (!unique_ret && m.ret.kind != "void" && !lx_marshalable(m.ret, c)) {
                 return false;
             }
             // A by-VALUE class return copies into the userdata; an lvalue-ref
@@ -251,7 +310,7 @@ local {{LIB}} = require("{{LIB}}")
             if (m.ret.kind == "object" && !m.ret_is_ref && !m.ret.copy_constructible) {
                 return false;
             }
-            if (m.ret.kind == "vector" && !m.ret_is_ref && !lx_copyable(m.ret)) {
+            if (lx_tableish(m.ret) && !m.ret_is_ref && !lx_copyable(m.ret)) {
                 return false;
             }
             for (const auto &p : m.params) {
@@ -263,7 +322,7 @@ local {{LIB}} = require("{{LIB}}")
                 if (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) {
                     return false;
                 }
-                if (p.type.kind == "vector" && !lx_copyable(p.type)) {
+                if (lx_tableish(p.type) && !lx_copyable(p.type)) {
                     return false; // table → vector conversion copies elements
                 }
                 // Mutable ref to a NON-class type (std::string&, index_t&): an
@@ -284,7 +343,7 @@ local {{LIB}} = require("{{LIB}}")
             if (!lx_marshalable(f.type, c)) {
                 return false;
             }
-            if (f.type.kind == "vector" && !f.is_readonly && !lx_copyable(f.type)) {
+            if (lx_tableish(f.type) && !f.is_readonly && !lx_copyable(f.type)) {
                 return false; // writable vector field: table assignment copies
             }
             return true;
@@ -331,7 +390,7 @@ local {{LIB}} = require("{{LIB}}")
 
         inline bool lx_has_vector_param(const std::vector<GenParam> &params) {
             for (const auto &p : params) {
-                if (p.type.kind == "vector") {
+                if (lx_tableish(p.type)) {
                     return true;
                 }
             }
@@ -358,7 +417,7 @@ local {{LIB}} = require("{{LIB}}")
                     a.args += ", ";
                 }
                 const GenType &t = params[j].type;
-                if (t.kind == "vector") {
+                if (lx_tableish(t)) {
                     a.decls += "sol::nested<" + lua_cpp_type(t) + "> " + an;
                     a.args += an + ".value()";
                 } else if (t.is_pointer) {
@@ -385,6 +444,9 @@ local {{LIB}} = require("{{LIB}}")
         // the sequence one binds too (the adapter calls by NAME).
 
         inline bool lx_seq_rest_ok(const GenMethod &m, const GenContext &c) {
+            if (m.ret.is_map) {
+                return false; // the adapter body returns it unwrapped (lx_has_map)
+            }
             if (!is_adapted(m.ret)) {
                 if (m.ret.kind != "void" && !lx_marshalable(m.ret, c)) {
                     return false;
@@ -392,7 +454,7 @@ local {{LIB}} = require("{{LIB}}")
                 if (m.ret.kind == "object" && !m.ret_is_ref && !m.ret.copy_constructible) {
                     return false;
                 }
-                if (m.ret.kind == "vector" && !m.ret_is_ref && !lx_copyable(m.ret)) {
+                if (lx_tableish(m.ret) && !m.ret_is_ref && !lx_copyable(m.ret)) {
                     return false;
                 }
             }
@@ -406,7 +468,7 @@ local {{LIB}} = require("{{LIB}}")
                 if (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) {
                     return false;
                 }
-                if (p.type.kind == "vector" && !lx_copyable(p.type)) {
+                if (lx_tableish(p.type) && !lx_copyable(p.type)) {
                     return false;
                 }
                 if (p.type.kind != "object" && p.is_mutable_ref) {
@@ -458,7 +520,7 @@ local {{LIB}} = require("{{LIB}}")
                         o.pre += adapt_decl_stmts(t, an, sn, "        ");
                     }
                     args.push_back(sn);
-                } else if (t.kind == "vector") {
+                } else if (lx_tableish(t)) {
                     if (tables) {
                         decls.push_back("sol::nested<" + lua_cpp_type(t) + "> " + an);
                         args.push_back(an + ".value()");
@@ -487,7 +549,7 @@ local {{LIB}} = require("{{LIB}}")
         // for parameters.)
         inline bool lx_seq_has_vectorish_param(const std::vector<GenParam> &params) {
             for (const auto &p : params) {
-                if (is_adapted(p.type) || p.type.kind == "vector") {
+                if (is_adapted(p.type) || lx_tableish(p.type)) {
                     return true;
                 }
             }
@@ -562,6 +624,21 @@ local {{LIB}} = require("{{LIB}}")
         inline std::string lua_field(const GenClass &k, const GenField &f) {
             const std::string self = qualified_of(k);
             const std::string mp   = "&" + self + "::" + f.name;
+            // A map field: read as a plain-table COPY (see lx_has_map — the
+            // member pointer would push the map itself), written from a table.
+            // Unlike a vector field, `t.weights.k = 1` therefore does not reach
+            // the member; assign the whole table.
+            if (f.type.is_map) {
+                const std::string mt  = lua_cpp_type(f.type);
+                const std::string get =
+                    "[](const " + self + " &s) { return sol::as_nested(s." + f.name + "); }";
+                if (f.is_readonly) {
+                    return "    c[\"" + f.name + "\"] = sol::property(" + get + ");\n";
+                }
+                return "    c[\"" + f.name + "\"] = sol::property(\n        " + get +
+                       ",\n        [](" + self + " &s, sol::nested<" + mt + "> v) { s." + f.name +
+                       " = std::move(v.value()); });\n";
+            }
             if (lx_field_readonly(f)) {
                 return "    c[\"" + f.name + "\"] = sol::readonly(" + mp + ");\n";
             }
@@ -586,7 +663,7 @@ local {{LIB}} = require("{{LIB}}")
             // converts through sol::nested. The getter hands out a reference,
             // so in-place container ops (m.tags:add(x), m.tags[1] = y) still
             // mutate the real member.
-            if (f.type.kind == "vector") {
+            if (lx_tableish(f.type)) {
                 const std::string vt = lua_cpp_type(f.type);
                 std::string s;
                 s += "    c[\"" + f.name + "\"] = sol::property(\n";
@@ -635,7 +712,10 @@ local {{LIB}} = require("{{LIB}}")
                 primary =
                     "static_cast<" + fp + ">(&" + qualified_of(k) + "::" + m.name + ")";
             }
-            if (!lx_has_vector_param(m.params)) {
+            // A map return can only leave as a table, so such a method binds
+            // through the table-accepting lambda alone, wrapping the result.
+            const bool map_ret = m.ret.is_map;
+            if (!map_ret && !lx_has_vector_param(m.params)) {
                 return "    c[\"" + m.name + "\"] = " + primary + ";\n";
             }
             const LuaTableParams tp = lua_table_params(m.params);
@@ -649,6 +729,10 @@ local {{LIB}} = require("{{LIB}}")
             } else {
                 decls = qualified_of(k) + " &self" + (tp.decls.empty() ? "" : ", " + tp.decls);
                 call  = "self." + m.name + "(" + tp.args + ")";
+            }
+            if (map_ret) {
+                return "    c[\"" + m.name + "\"] = [](" + decls +
+                       ") { return sol::as_nested(" + call + "); };\n";
             }
             return "    c[\"" + m.name + "\"] = sol::overload(\n        " + primary +
                    ",\n        [](" + decls + ") { return " + call + "; });\n";
@@ -850,6 +934,8 @@ local {{LIB}} = require("{{LIB}}")
             for (const auto &f : c.functions) {
                 GenMethod probe; // free functions go through the same gates
                 probe.ret    = f.ret;
+                // Only the unique_ptr gate reads it here (see GenFunction::ret_is_ref).
+                probe.ret_is_ref = f.ret.is_unique_ptr && f.ret_is_ref;
                 probe.params = f.params;
                 if (seq_touches(probe)) {
                     if (lx_seq_eligible(probe, c)) {
@@ -882,7 +968,12 @@ local {{LIB}} = require("{{LIB}}")
                     continue;
                 }
                 coverage::note_bound_function("lua", f);
-                if (lx_has_vector_param(f.params)) {
+                if (f.ret.is_map) {
+                    const LuaTableParams tp = lua_table_params(f.params);
+                    body += "    m.set_function(\"" + f.name + "\", [](" + tp.decls +
+                            ") { return sol::as_nested(" + fn_call_expr(f) + "(" + tp.args +
+                            ")); });\n";
+                } else if (lx_has_vector_param(f.params)) {
                     // Same table-accepting second overload as methods get.
                     const LuaTableParams tp = lua_table_params(f.params);
                     body += "    m.set_function(\"" + f.name + "\", sol::overload(\n        " +
@@ -900,9 +991,12 @@ local {{LIB}} = require("{{LIB}}")
                    "#include <algorithm>\n"
                    "#include <filesystem>\n"
                    "#include <functional>\n"
+                   "#include <map>\n"
                    "#include <memory>\n"
+                   "#include <optional>\n"
                    "#include <stdexcept>\n"
                    "#include <string>\n"
+                   "#include <unordered_map>\n"
                    "#include <vector>\n";
             // sol2-only: just the user's (stock) headers below.
             auto add = [&](const std::string &h) { append_include(out, h); };
