@@ -25,8 +25,10 @@
 
 #include <cstddef>
 #include <functional>
+#include <map>
 #include <napi.h>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -41,10 +43,22 @@ namespace rosetta {
     template <typename T> struct is_std_vector : std::false_type {};
     template <typename U, typename A> struct is_std_vector<std::vector<U, A>> : std::true_type {};
 
+    template <typename T> struct is_unique_ptr : std::false_type {};
+    template <typename U> struct is_unique_ptr<std::unique_ptr<U>> : std::true_type {};
+
     template <typename T> struct is_shared_ptr : std::false_type {};
     template <typename U> struct is_shared_ptr<std::shared_ptr<U>> : std::true_type {};
 
-    // What an out-parameter adapter returns (see to_napi): the return value, if
+    template <typename T> struct is_std_map : std::false_type {};
+    template <typename K, typename V, typename C, typename A>
+    struct is_std_map<std::map<K, V, C, A>> : std::true_type {};
+    template <typename K, typename V, typename H, typename E, typename A>
+    struct is_std_map<std::unordered_map<K, V, H, E, A>> : std::true_type {};
+
+    template <typename T> struct is_std_optional : std::false_type {};
+    template <typename U> struct is_std_optional<std::optional<U>> : std::true_type {};
+
+        // What an out-parameter adapter returns (see to_napi): the return value, if
     // any, followed by the out-parameters — handed to JS as an array.
     template <typename T> struct is_std_tuple : std::false_type {};
     template <typename... U> struct is_std_tuple<std::tuple<U...>> : std::true_type {};

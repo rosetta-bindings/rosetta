@@ -471,6 +471,8 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             for (const auto &f : c.functions) {
                 GenMethod probe; // free functions go through the same gates
                 probe.ret    = f.ret;
+                // Only the unique_ptr gate reads it here (see GenFunction::ret_is_ref).
+                probe.ret_is_ref = f.ret.is_unique_ptr && f.ret_is_ref;
                 probe.params = f.params;
                 if (px_touches(probe)) {
                     if (seq_adaptable(probe) && px_seq_rest_ok(probe, c)) {

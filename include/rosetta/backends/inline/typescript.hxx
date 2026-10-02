@@ -35,7 +35,7 @@ namespace rosetta {
             // reference count is a C++-side detail. Declaring "shared_ptr" (the
             // literal identifier the IR carries in `object`) would name a type
             // the .d.ts never defines.
-            if (t.is_shared_ptr && !t.element.empty()) {
+            if ((t.is_shared_ptr || t.is_unique_ptr) && !t.element.empty()) {
                 return ts_type(t.element.front(), c);
             }
             if (t.kind == "object" || t.kind == "enum") {
@@ -51,9 +51,24 @@ namespace rosetta {
                 return t.object;
             }
             if (t.kind == "vector") {
-                return (t.element.empty() ? std::string("any")
-                                          : ts_type(t.element.front(), c)) +
-                       "[]";
+                const std::string e =
+                    t.element.empty() ? std::string("any") : ts_type(t.element.front(), c);
+                // `(number | undefined)[]`, not `number | undefined[]`.
+                return (e.find('|') != std::string::npos ? "(" + e + ")" : e) + "[]";
+            }
+            // The node runtime's shapes: a std::map is a plain object (a number
+            // or enum key is still a number to TypeScript's index signature),
+            // a std::optional is its value or undefined.
+            if (t.is_map && t.element.size() == 2) {
+                const std::string key = t.element[0].kind == "string" ? "string" : "number";
+                return "Record<" + key + ", " + ts_type(t.element[1], c) + ">";
+            }
+            if (t.is_optional && !t.element.empty()) {
+                const std::string inner = ts_type(t.element.front(), c);
+                // Parenthesized when the inner type is itself a union (an
+                // optional of an optional), so `[]` / `|` stay unambiguous.
+                return (inner.find('|') != std::string::npos ? "(" + inner + ")" : inner) +
+                       " | undefined";
             }
             if (is_adapted(t) && !t.element.empty()) {
                 // A trait-registered foreign container marshals as an array of
@@ -331,6 +346,8 @@ namespace rosetta {
                 // a compile-time green light for something not in the module.
                 GenMethod probe;
                 probe.ret    = f.ret;
+                // Only the unique_ptr gate reads it here (see GenFunction::ret_is_ref).
+                probe.ret_is_ref = f.ret.is_unique_ptr && f.ret_is_ref;
                 probe.params = f.params;
                 bool visible;
                 const bool seq = seq_touches(probe);

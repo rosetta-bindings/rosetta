@@ -146,6 +146,24 @@ target_compile_options(path_shared PRIVATE -fannotation-attributes)
 target_link_libraries(path_shared PRIVATE GTest::gtest_main)
 gtest_discover_tests(path_shared)
 
+# std::map / std::unordered_map / std::optional: flagged in the IR (kind
+# stays "unknown"), bound by python / nanobind / node, declared by typescript,
+# and skipped by every backend that has not opted in.
+add_executable(std_wrappers std_wrappers.cpp)
+target_include_directories(std_wrappers PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(std_wrappers PRIVATE -fannotation-attributes)
+target_link_libraries(std_wrappers PRIVATE GTest::gtest_main)
+gtest_discover_tests(std_wrappers)
+
+# std::unique_ptr: flagged in the IR, bound only as a by-value factory return
+# (python / nanobind / node / wasm / lua), refused as a parameter, field or
+# reference everywhere.
+add_executable(unique_ptr unique_ptr.cpp)
+target_include_directories(unique_ptr PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(unique_ptr PRIVATE -fannotation-attributes)
+target_link_libraries(unique_ptr PRIVATE GTest::gtest_main)
+gtest_discover_tests(unique_ptr)
+
 # The two manifest fields for what is not a binding: "module_init" (statements
 # run at module load) and "generated_headers" (a header the bound library's own
 # build system would have produced).
