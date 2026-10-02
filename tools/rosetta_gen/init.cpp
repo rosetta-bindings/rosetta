@@ -3,7 +3,9 @@
 
 // --init: write a starter manifest. Without a source dir, the fully-commented
 // example below; with one, a manifest pre-filled from a heuristic scan of its
-// headers and sources (see init.h and the scan section further down).
+// headers and sources (see init.h and the scan section further down). Either
+// way, the project skeleton (bootstrap CMakeLists.txt, .gitignore, README.md)
+// is written beside it.
 
 #include "init.h"
 #include "util.h"
@@ -14,6 +16,7 @@
 #include <initializer_list>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <utility>
 #include <vector>
 
 // A fully-commented example manifest, emitted by `--init`. It exercises every
@@ -645,17 +648,10 @@ static std::string guess_rosetta_include(const char *argv0, const fs::path &mani
     return {};
 }
 
-// The manifest pre-filled from a scan. Same shape as the example manifest,
-// but with the scanned classes / functions / sources in place of the
-// placeholders (and only the fields the scan can say something about).
-static std::string render_scanned_manifest(const fs::path &manifest_path,
-                                           const fs::path &scan_root, const ScanResult &r,
-                                           const std::string &rosetta_include) {
-    const fs::path    base = fs::absolute(manifest_path).parent_path();
-    const std::string inc  = rel_or_abs(scan_root, base);
-
-    // Module name from the scanned directory's name, sanitized to an
-    // identifier (a python/node module name cannot carry '-' or '.').
+// Module name from a scanned directory's name, sanitized to an identifier
+// (a python/node module name cannot carry '-' or '.'). "mylib" — the example
+// manifest's name — when nothing usable is left.
+static std::string module_name_for(const fs::path &scan_root) {
     fs::path norm = fs::absolute(scan_root).lexically_normal();
     if (!norm.has_filename()) { // "src/" — a trailing separator drops the name
         norm = norm.parent_path();
@@ -669,6 +665,19 @@ static std::string render_scanned_manifest(const fs::path &manifest_path,
     if (name.empty() || std::isdigit((unsigned char)name[0])) {
         name = "mylib";
     }
+    return name;
+}
+
+// The manifest pre-filled from a scan. Same shape as the example manifest,
+// but with the scanned classes / functions / sources in place of the
+// placeholders (and only the fields the scan can say something about).
+static std::string render_scanned_manifest(const fs::path &manifest_path,
+                                           const fs::path &scan_root, const ScanResult &r,
+                                           const std::string &rosetta_include) {
+    const fs::path    base = fs::absolute(manifest_path).parent_path();
+    const std::string inc  = rel_or_abs(scan_root, base);
+
+    const std::string name = module_name_for(scan_root);
 
     // Factor shared spelling out of the entries, into the manifest-level
     // "namespace" / "header_dir" defaults load() applies back: the namespace
@@ -784,6 +793,145 @@ static std::string render_scanned_manifest(const fs::path &manifest_path,
     return j.dump(4) + "\n";
 }
 
+// ---------------------------------------------------------------------------
+// Project skeleton written next to the manifest: a bootstrap CMakeLists.txt
+// (fetches rosetta into extern/ and builds rosetta_gen), a .gitignore for the
+// generated trees, and a README.md explaining the two build steps.
+// ---------------------------------------------------------------------------
+
+// Replace every "@NAME@" in `tpl` with `name` (the templates are CMake and
+// Markdown, whose own ${...} / {...} must pass through untouched).
+static std::string fill(std::string tpl, const std::string &name) {
+    const std::string key = "@NAME@";
+    for (auto p = tpl.find(key); p != std::string::npos; p = tpl.find(key, p + name.size())) {
+        tpl.replace(p, key.size(), name);
+    }
+    return tpl;
+}
+
+static const char *const kBootstrapCMakeLists = R"CMAKE(# -------------------------------------------------------------------
+# Bootstrap only: fetches rosetta into extern/ and builds the
+# rosetta_gen tool (-> extern/rosetta/bin/rosetta_gen). The bindings
+# themselves are NOT built here — see README.md
+# (rosetta_gen -> generator -> per-language projects under bindings/).
+#
+#   cmake -B build && cmake --build build --parallel
+# -------------------------------------------------------------------
+cmake_minimum_required(VERSION 3.28)
+project(@NAME@-rosetta VERSION 1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS on)
+
+include(FetchContent)
+
+# ----------------------------------------------------------------------------
+# ROSETTA library — fetched into extern/ (sources only; the manifest's
+# "rosetta_include" points to extern/rosetta/include). An existing
+# checkout (or a symlink to a local working copy) is left untouched.
+# ----------------------------------------------------------------------------
+if(NOT EXISTS ${CMAKE_SOURCE_DIR}/extern/rosetta/include/rosetta/generate.h)
+    message(STATUS "Fetching Rosetta library...")
+    FetchContent_Declare(
+        rosetta
+        GIT_REPOSITORY https://github.com/xaliphostes/rosetta.git
+        GIT_TAG        main
+        GIT_SHALLOW    TRUE
+        SOURCE_DIR ${CMAKE_SOURCE_DIR}/extern/rosetta
+        BINARY_DIR ${CMAKE_BINARY_DIR}/extern/rosetta-build
+    )
+    FetchContent_Populate(rosetta)
+endif()
+
+# The rosetta_gen code generator lives in tools/ and has its own standalone
+# CMakeLists.txt — build it as a subdirectory. Its binary always lands in
+# <rosetta>/bin, i.e. extern/rosetta/bin/rosetta_gen.
+# NOTE: rosetta_gen requires CMake >= 3.28.
+message(STATUS "Building rosetta_gen tool...")
+add_subdirectory(
+    ${CMAKE_SOURCE_DIR}/extern/rosetta/tools/rosetta_gen
+    ${CMAKE_BINARY_DIR}/extern/rosetta_gen-build
+)
+)CMAKE";
+
+static const char *const kGitignore = R"GIT(build/
+bin/
+dist/
+extern/
+output/
+.DS_Store
+generator
+bindings
+gen
+generated
+*.png
+*.html
+)GIT";
+
+static const char *const kReadme = R"MD(# @NAME@ binding
+
+Language bindings for **@NAME@** generated by
+[rosetta](https://github.com/xaliphostes/rosetta) — **Python**, **Node.js**
+and **WebAssembly**, from one `manifest.json`, without touching a line of
+@NAME@'s source.
+
+## Build
+
+One-time bootstrap: fetch `rosetta` into `extern/` and build `rosetta_gen`:
+
+```bash
+cmake -B build && cmake --build build --parallel
+```
+
+Then, generate the `generator` + all the bindings and compile all of them:
+
+```bash
+./extern/rosetta/bin/rosetta_gen --build manifest.json -j
+```
+
+`--parallel` lets the build tool pick its default job count; a bare `-j`
+uses one job per core (pass a number, e.g. `-j8`, to cap it). The output
+lands in `bindings/`; `rosetta_gen --help` lists all the options
+(`--only python,node`, `--fresh`, `--wheel`, ...).
+
+To start over from sources (removes `gen/`, `bindings/` and the generator):
+
+```bash
+./extern/rosetta/bin/rosetta_gen --clean manifest.json
+```
+)MD";
+
+// Write the skeleton beside the manifest. Unlike the manifest itself, an
+// existing file is not an error — the manifest may be dropped into a project
+// that already has its own CMakeLists / .gitignore / README — it is kept and
+// reported.
+static void write_project_skeleton(const fs::path &dir, const std::string &name) {
+    const std::pair<const char *, const char *> files[] = {
+        {"CMakeLists.txt", kBootstrapCMakeLists},
+        {".gitignore", kGitignore},
+        {"README.md", kReadme},
+    };
+    for (const auto &[fname, tpl] : files) {
+        const fs::path p = dir / fname;
+        if (fs::exists(p)) {
+            std::fprintf(stderr, "kept existing %s\n", p.string().c_str());
+            continue;
+        }
+        write_file(p, fill(tpl, name));
+        std::fprintf(stderr, "wrote %s\n", p.string().c_str());
+    }
+}
+
+static void print_next_steps() {
+    std::fprintf(stderr,
+                 "next steps (see README.md):\n"
+                 "  1. edit manifest.json: classes / functions, user_include / user_sources\n"
+                 "  2. cmake -B build && cmake --build build --parallel\n"
+                 "  3. ./extern/rosetta/bin/rosetta_gen --build manifest.json -j\n");
+}
+
 // Write a starter manifest to `path` — the commented example, or, when
 // `scan_dir` is given, one pre-filled from a scan of that directory. If a
 // file is already there, warn and leave it untouched (never clobber a
@@ -797,9 +945,12 @@ int init_manifest(const fs::path &path, const fs::path &scan_dir, const char *ar
                      path.string().c_str());
         return 1;
     }
+    const fs::path dir = fs::absolute(path).parent_path();
     if (scan_dir.empty()) {
         write_file(path, render_example_manifest());
         std::fprintf(stderr, "wrote example manifest to %s\n", path.string().c_str());
+        write_project_skeleton(dir, "mylib");
+        print_next_steps();
         return 0;
     }
     const ScanResult r = scan_directory(scan_dir);
@@ -812,8 +963,7 @@ int init_manifest(const fs::path &path, const fs::path &scan_dir, const char *ar
                      "\"classes\" array is empty (add one before generating)\n",
                      scan_dir.string().c_str());
     }
-    const std::string rosetta_inc =
-        guess_rosetta_include(argv0, fs::absolute(path).parent_path());
+    const std::string rosetta_inc = guess_rosetta_include(argv0, dir);
     write_file(path, render_scanned_manifest(path, scan_dir, r, rosetta_inc));
     std::fprintf(stderr,
                  "wrote %s — %zu class(es), %zu function(s), %zu source file(s) from %s\n"
@@ -821,5 +971,7 @@ int init_manifest(const fs::path &path, const fs::path &scan_dir, const char *ar
                  "and macro-heavy headers are approximated)\n",
                  path.string().c_str(), r.classes.size(), r.functions.size(),
                  r.sources.size(), scan_dir.string().c_str());
+    write_project_skeleton(dir, module_name_for(scan_dir));
+    print_next_steps();
     return 0;
 }

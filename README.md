@@ -97,25 +97,25 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 
 | #   | Target                                                                                                                                                      |  Ok   |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | :---: |
-| 1   | **Python** (`python`) — pybind11 extension module                                                                                                           |   ✅   |
-| 2   | **Python** (`nanobind`) — leaner/faster pybind11 successor                                                                                                  |   ✅   |
-| 3   | **Node** (`node`) — N-API native addon                                                                                                                      |   ✅   |
-| 4   | **Julia** (`julia`) — CxxWrap.jl / jlcxx shared module, `std::vector` included                                                                              |   ✅   |
+| 1   | **Python** — using pybind11                                                                                                           |   ✅   |
+| 2   | **Python** — using nanobind (leaner/faster pybind11 successor)                                                                                                  |   ✅   |
+| 3   | **Node**  — N-API native addon                                                                                                                      |   ✅   |
+| 4   | **Julia** — CxxWrap.jl / jlcxx shared module, `std::vector` included                                                                              |   ✅   |
 | 5   | **WebAssembly** (`wasm`) — Emscripten/embind module                                                                                                         |   ✅   |
-| 6   | **Lua** (`lua`) — sol2 module, `require`-able (off-the-shelf C++17)                                                                                         |   ✅   |
+| 6   | **Lua**  — sol2 module, `require`-able (off-the-shelf C++17)                                                                                         |   ✅   |
 | 7   | **C#** (`csharp`) — native C-ABI shared library + handle-backed P/Invoke wrappers                                                                           |   ✅   |
-| 8   | **Java** (`java`) — native C-ABI + handle-backed FFM wrappers                                                                                               |   ✅   |
-| 9   | **Qt Widgets** (`qt`) — generated property/method inspector via `runtime/qt_widgets.h`                                                                      |   ✅   |
-| 10  | **QML** (`qml`) — fills a generic `ReflectedObject` explicitly                                                                                              |   ✅   |
-| 11  | **Dear ImGui** (`imgui`) — immediate-mode inspector app (GLFW + OpenGL3, auto-fetched)                                                                      |   ✅   |
-| 12  | **REST** (`rest`) — cpp-httplib JSON server + generated browser client                                                                                      |   —   |
-| 13  | **OpenAPI** (`openapi`) — OpenAPI 3.1 spec describing the REST surface                                                                                      |   ✅   |
+| 8   | **Java**  — native C-ABI + handle-backed FFM wrappers                                                                                               |   ✅   |
+| 9   | **Qt Widgets**  — generated property/method inspector via `runtime/qt_widgets.h`                                                                      |   ✅   |
+| 10  | **QML**  — fills a generic `ReflectedObject` explicitly                                                                                              |   ✅   |
+| 11  | **Dear ImGui**  — immediate-mode inspector app (GLFW + OpenGL3, auto-fetched)                                                                      |   ✅   |
+| 12  | **REST**  — cpp-httplib JSON server + generated browser client                                                                                      |   —   |
+| 13  | **OpenAPI**  — OpenAPI 3.1 spec describing the REST surface                                                                                      |   ✅   |
 | 14  | **JSON** — reflection-based nlohmann (de)serialization (`visitors/json.h`)                                                                                  |   —   |
-| 15  | **TypeScript** (`typescript`) — ambient `.d.ts` type declarations                                                                                           |   ✅   |
-| 16  | **Markdown** (`markdown`) — API reference document                                                                                                          |   ✅   |
-| 17  | **HTML** (`html`) — self-contained, styled API reference page                                                                                               |   ✅   |
-| 18  | **ParaView** (`paraview`) — Server Manager XML for a plugin                                                                                                 |   ✅   |
-| 19  | **Dynamic** (`dynamic`) — the IR as runtime *data*: a `MetaClass` per type + one thunk per member, queried and called by name ([details](examples/dynamic)) |   ✅   |
+| 15  | **TypeScript**  — ambient `.d.ts` type declarations                                                                                           |   ✅   |
+| 16  | **Markdown**  — API reference document                                                                                                          |   ✅   |
+| 17  | **HTML**  — self-contained, styled API reference page                                                                                               |   ✅   |
+| 18  | **ParaView**  — Server Manager XML for a plugin                                                                                                 |   ✅   |
+| 19  | **Dynamic**  — the IR as runtime *data*: a `MetaClass` per type + one thunk per member, queried and called by name ([details](examples/dynamic)) |   ✅   |
 
 > New backends register without touching the generator, thanks to the visitor pattern — see [EXTENDING_BACKEND](docs/EXTENDING_BACKEND.md).
 > **C++26** = targets generated against the reflection toolchain.

@@ -34,7 +34,8 @@
 // The implementation lives in one file per concern:
 //   manifest.h/.cpp   the Manifest structs + load() (manifest field docs there)
 //   emit.h/.cpp       generator-project emission (bindings.h / driver / CMake)
-//   init.h/.cpp       --init (example manifest + heuristic source scan)
+//   init.h/.cpp       --init (example manifest + heuristic source scan +
+//                     project skeleton)
 //   build.h/.cpp      --build (the whole pipeline in one command)
 //   clean.h/.cpp      --clean
 //   util.h/.cpp       file I/O + portable command running
@@ -95,6 +96,9 @@ static void print_help() {
         "      found, plus the sources as user_sources. The scan is heuristic\n"
         "      — template classes, overload sets and anonymous namespaces are\n"
         "      skipped — so review the result before building.\n"
+        "      Also writes, beside the manifest, a bootstrap CMakeLists.txt\n"
+        "      (fetches rosetta into extern/, builds rosetta_gen), a\n"
+        "      .gitignore and a README.md — each only if not already there.\n"
         "\n"
         "--build options:\n"
         "%s"

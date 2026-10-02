@@ -22,8 +22,8 @@ cmake --build tools/rosetta_gen/build
 \end{lstlisting}
 
 The binary always lands in \textbf{\code{<repo>/bin/rosetta\_gen}}, not in the
-build tree. If you scaffolded your project with \code{tools/rosetta\_init.py},
-its bootstrap \code{CMakeLists.txt} does this for you and the binary appears at
+build tree. If you scaffolded your project with \code{rosetta\_gen --init} or
+\code{tools/rosetta\_init.py}, its bootstrap \code{CMakeLists.txt} does this for you and the binary appears at
 \code{extern/rosetta/bin/rosetta\_gen}.
 
 \section{The four modes}
@@ -32,7 +32,7 @@ its bootstrap \code{CMakeLists.txt} does this for you and the binary appears at
 rosetta_gen <manifest.json> [out_dir]        # plain: emit the generator project only
 rosetta_gen --build <manifest.json> [opts]   # the whole pipeline in one command
 rosetta_gen --clean <manifest.json> [opts]   # remove everything generated
-rosetta_gen --init  [manifest.json] [src]    # write a starter manifest
+rosetta_gen --init  [manifest.json] [src]    # write a starter manifest + project skeleton
 \end{lstlisting}
 
 \code{rosetta\_gen --help} prints the full built-in help; \code{--build --help}
@@ -53,6 +53,21 @@ and \code{--clean --help} list each mode's options.
 
 Writes a starter manifest (default \code{./manifest.json}). It \textbf{never
 overwrites} an existing file --- remove it first to regenerate.
+
+Beside the manifest it also writes the project skeleton:
+
+\begin{description}
+  \item[CMakeLists.txt] bootstrap only: fetches rosetta into \code{extern/} and
+    builds \code{rosetta\_gen} (\code{extern/rosetta/bin/rosetta\_gen});
+  \item[.gitignore] the generated trees (\code{build/}, \code{extern/},
+    \code{gen/}, \code{bindings/}, \ldots);
+  \item[README.md] the two build commands of Section~\ref{sec:twocommands}.
+\end{description}
+
+Each is written only if it is not already there --- an existing file is kept
+and reported --- so \code{--init} can be run inside a project that has its own.
+The CMake project and README title take the scanned folder's name
+(\code{mylib} for the commented example).
 
 \subsection*{A blank, commented manifest}
 
@@ -104,9 +119,8 @@ VCS directories, build trees and vendored code (\code{build/}, \code{extern/},
 \code{third\_party/}, \code{node\_modules/}, \ldots) are not descended into.
 
 \begin{note}
-For a whole \emph{project} skeleton --- a bootstrap \code{CMakeLists.txt} that
-fetches rosetta into \code{extern/}, a \code{.gitignore}, a \code{README.md} ---
-rather than just the manifest, use \code{tools/rosetta\_init.py}.
+No \code{rosetta\_gen} binary yet? \code{tools/rosetta\_init.py} writes the
+same skeleton (and a manifest skeleton) with nothing but Python.
 \end{note}
 
 \section{\code{--build}: the whole pipeline}

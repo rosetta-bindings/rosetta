@@ -25,7 +25,7 @@ The binary always lands in **`<repo>/bin/rosetta_gen`** (not the build tree). If
 rosetta_gen <manifest.json> [out_dir]        # plain: emit the generator project only
 rosetta_gen --build <manifest.json> [opts]   # the whole pipeline in one command
 rosetta_gen --clean <manifest.json> [opts]   # remove everything generated
-rosetta_gen --init  [manifest.json] [src]    # write a starter manifest
+rosetta_gen --init  [manifest.json] [src]    # write a starter manifest + project skeleton
 ```
 
 `rosetta_gen --help` prints the full built-in help; `--build --help` and `--clean --help` list each mode's options.
@@ -46,7 +46,13 @@ How they chain together:
 
 ## `--init` — start a project
 
-Writes a starter `manifest.json` (default `./manifest.json`; **never overwrites** an existing file — remove it first to regenerate).
+Writes a starter `manifest.json` (default `./manifest.json`; **never overwrites** an existing file — remove it first to regenerate), plus a project skeleton beside it:
+
+- `CMakeLists.txt` — bootstrap only: fetches rosetta into `extern/` and builds `rosetta_gen` (→ `extern/rosetta/bin/rosetta_gen`);
+- `.gitignore` — the generated trees (`build/`, `extern/`, `gen/`, `bindings/`, …);
+- `README.md` — the two build steps (`cmake -B build && cmake --build build --parallel`, then `rosetta_gen --build manifest.json -j`).
+
+Each skeleton file is written only if it does not already exist, so `--init` can be run inside a project that has its own.
 
 ### Case 1: blank, commented manifest
 
@@ -70,7 +76,7 @@ An argument naming an existing **directory** is the source tree to scan; the oth
 
 The scan is a comment/string-aware token scan, **not a real C++ parse**: template classes, overloaded free functions and anonymous namespaces are skipped, each with a printed note. An overloaded free function is skipped because the scan has no signature to write, not because it cannot be bound — add it by hand with a [`"signature"`](MANIFEST.md#binding-one-overload-signature). VCS dirs, build trees and vendored code (`build/`, `extern/`, `third_party/`, `node_modules/`, …) are not descended into. **Review the result before building.**
 
-> For a whole *project* skeleton (bootstrap `CMakeLists.txt` that fetches rosetta into `extern/`, `.gitignore`, `README.md`) rather than just the manifest, use [`tools/rosetta_init.py`](../tools/rosetta_init.py) — see the [minimal example](MANIFEST.md#minimal-example).
+> No `rosetta_gen` binary yet? [`tools/rosetta_init.py`](../tools/rosetta_init.py) writes the same skeleton with nothing but Python — see the [minimal example](MANIFEST.md#minimal-example).
 
 ---
 

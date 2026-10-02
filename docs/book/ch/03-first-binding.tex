@@ -30,16 +30,17 @@ exceptions, \lang{rest} and \lang{json}.
 \label{sec:twocommands}
 
 Everything in this chapter reduces to two lines. Scaffold a binding project
-next to your library with \code{tools/rosetta\_init.py} --- it writes a
-\code{manifest.json} skeleton and a bootstrap \code{CMakeLists.txt} --- and
-then:
+next to your library with \code{rosetta\_gen --init} (Section~\ref{sec:init})
+or, if you have no \code{rosetta\_gen} yet, \code{tools/rosetta\_init.py} ---
+both write a \code{manifest.json}, a bootstrap \code{CMakeLists.txt}, a
+\code{.gitignore} and a \code{README.md} --- and then:
 
 \begin{lstlisting}[style=sh]
 # 1. one-time bootstrap: fetch rosetta into extern/ and build rosetta_gen
-cmake -B build && cmake --build build -j10
+cmake -B build && cmake --build build --parallel
 
 # 2. generate the generator, run it, and compile every target
-./extern/rosetta/bin/rosetta_gen --build manifest.json -j10
+./extern/rosetta/bin/rosetta_gen --build manifest.json -j
 \end{lstlisting}
 
 That is the whole pipeline. The rest of this chapter takes the two apart.
@@ -63,8 +64,10 @@ that needs clang-p2996, and where reflection runs), runs it to write one
 project per target into \code{bindings/}, and then compiles each of those.
 
 \begin{note}
-\code{-j10} is passed to \emph{every} CMake build the command drives --- the
-generator's and each backend's. A bare \code{-j} means one job per core.
+\code{-j} is passed to \emph{every} CMake build the command drives --- the
+generator's and each backend's. Bare, it means one job per core; \code{-j8}
+caps it. (In the bootstrap, \code{--parallel} likewise leaves the job count to
+the build tool rather than hard-coding one.)
 Backends are still built one after another, so this parallelises within a
 backend, not across them; \code{--only python,node} is how you cut the matrix
 while iterating (Section~\ref{sec:onlyskip}).
@@ -77,7 +80,7 @@ project, there is no bootstrap to run --- build the tool directly:
 
 \begin{lstlisting}[style=sh]
 cmake -G Ninja -S tools/rosetta_gen -B tools/rosetta_gen/build
-cmake --build tools/rosetta_gen/build -j10
+cmake --build tools/rosetta_gen/build --parallel
 \end{lstlisting}
 
 The binary lands in the same place, \code{<repo>/bin/rosetta\_gen}. This is the
@@ -147,7 +150,8 @@ defaults to the manifest's folder name.
 
 \begin{note}
 Do not want to write this by hand? \code{rosetta\_gen --init} writes a
-fully-commented starter manifest, and \code{rosetta\_gen --init manifest.json
+fully-commented starter manifest (plus the bootstrap \code{CMakeLists.txt},
+\code{.gitignore} and \code{README.md} beside it), and \code{rosetta\_gen --init manifest.json
 ./src} pre-fills it from a scan of your source tree.
 See Section~\ref{sec:init}.
 \end{note}
@@ -157,7 +161,7 @@ See Section~\ref{sec:init}.
 The second command from Section~\ref{sec:twocommands}:
 
 \begin{lstlisting}[style=sh]
-./extern/rosetta/bin/rosetta_gen --build manifest.json -j10
+./extern/rosetta/bin/rosetta_gen --build manifest.json -j
 \end{lstlisting}
 
 It emits the generator project, builds it (this is where reflection runs), runs

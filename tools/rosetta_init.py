@@ -28,7 +28,7 @@ CMAKELISTS = """\
 # themselves are NOT built here — see README.md
 # (rosetta_gen -> generator -> per-language projects under bindings/).
 #
-#   cmake -B build && cmake --build build
+#   cmake -B build && cmake --build build --parallel
 # -------------------------------------------------------------------
 cmake_minimum_required(VERSION 3.28)
 project({name}-rosetta VERSION 1.0 LANGUAGES CXX)
@@ -97,13 +97,24 @@ and **WebAssembly**, from one `manifest.json`, without touching a line of
 One-time bootstrap: fetch `rosetta` into `extern/` and build `rosetta_gen`:
 
 ```bash
-cmake -B build && cmake --build build
+cmake -B build && cmake --build build --parallel
 ```
 
 Then, generate the `generator` + all the bindings and compile all of them:
 
 ```bash
-./extern/rosetta/bin/rosetta_gen --build manifest.json    # → bindings/, compiled; --help lists the options
+./extern/rosetta/bin/rosetta_gen --build manifest.json -j
+```
+
+`--parallel` lets the build tool pick its default job count; a bare `-j`
+uses one job per core (pass a number, e.g. `-j8`, to cap it). The output
+lands in `bindings/`; `rosetta_gen --help` lists all the options
+(`--only python,node`, `--fresh`, `--wheel`, ...).
+
+To start over from sources (removes `gen/`, `bindings/` and the generator):
+
+```bash
+./extern/rosetta/bin/rosetta_gen --clean manifest.json
 ```
 """
 
@@ -201,8 +212,9 @@ def main() -> None:
         "Next steps:\n"
         f"  1. Edit {out / 'manifest.json'}: add your classes/functions and "
         "adjust user_include/user_sources\n"
-        f"  2. cd {out} && cmake -B build && cmake --build build\n"
-        "  3. ./extern/rosetta/bin/rosetta_gen --build manifest.json"
+        f"  2. cd {out} && cmake -B build && cmake --build build --parallel\n"
+        "  3. ./extern/rosetta/bin/rosetta_gen --build manifest.json -j\n"
+        "(see README.md for details)"
     )
 
 
