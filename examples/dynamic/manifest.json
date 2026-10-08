@@ -11,7 +11,8 @@
 
     "targets": [
         { "lang": "dynamic",  "name": "scene" },
-        { "lang": "markdown", "name": "scene" }
+        { "lang": "markdown", "name": "scene" },
+        { "lang": "mcp",      "name": "scene_mcp" }
     ],
 
     "classes": [

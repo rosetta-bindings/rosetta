@@ -6,6 +6,7 @@ extern/
 output/
 site/
 .cache/
+__pycache__
 
 *.dll
 *.so

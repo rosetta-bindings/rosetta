@@ -359,3 +359,39 @@ target_include_directories(dynamic_gen PRIVATE ${CMAKE_SOURCE_DIR}/../include)
 target_compile_options(dynamic_gen PRIVATE -fannotation-attributes)
 target_link_libraries(dynamic_gen PRIVATE GTest::gtest_main)
 gtest_discover_tests(dynamic_gen)
+
+# The MCP server (<rosetta/runtime/mcp.h>) over hand-built metadata, driven
+# through Server::handle(). Stock C++20, like the dynamic runtime suite.
+add_executable(mcp mcp.cpp)
+target_include_directories(mcp PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_link_libraries(mcp PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
+gtest_discover_tests(mcp)
+
+# The scripting tools (run_script / run_python) over the same fixture. Built
+# only when Lua 5.3+ is found; the Python half joins when Python 3.10+ and
+# pybind11 are found too.
+if(APPLE AND EXISTS /opt/homebrew)
+    list(APPEND CMAKE_PREFIX_PATH /opt/homebrew)
+endif()
+find_package(Lua 5.3 QUIET)
+if(LUA_LIBRARIES)
+    add_executable(mcp_scripting mcp_scripting.cpp)
+    target_include_directories(mcp_scripting PRIVATE ${CMAKE_SOURCE_DIR}/../include ${LUA_INCLUDE_DIR})
+    target_link_libraries(mcp_scripting PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json
+                          ${LUA_LIBRARIES})
+    find_package(Python 3.10 QUIET COMPONENTS Interpreter Development.Embed)
+    if(Python_FOUND)
+        execute_process(COMMAND "${Python_EXECUTABLE}" -c "import pybind11; print(pybind11.get_cmake_dir())"
+            OUTPUT_VARIABLE _pybind11_dir OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        find_package(pybind11 CONFIG QUIET HINTS "${_pybind11_dir}")
+    endif()
+    if(Python_FOUND AND pybind11_FOUND)
+        target_link_libraries(mcp_scripting PRIVATE pybind11::embed)
+        target_compile_definitions(mcp_scripting PRIVATE ROSETTA_TEST_MCP_PYTHON=1)
+    else()
+        message(STATUS "mcp_scripting: Python 3.10+ / pybind11 not found — Lua tests only")
+    endif()
+    gtest_discover_tests(mcp_scripting)
+else()
+    message(STATUS "Lua 5.3+ not found — skipping the mcp_scripting tests")
+endif()

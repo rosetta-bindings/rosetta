@@ -8,6 +8,7 @@
 #   ./run.sh shot out.png
 #                       # render the viewer's startup scene to a PNG and exit
 #                       # (smoke test — needs no one at the keyboard)
+#   ./run.sh mcp        # build the MCP server and print how to connect an agent
 #
 # Stages (stage 1 is skipped if its output already exists, so re-runs are quick):
 #   1. rosetta_gen + the generator driver -> bindings/dynamic/   (clang-p2996)
@@ -19,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # --- 1. generate the metadata (clang-p2996) ---
-if [ ! -f bindings/dynamic/auto_dynamic.cpp ]; then
+if [ ! -f bindings/dynamic/auto_dynamic.cpp ] || [ ! -f bindings/mcp/mcp_server.cpp ]; then
     echo ">> generating from manifest.json"
     ../../bin/rosetta_gen manifest.json gen
     cmake -S gen -B gen/build
@@ -48,6 +49,16 @@ case "${1:-}" in
         ;;
     shot)
         exec ./build/viewer --shot "${2:-viewer.png}"
+        ;;
+    mcp)
+        # The generated server is its own CMake project (bindings/mcp/).
+        cmake -S bindings/mcp -B bindings/mcp/build
+        cmake --build bindings/mcp/build -j
+        server="$PWD/bindings/mcp/build/scene_mcp"
+        echo
+        echo "MCP server built: $server"
+        echo "Connect Claude Code to it with:"
+        echo "    claude mcp add scene -- \"$server\""
         ;;
     *)
         exec ./build/demo "$@"

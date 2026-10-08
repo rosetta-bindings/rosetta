@@ -1,36 +1,33 @@
-# Done
+## New languages
 
-- **Annotation-pack visitor design.** The walker hands each visitor the full annotation pack — `v.template field<fld, Anns...>(name)`, `method_instance<fn, Anns...>`, `method_static<fn, Anns...>`, `constructor<ctor, Anns...>()` — and backends query it with `ann::has<A>(Anns...)` / `ann::get_or<A>(fallback, Anns...)`. Adding an annotation kind no longer touches the walker or every backend.
-- **Enums.** `enum` / `enum class` are reflected with their enumerators (name + value).
-- **Constructors.** Exposed via a `constructor<Ctor, Anns...>()` visitor entrypoint (public, non-copy/move, non-template, non-deleted). Copy/move/templated ctors are filtered.
-- **Base classes / inherited members.** `walk<T>()` recurses public bases (`bases_of`) and flattens their fields + methods alongside `T`'s own, deduped by identifier: a derived declaration shadows the base one (most-derived wins) and a virtual diamond collapses to a single member (a `seen_types` guard keeps the walk linear). Annotations stay keyed on each member's *declaring* class, so a base member's inline + JSON side-car annotations are honoured. See `tests/inheritance.cpp`.
-- **Virtual / override detection.** A synthesized `rosetta::virtual_spec{pure, overrides}` is injected into a method's annotation pack when its surviving reflection is virtual, so backends can tell a virtual / overriding method from a plain one (e.g. to emit a pybind11 trampoline). Other qualifiers (`const`, `noexcept`, ref-qualifiers) are still not surfaced — see below.
+1. A plain C-ABI backend (c). Our C# and Java backends already generate a C-ABI shared library with handle-backed wrappers. If we make that a standalone backend that emits a clean rosetta_<lib>.h plus the .so, we get a lot of languages almost for free:
+- Rust: bindgen, or a thin generated safe wrapper with Drop.
+- Go: cgo.
+- Zig: @cImport.
+- Dart/Flutter: dart:ffi.
+- Fortran: iso_c_binding.
 
-# Entities not visited at all
+Each of these then becomes a small "idiomatic wrapper over the C header" generator, not a new marshalling layer.
 
-- Static data members. nonstatic_data_members_of skips them by definition, and there's no field_static visitor signature.
-- Nested types (nested classes/structs/enums, type aliases). A Point::Coord enum nested in Point is invisible.
-- Conversion operators and overloaded operators (operator(), operator+, operator[], …). operator() in particular is functor reflection — the project's prompt explicitly calls it out. The current filter rejects nothing for these by name, but there's no visitor signature distinguishing them, so backends can't route operator+ → __add__.
+2. MATLAB (MEX / C++ Data API) and R (Rcpp). Both have large scientific user bases. MATLAB in particular is everywhere in geomechanics and geophysics, which matches our examples (Sift, mesh relaxer, ParaView). Rcpp modules have a structure very close to pybind11, so the generator would look like our python backend.
 
-# Details ignored about what is visited
+3. Swift. Swift 5.9+ has native C++ interop, so the backend would mostly emit a module map, API notes and Swift-side conveniences. It opens up iOS/macOS apps.
 
-- Method qualifiers. `virtual` is now surfaced via `virtual_spec` (see Done). A `const` method, an `&&`-ref-qualified method, and a `noexcept` method still all reach method_instance<Fn> identically. Some backends care (pybind11 needs const-ness for py::const_; REST binding for safe vs. unsafe verbs). Same plumbing as `virtual_spec` — synthesize a marker into the annotation pack.
-- ~~Parameter metadata~~ — **done**. `gen_detail::params_of` reads each parameter's `identifier_of` and `has_default_argument`; `GenParam` carries `name` (positional `argN` only as a fallback for a parameter declared without one), `has_default`, and a `default_text` the tool harvests textually, since P2996 reports the FACT of a default but not its expression. Consumed by `py::arg` / `nb::arg`, the `.d.ts`, C#/Java signatures, OpenAPI and the doc backends. See `tests/param_names.cpp`.
-- Per-parameter annotations. `[[=range{0,1}]] double t` on a parameter is invisible — same plumbing as field annotations needs to repeat there.
-- Bit-fields, mutable, anonymous unions. Niche but real; a generator that claims "full reflection" should at least flag them so backends can refuse cleanly rather than miscompile.
-- Return-type metadata. The backend re-derives return_type_of(Fn) itself, fine — but `[[nodiscard]]`, ref/cv qualifiers, and `noexcept` get lost unless surfaced.
-- Field traits. Is the type a std::optional, std::variant, container, smart pointer, or raw pointer? Each backend re-discovers this; centralising it in the walker (or in a tiny shape-classifier) would deduplicate a lot of backend code.
 
-# A practical "what's next" punch list
+## Features beyond languages
 
-1. ~~Annotation-pack refactor~~ — done.
-2. ~~Enums~~ — done.
-3. ~~Constructors~~ — done.
-4. ~~Bases / inherited members~~ — done (with virtual/override detection).
-5. Method qualifiers (`const` / `noexcept` / ref) + parameter names/defaults — the qualifiers follow the `virtual_spec` pattern exactly. (`const` / `noexcept` are now captured into the IR's `GenMethod` for trampoline signatures; still not surfaced to the *runtime* visitor pack.)
-6. ~~Have a backend *consume* `virtual_spec`~~ — done: **Python** emits pybind11 trampolines (`PYBIND11_OVERRIDE[_PURE]`) and **Node** emits N-API trampolines (`Js_T : public T, NapiTrampoline` with a function-identity recursion guard). Both verified end-to-end — the generated module compiles and a Python/JS subclass override dispatches back through the C++ virtual (see `examples/trampoline` and `examples/trampoline-node`). Julia still ignores it; the N-API path carries a by-value-marshalling caveat (a trampolined type passed by value is sliced).
-7. Operators & static fields / nested types.
-8. ~~Parameter names / defaults~~ — done (item 5's second half). What is left of 5 is the qualifiers reaching the *runtime* visitor pack.
-9. ~~Documentation for the generated binding~~ — done, but NOT via the walk: comments are not reflectable, so `rosetta_gen` reads them out of the header text (`tools/rosetta_gen/doccomments.cpp`) and `generate()` matches the result onto the reflected signatures. Per-parameter annotations (below) remain the reflection-side gap.
+1. An MCP server backend. We already have REST, OpenAPI and the Dynamic backend (call by name). Turning reflected methods into MCP tools would let an LLM agent drive a C++ model directly: doc{} becomes the tool description, range{} and combobox{} become the JSON Schema constraints. It's mostly the REST and OpenAPI pieces reassembled, and it's very current.
 
-All remaining items are additive — no further walker-signature changes are required.
+2. Zero-copy arrays. There's actually no buffer-protocol, ndarray or mdspan support. Mapping std::span, std::mdspan or contiguous std::vector<double> to NumPy arrays (Python), Float64Array (Node/Wasm) and Array (Julia) without copying matters a lot to scientific users. std::vector marshalling by copy is the bottleneck for big meshes and fields.
+
+3. Callbacks (std::function parameters). These are currently skipped. Passing a Python, JS or Lua function into C++ (progress callbacks, user-defined functions in solvers) is probably the most-asked-for gap once people use the bindings for real.
+
+4. Operators and protocols. Mapping operator+, operator==, operator[], begin/end and size to __add__, __eq__, __getitem__, __iter__ and __len__ (and the equivalents in other languages). Reflection can detect these automatically.
+
+5. More of the standard library: std::variant (a union type in TypeScript and Python), std::shared_ptr, std::array, std::tuple/std::pair, and mapping exceptions to the host language.
+
+6.  Schemas. JSON Schema on its own (for validating configs), .proto or FlatBuffers, and maybe GraphQL SDL. These are cheap because the intermediate representation already carries types and annotations.
+
+7.  An API-diff tool. Dump the intermediate representation per release and compare versions to report breaking changes (removed or renamed members, changed signatures). It's a nice use of reflection that most binding tools can't offer.
+
+8.  Tests generated from annotations. range{lo, hi} already defines what valid input is, so rosetta could emit property-based or fuzz tests (Hypothesis in Python, RapidCheck in C++) that check validation on every backend.

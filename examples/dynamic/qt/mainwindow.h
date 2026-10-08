@@ -15,15 +15,26 @@
 #pragma once
 
 #include <QDockWidget>
+#include <QLabel>
 #include <QListWidget>
 #include <QMainWindow>
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QToolBar>
 
+#include <rosetta/runtime/mcp_qt_http.h>
+
+#include "claudepanel.h"
 #include "console.h"
 #include "propertypanel.h"
 #include "sceneview.h"
+
+#if ROSETTA_MCP_LUA
+#include <rosetta/runtime/mcp_lua.h> // run_script for the Claude panel
+#endif
+#if ROSETTA_MCP_PYTHON
+#include <rosetta/runtime/mcp_python.h> // run_python for the Claude panel
+#endif
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -37,6 +48,14 @@ public:
         panel_   = new PropertyPanel(this);
         console_ = new Console(&interp_, this);
         objects_ = new QListWidget(this);
+
+#if ROSETTA_MCP_LUA
+        rosetta::mcp::enable_lua(mcp_);
+#endif
+#if ROSETTA_MCP_PYTHON
+        rosetta::mcp::enable_python(mcp_);
+#endif
+        claude_ = new ClaudePanel(&interp_, &mcp_, this);
 
         setCentralWidget(view_);
 
@@ -53,6 +72,14 @@ public:
         bottom->setWidget(console_);
         addDockWidget(Qt::BottomDockWidgetArea, bottom);
 
+        // Claude shares the bottom area with the console, as a second tab:
+        // two ways of driving the same objects.
+        auto *chat = new QDockWidget(QStringLiteral("Claude"), this);
+        chat->setWidget(claude_);
+        addDockWidget(Qt::BottomDockWidgetArea, chat);
+        tabifyDockWidget(bottom, chat);
+        bottom->raise();
+
         // ---- the interpreter talks to the UI, not the other way round ----
         interp_.out = [this](const std::string &s, bool is_error) {
             console_->write(QString::fromStdString(s), is_error);
@@ -60,6 +87,10 @@ public:
         interp_.changed = [this] { refresh_all(); };
 
         connect(console_, &Console::executed, this, &MainWindow::refresh_all);
+        connect(claude_, &ClaudePanel::sceneChanged, this, [this] {
+            refresh_all();
+            view_->repaint(); // show each step of a multi-call turn, not just the last
+        });
         connect(view_, &SceneView::stats, this, [this](int objs, int tris, double ms) {
             statusBar()->showMessage(
                 QStringLiteral(
@@ -84,6 +115,7 @@ public:
                 });
 
         build_menus();
+        start_mcp_host();
 
         console_->write(QStringLiteral(
             "Metadata loaded. Everything in this window was built by querying it — "
@@ -108,6 +140,16 @@ public:
             objects_->setCurrentRow(0);
         }
     }
+
+    /** @brief Ask Claude from outside (used by `--claude`); raises its tab. */
+    void ask_claude(const QString &text) {
+        if (auto *dock = qobject_cast<QDockWidget *>(claude_->parentWidget())) {
+            dock->raise();
+        }
+        claude_->ask(text);
+    }
+
+    ClaudePanel *claude() const { return claude_; }
 
     /** @brief Run one console command from outside (used by `--run`). */
     void command(const QString &cmd) {
@@ -171,6 +213,76 @@ private slots:
 
 private:
     /**
+     * @brief Serve this window's scene to MCP clients over HTTP.
+     *
+     * The same in-process server the Claude panel uses, reachable from outside
+     * — so Claude Code (or any MCP client) drives the objects this window
+     * draws. Port from ROSETTA_MCP_PORT (default 8770; 0 disables).
+     */
+    void start_mcp_host() {
+        const quint16 port =
+            quint16(qEnvironmentVariableIntValue("ROSETTA_MCP_PORT") ?: 8770);
+        if (qEnvironmentVariableIsSet("ROSETTA_MCP_PORT") &&
+            qEnvironmentVariableIntValue("ROSETTA_MCP_PORT") == 0) {
+            return;
+        }
+        host_.set_handler([this](const rosetta::mcp::json &msg) {
+            const bool is_call = msg.value("method", "") == "tools/call";
+            if (is_call) {
+                scenesync::publish(interp_, mcp_);
+            }
+            std::optional<rosetta::mcp::json> out = mcp_.handle(msg);
+            if (is_call) {
+                scenesync::adopt(interp_, mcp_);
+                log_mcp_call(msg, out);
+                refresh_all();
+                view_->repaint();
+            }
+            return out;
+        });
+
+        auto *badge = new QLabel(this);
+        statusBar()->addPermanentWidget(badge);
+        if (!host_.listen(port)) {
+            badge->setText(QStringLiteral("MCP: off"));
+            console_->write(QStringLiteral("MCP host could not listen on port %1: %2 "
+                                           "(set ROSETTA_MCP_PORT to another port)")
+                                .arg(port)
+                                .arg(host_.error()),
+                            true);
+            return;
+        }
+        badge->setText(QStringLiteral("MCP: %1").arg(host_.url()));
+        claude_->set_mcp_url(host_.url()); // the Claude tab's "Claude Code" backend uses it
+        console_->write(QStringLiteral("MCP server for this scene: %1\n"
+                                       "  connect Claude Code with:  claude mcp add --transport "
+                                       "http scene-viewer %1")
+                            .arg(host_.url()));
+    }
+
+    /** @brief One console line per tool call an outside client makes. */
+    void log_mcp_call(const rosetta::mcp::json &msg, const std::optional<rosetta::mcp::json> &out) {
+        const auto &params = msg.contains("params") ? msg["params"] : rosetta::mcp::json::object();
+        QString     line   = QStringLiteral("[mcp] ") +
+                       QString::fromStdString(params.value("name", std::string("?")));
+        const auto args = params.value("arguments", rosetta::mcp::json::object());
+        QString    detail;
+        if (args.contains("code")) {
+            detail = QStringLiteral("(%1 line script)")
+                         .arg(QString::fromStdString(args["code"].get<std::string>()).count('\n') + 1);
+        } else {
+            detail = QString::fromStdString(args.dump());
+        }
+        if (detail.size() > 160) {
+            detail = detail.left(160) + QStringLiteral("…");
+        }
+        const bool failed = !out || out->contains("error") ||
+                            (*out)["result"].value("isError", false);
+        console_->write(line + QStringLiteral(" ") + detail + (failed ? QStringLiteral("  ✗") : QString()),
+                        failed);
+    }
+
+    /**
      * @brief Build the "Add" menu from the registry.
      *
      * Looks for static methods whose return type is a DRAWABLE class and whose
@@ -227,8 +339,11 @@ private:
                         [this] { console_->run(QStringLiteral("vars")); });
     }
 
-    dynui::Interp  interp_;
-    SceneView     *view_    = nullptr;
+    dynui::Interp        interp_;
+    rosetta::mcp::Server mcp_{rosetta::mcp::Options{.name = "scene-viewer"}};
+    rosetta::mcp::QtHttpHost host_{mcp_};
+    ClaudePanel         *claude_ = nullptr;
+    SceneView           *view_   = nullptr;
     PropertyPanel *panel_   = nullptr;
     Console       *console_ = nullptr;
     QListWidget   *objects_ = nullptr;

@@ -61,7 +61,7 @@ if(APPLE AND CMAKE_OSX_SYSROOT AND
         "Stand-in for the AGL framework the macOS 15 SDK removed" FORCE)
 endif()
 
-find_package(Qt6 6.5 QUIET COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+find_package(Qt6 6.5 QUIET COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Network)
 if(NOT Qt6_FOUND)
     message(STATUS
         "Qt 6 not found — skipping the `viewer` target. "
@@ -79,8 +79,59 @@ add_executable(viewer
     qt/mainwindow.h
     qt/sceneview.h
     qt/propertypanel.h
-    qt/console.h)
+    qt/console.h
+    qt/claudepanel.h
+    qt/scenesync.h)
 
 target_link_libraries(viewer PRIVATE
     scene_meta
-    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets)
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Network)
+
+# ---- the Claude panel ------------------------------------------------------
+# It talks to an in-process rosetta::mcp::Server (<rosetta/runtime/mcp.h>),
+# which needs nlohmann/json; Lua adds run_script, Python (opt-in) run_python.
+find_package(nlohmann_json 3.11 QUIET)
+if(NOT nlohmann_json_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG        v3.11.3)
+    FetchContent_MakeAvailable(json)
+endif()
+target_link_libraries(viewer PRIVATE nlohmann_json::nlohmann_json)
+
+if(APPLE AND EXISTS /opt/homebrew)
+    list(APPEND CMAKE_PREFIX_PATH /opt/homebrew)
+endif()
+if(NOT LUA_LIBRARIES)
+    find_package(Lua 5.4 EXACT QUIET)
+endif()
+if(NOT LUA_LIBRARIES)
+    find_package(Lua 5.3 QUIET)
+endif()
+if(LUA_LIBRARIES)
+    message(STATUS "Claude panel: run_script enabled (Lua at ${LUA_INCLUDE_DIR})")
+    target_include_directories(viewer PRIVATE ${LUA_INCLUDE_DIR})
+    target_link_libraries(viewer PRIVATE ${LUA_LIBRARIES})
+    target_compile_definitions(viewer PRIVATE ROSETTA_MCP_LUA=1)
+endif()
+
+# run_python is NOT sandboxed: Claude's scripts would run with your
+# permissions. Opt in with -DROSETTA_MCP_PYTHON=ON.
+option(ROSETTA_MCP_PYTHON "Claude panel: offer run_python (embeds CPython, not sandboxed)" OFF)
+if(ROSETTA_MCP_PYTHON)
+    find_package(Python 3.10 REQUIRED COMPONENTS Interpreter Development.Embed)
+    execute_process(COMMAND "${Python_EXECUTABLE}" -c "import pybind11; print(pybind11.get_cmake_dir())"
+        OUTPUT_VARIABLE _pybind11_dir OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    find_package(pybind11 CONFIG QUIET HINTS "${_pybind11_dir}")
+    if(NOT pybind11_FOUND)
+        include(FetchContent)
+        FetchContent_Declare(pybind11
+            GIT_REPOSITORY https://github.com/pybind/pybind11.git
+            GIT_TAG        v3.0.1)
+        FetchContent_MakeAvailable(pybind11)
+    endif()
+    target_link_libraries(viewer PRIVATE pybind11::embed)
+    target_compile_definitions(viewer PRIVATE ROSETTA_MCP_PYTHON=1)
+    message(STATUS "Claude panel: run_python enabled (${Python_EXECUTABLE}, not sandboxed)")
+endif()

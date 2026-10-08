@@ -39,10 +39,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/binding others-ParaView%20%7C%20Json%20%7C%20Html%20%7C%20REST%20%7C%20OpenAPI%20%7C%20Markdown-green.svg" alt="Bindings">
+  <img src="https://img.shields.io/badge/binding others-ParaView%20%7C%20Json%20%7C%20Html%20%7C%20REST%20%7C%20OpenAPI%20%7C%20Markdown%20%7C%20MCP-green.svg" alt="Bindings">
 </p>
 
-A C++26 reflection playground with **19 generator backends** — Python (pybind11 / nanobind), Node, WebAssembly, Qt, QML, Dear ImGui, REST, Julia, Lua, OpenAPI, JSON, TypeScript, C#, Java, Markdown, HTML, ParaView, a runtime object model... bindings for **your existing classes — without modifying them**. Point rosetta at a header via a small [manifest.json](./docs/MANIFEST.md), run one tool, get per-language binding projects out.
+A C++26 reflection playground with **20 generator backends** — Python (pybind11 / nanobind), Node, WebAssembly, Qt, QML, Dear ImGui, REST, Julia, Lua, OpenAPI, JSON, TypeScript, C#, Java, Markdown, HTML, ParaView, a runtime object model, an MCP server for LLM agents... bindings for **your existing classes — without modifying them**. Point rosetta at a header via a small [manifest.json](./docs/MANIFEST.md), run one tool, get per-language binding projects out.
 
 > **Your target compiler doesn't support reflection?** Generate the expanded binding once on a Linux or macOS host with a C++26 / P2996 compiler — e.g. the [Bloomberg `clang-p2996`](https://github.com/bloomberg/clang-p2996) fork — then ship and build the generated sources anywhere with an off-the-shelf toolchain (plain Clang / GCC / MSVC, or an off-the-shelf emsdk for WebAssembly). No reflection is needed on the target (see **Reflection-free by construction** below).
 
@@ -118,6 +118,7 @@ In a manifest-driven build you don't write that by hand: add an `"annotations": 
 | 17  | **HTML**  — self-contained, styled API reference page                                                                                               |   ✅   |
 | 18  | **ParaView**  — Server Manager XML for a plugin                                                                                                 |   ✅   |
 | 19  | **Dynamic**  — the IR as runtime *data*: a `MetaClass` per type + one thunk per member, queried and called by name ([details](examples/dynamic)) |   ✅   |
+| 20  | **MCP**  — a Model Context Protocol server: an LLM agent (Claude Code, Claude Desktop, …) creates, inspects and drives your C++ objects through generic tools ([design](docs/MCP.md)) |   ✅   |
 
 > New backends register without touching the generator, thanks to the visitor pattern — see [EXTENDING_BACKEND](docs/EXTENDING_BACKEND.md).
 > **C++26** = targets generated against the reflection toolchain.
