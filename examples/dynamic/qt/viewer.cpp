@@ -26,7 +26,11 @@ int main(int argc, char **argv) {
     //          --shot out.png
     //
     // Each --run goes through the very same console the user types into.
-    QString     shot;
+    //   viewer --claude "relax the bunny" --shot out.png
+    //
+    // sends one message to the Claude panel at startup (point
+    // ANTHROPIC_BASE_URL at a local mock to exercise the loop offline).
+    QString     shot, ask;
     QStringList script;
     for (int i = 1; i + 1 < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
@@ -34,6 +38,8 @@ int main(int argc, char **argv) {
             shot = QString::fromLocal8Bit(argv[i + 1]);
         } else if (a == "--run") {
             script << QString::fromLocal8Bit(argv[i + 1]);
+        } else if (a == "--claude") {
+            ask = QString::fromLocal8Bit(argv[i + 1]);
         }
     }
 
@@ -56,13 +62,25 @@ int main(int argc, char **argv) {
     for (const QString &cmd : script) {
         w.command(cmd);
     }
+    if (!ask.isEmpty()) {
+        w.ask_claude(ask);
+    }
 
     if (!shot.isEmpty()) {
-        QTimer::singleShot(1200, &w, [&w, shot] {
+        auto take = [&w, shot] {
             const bool ok = w.grab().save(shot);
             qInfo("%s %s", ok ? "wrote" : "FAILED to write", qPrintable(shot));
             QCoreApplication::exit(ok ? 0 : 1);
-        });
+        };
+        if (ask.isEmpty()) {
+            QTimer::singleShot(1200, &w, take);
+        } else {
+            // Shoot once Claude has answered (a turn can take a while), with a
+            // generous cap so a hung turn still ends the run.
+            QObject::connect(w.claude(), &ClaudePanel::turnFinished, &w,
+                             [&w, take] { QTimer::singleShot(500, &w, take); });
+            QTimer::singleShot(300000, &w, take);
+        }
     }
     return app.exec();
 }

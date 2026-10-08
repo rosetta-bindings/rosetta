@@ -2934,6 +2934,7 @@ endif()
 #include <rosetta/backends/html.h>
 #include <rosetta/backends/json.h>
 #include <rosetta/backends/markdown.h>
+#include <rosetta/backends/mcp.h>
 #include <rosetta/backends/openapi.h>
 #include <rosetta/backends/paraview.h>
 #include <rosetta/backends/rest.h>
@@ -2965,6 +2966,7 @@ namespace rosetta {
             m["openapi"]        = std::make_shared<backend::OpenApi>();
             m["paraview"]       = std::make_shared<backend::ParaView>();
             m["dynamic"]        = std::make_shared<backend::Dynamic>();
+            m["mcp"]            = std::make_shared<backend::Mcp>();
 
             // DEPRECATED spellings. The first seven languages used to ship TWO
             // backends — a reflection-driven "thin" one whose generated code

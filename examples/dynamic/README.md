@@ -11,6 +11,7 @@ There are **three consumers over one set of generated tables**, and none of them
 ./run.sh -i         # same, but interactive
 ./run.sh inspect    # the registry walker the backend emits for free
 ./run.sh viewer     # Qt window: 3D view + generated property panel + console
+./run.sh mcp        # an MCP server: let an LLM agent drive the same library
 ```
 
 Stage 1 needs clang-p2996. Stage 2 — every consumer and the generated metadata — builds with an **off-the-shelf C++20 compiler**, because the metadata is emitted as *data*, not as splices. The Qt target is skipped automatically if Qt 6 is not found; point at it with `-DQT_DIR=/path/to/Qt/6.x/<platform>`.
@@ -161,18 +162,65 @@ through to the parent and the parent cannot be freed while the sub-form is open.
 
 Every other backend makes such a member vanish, which looks identical to never having asked for it.
 
+## An LLM agent as a fourth consumer (MCP)
+
+The manifest also has an `mcp` target. It emits the same metadata tables plus a ten-line `main()` that serves them over the [Model Context Protocol](https://modelcontextprotocol.io), so an agent such as Claude Code can drive the library with no generated per-class glue ([design](../../docs/MCP.md)):
+
+```bash
+./run.sh mcp                                     # builds bindings/mcp/build/scene_mcp
+claude mcp add scene -- "$PWD/bindings/mcp/build/scene_mcp"
+```
+
+Then ask, for example: *"load the bunny, relax it until the worst triangle is above 0.1, and tell me what settings you used"*. The agent sees eight generic tools (`list_classes`, `describe_class`, `create_object`, `call_method`, `inspect_object`, `set_fields`, …). It finds `Relaxer` and its documented, range-checked fields through `describe_class`, and works on live objects held under handles such as `bunny` and `Relaxer#1`. Ranges, read-only fields, overloads and parent pinning are the core's, exactly as in the terminal session above, so `set_fields {opacity: 7}` comes back as `opacity = 7 is outside [0, 1]` and the agent corrects itself. `positions()` comes back as `{length: 107841, min, max, mean, head}` rather than 107 841 numbers.
+
+### Claude Code driving the viewer
+
+The viewer also hosts an MCP server for its own scene (the console prints the
+URL at startup). Connect Claude Code to it and chat from the terminal; the
+viewer updates live and logs every call in its console:
+
+```bash
+./run.sh viewer
+claude mcp add --transport http scene-viewer http://127.0.0.1:8770/mcp
+```
+
+This uses your Claude Code subscription. The in-app panel below calls the API
+directly and needs API credits. Change the port with `ROSETTA_MCP_PORT`; `0`
+turns the host off.
+
+### Claude inside the viewer
+
+The Qt viewer has a **Claude** tab next to the console. Its selector picks
+**Claude Code (your login)**, which runs the `claude` CLI with your Claude Code
+subscription, like the VS Code extension, with no API key, or **Anthropic API**,
+which needs an `ANTHROPIC_API_KEY` with credits. Ask for something and
+Claude drives the same objects the view draws, through the same tools an MCP
+client gets (including `run_script`). The view and the property panel update
+after every call:
+
+```bash
+export ANTHROPIC_API_KEY=...        # read at startup
+./run.sh viewer                      # then open the "Claude" tab
+```
+
+`-DROSETTA_MCP_PYTHON=ON` at configure time adds `run_python`; it is not
+sandboxed, so it is off by default. The model defaults to `claude-opus-5`;
+override it with `ROSETTA_CLAUDE_MODEL`. Details are in the
+[design note](../../docs/MCP.md#in-app-chat-the-qt-viewers-claude-panel).
+
 ## Layout
 
 | File | |
 |---|---|
 | [`scene.h`](scene.h) | the "existing library" — plain C++, never modified |
 | [`Mesh.ann.json`](Mesh.ann.json), [`Vec3.ann.json`](Vec3.ann.json) | annotations, out of line, so the header stays plain ([details](../../docs/OUT_OF_LINE_ANNOTATIONS.md)) |
-| [`manifest.json`](manifest.json) | targets `dynamic` (and `markdown`, for contrast) |
+| [`manifest.json`](manifest.json) | targets `dynamic`, `mcp` (and `markdown`, for contrast) |
 | [`interp.h`](interp.h) | the interpreter + the metadata queries a UI needs — **shared verbatim** by both front-ends |
 | [`demo.cpp`](demo.cpp) | terminal front-end |
-| [`qt/`](qt) | Qt front-end: `sceneview.h` (3D), `propertypanel.h` (widgets), `console.h`, `mainwindow.h`, `viewer.cpp` |
+| [`qt/`](qt) | Qt front-end: `sceneview.h` (3D), `propertypanel.h` (widgets), `console.h`, `claudepanel.h` (chat with Claude), `scenesync.h` (scene ⇄ MCP handle table), `mainwindow.h`, `viewer.cpp` |
 | [`CMakeLists.txt`](CMakeLists.txt) | builds the consumers **next to** the generated TU; the Qt target is optional |
 | `bindings/dynamic/` | generated: `auto_dynamic.{h,cpp}`, `inspect.cpp`, `CMakeLists.txt` |
+| `bindings/mcp/` | generated: the same tables + `mcp_server.cpp`, a standalone CMake project |
 
 The consumers live *outside* `bindings/` on purpose: everything under `bindings/` is regenerated output and must never be edited, so they sit beside it and compile the generated translation unit into their own targets. Same layering as [extending a generated binding in C++](../../README.md#extending-a-generated-binding-in-c).
 
