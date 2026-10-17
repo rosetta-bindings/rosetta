@@ -55,7 +55,9 @@
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -76,6 +78,48 @@
 #include "../interp.h"
 #include "scenesync.h"
 
+/**
+ * @brief The prompt box: multi-line, Enter sends, Shift+Enter starts a new line.
+ *
+ * Grows with its content up to a few lines, then scrolls — so a long request
+ * (or a pasted script) is readable before it is sent.
+ */
+class PromptEdit : public QPlainTextEdit {
+    Q_OBJECT
+
+public:
+    explicit PromptEdit(QWidget *parent = nullptr) : QPlainTextEdit(parent) {
+        setTabChangesFocus(true);
+        connect(this, &QPlainTextEdit::textChanged, this, &PromptEdit::fit);
+        fit();
+    }
+
+signals:
+    void submitted();
+
+protected:
+    void keyPressEvent(QKeyEvent *e) override {
+        const bool enter = e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter;
+        if (enter && !(e->modifiers() & Qt::ShiftModifier)) {
+            emit submitted();
+            return;
+        }
+        if (enter) { // Shift+Enter: a plain newline, never a new paragraph block style
+            insertPlainText(QStringLiteral("\n"));
+            return;
+        }
+        QPlainTextEdit::keyPressEvent(e);
+    }
+
+private:
+    void fit() {
+        const int lines  = qBound(1, int(document()->blockCount()), 6);
+        const int line_h = fontMetrics().lineSpacing();
+        const int frame  = int(document()->documentMargin() * 2) + frameWidth() * 2 + 4;
+        setFixedHeight(qMax(2, lines) * line_h + frame);
+    }
+};
+
 class ClaudePanel : public QWidget {
     Q_OBJECT
 
@@ -91,10 +135,11 @@ public:
         log_->setOpenExternalLinks(true);
         log_->setStyleSheet("font-size: 13px;");
 
-        input_ = new QLineEdit(this);
+        input_ = new PromptEdit(this);
         input_->setPlaceholderText(
             QStringLiteral("Ask Claude — e.g. \"relax the bunny until its worst triangle "
-                           "is above 0.1, then make it glossy\""));
+                           "is above 0.1, then make it glossy\"   (Enter sends, "
+                           "Shift+Enter: new line)"));
         send_  = new QPushButton(QStringLiteral("Send"), this);
         stop_  = new QPushButton(QStringLiteral("Stop"), this);
         retry_ = new QPushButton(QStringLiteral("Retry"), this);
@@ -123,7 +168,7 @@ public:
         v->addLayout(row);
         v->addWidget(status_);
 
-        connect(input_, &QLineEdit::returnPressed, this, &ClaudePanel::submit);
+        connect(input_, &PromptEdit::submitted, this, &ClaudePanel::submit);
         connect(send_, &QPushButton::clicked, this, &ClaudePanel::submit);
         connect(stop_, &QPushButton::clicked, this, &ClaudePanel::stop);
         connect(retry_, &QPushButton::clicked, this, [this] {
@@ -160,7 +205,7 @@ public:
 
     /** @brief Send `text` as if typed (used by the viewer's --claude flag). */
     void ask(const QString &text) {
-        input_->setText(text);
+        input_->setPlainText(text);
         submit();
     }
 
@@ -173,7 +218,7 @@ signals:
 
 private slots:
     void submit() {
-        const QString text = input_->text().trimmed();
+        const QString text = input_->toPlainText().trimmed();
         if (text.isEmpty() || busy_) {
             return;
         }
@@ -693,7 +738,7 @@ private:
     rosetta::mcp::Server *server_;
 
     QTextBrowser *log_    = nullptr;
-    QLineEdit    *input_  = nullptr;
+    PromptEdit   *input_  = nullptr;
     QPushButton  *send_   = nullptr;
     QPushButton  *stop_   = nullptr;
     QPushButton  *retry_  = nullptr;

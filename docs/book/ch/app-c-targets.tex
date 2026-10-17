@@ -31,6 +31,8 @@
 \lang{paraview} & Server Manager plugin XML & text output & --- \\
 \lang{dynamic} & the IR as runtime data & off-the-shelf compiler & all, at
   call time \\
+\lang{mcp} & MCP server (stdio) for AI agents & off-the-shelf compiler & all, at
+  call time \\
 \bottomrule
 \end{longtable}
 \end{center}
@@ -112,6 +114,9 @@ IR.
 \lang{dynamic} & text in the emitted \code{MetaClass} tables & names in the
   parameter tables \\
 \addlinespace
+\lang{mcp} & \code{describe\_class} output the agent reads & keyword
+  arguments by parameter name \\
+\addlinespace
 \lang{node} \lang{wasm} \lang{lua} \lang{julia} & --- (no docstring slot;
   pair with \lang{typescript}) & --- (the wrappers spell positional locals) \\
 \addlinespace
@@ -192,7 +197,7 @@ A \code{shared\_ptr<T>} \emph{parameter} is skipped everywhere --- take
 \textbf{Backend} & \textbf{Build} \\
 \midrule
 \lang{python}, \lang{nanobind}, \lang{rest}, \lang{json}, \lang{lua},
-  \lang{imgui} & plain \code{cmake} configure + build \\
+  \lang{imgui}, \lang{dynamic}, \lang{mcp} & plain \code{cmake} configure + build \\
 \lang{node} & \code{npm install} + \code{npm run build} \\
 \lang{wasm} & \code{emcmake cmake} + \code{cmake --build} \\
 \lang{julia} & \code{cmake} (locates JlCxx by running \code{julia}) \\
@@ -227,6 +232,9 @@ A missing toolchain is a \emph{skip with a note}, not a failure. A missing
 \lang{imgui} & nothing; GLFW and OpenGL3 are auto-fetched \\
 \lang{rest} & cpp-httplib and nlohmann/json, fetched on first configure, plus
   the C++26 toolchain \\
+\lang{mcp} & nlohmann/json (fetched if missing); optionally Lua 5.3+ for
+  \code{run\_script}, and Python 3.10+ dev files + pybind11 for
+  \code{run\_python} (\code{-DROSETTA\_MCP\_PYTHON=ON}) \\
 \bottomrule
 \end{tabular}
 \end{center}

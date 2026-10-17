@@ -62,6 +62,8 @@ need the C++26 toolchain to build.
 \lang{html}       & styled API reference page & text output \\
 \lang{paraview}   & ParaView Server Manager plugin XML & text output \\
 \lang{dynamic}    & the IR as runtime data (Chapter~\ref{ch:dynamic}) & off-the-shelf compiler \\
+\lang{mcp}        & MCP server for AI agents, over the same runtime data
+  (Chapter~\ref{ch:mcp}) & off-the-shelf compiler \\
 \bottomrule
 \end{longtable}
 \end{center}
@@ -70,6 +72,9 @@ Notes worth having:
 
 \begin{itemize}
   \item \textbf{Qt / QML} need Qt 6, but no \code{moc} on the generated code.
+  \item \textbf{MCP} needs nlohmann/json (fetched if missing). Lua 5.3+, when
+    found, adds the \code{run\_script} tool; \code{-DROSETTA\_MCP\_PYTHON=ON}
+    adds \code{run\_python} (not sandboxed). See Chapter~\ref{ch:mcp}.
   \item \textbf{Lua} needs Lua 5.1--5.4 or LuaJIT --- sol2 does not support Lua
     5.5 yet. sol2 itself is fetched at configure time.
   \item The text-only outputs (\lang{markdown}, \lang{html}, \lang{typescript},

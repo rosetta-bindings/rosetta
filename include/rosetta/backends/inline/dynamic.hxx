@@ -692,8 +692,12 @@ int main() {
 
                 methods += "        {.name = " + dyn_quote(m.name) + ",\n";
                 methods += "         .ret = &" + T.id(m.ret, c) + ",\n";
-                if (!m.doc.empty()) {
-                    methods += "         .doc = " + dyn_quote(m.doc) + ",\n";
+                // The parameter and return prose too (@param / @return), folded
+                // in the way the Python docstrings do it — the MetaParam tables
+                // have no doc slot, and a reader of this text (a tooltip, an
+                // MCP client's describe_class) wants the whole contract.
+                if (const std::string doc = px_method_doc(m); !doc.empty()) {
+                    methods += "         .doc = " + dyn_quote(doc) + ",\n";
                 }
                 if (!m.params.empty()) {
                     methods += "         .params = " + params_id +
@@ -790,8 +794,11 @@ int main() {
             // NOT GenClass::doc — that is class_markdown(), a whole README
             // fragment meant for a generated document. What a tooltip needs is
             // the class's own rosetta::doc annotation, if it carries one.
+            // Failing that, the class comment harvested from the header.
             if (const doc *d = find_annotation<doc>(k.annotations)) {
                 out.cls += "        .doc = " + dyn_quote(d->text) + ",\n";
+            } else if (!k.brief.empty()) {
+                out.cls += "        .doc = " + dyn_quote(k.brief) + ",\n";
             }
             if (n_bases) {
                 out.cls += "        .bases = k_" + id +

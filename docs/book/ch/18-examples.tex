@@ -41,7 +41,9 @@ detail to copy from.
 \code{examples/dynamic} &
   The \lang{dynamic} backend end to end: one set of generated metadata driving a
   terminal interpreter \emph{and} a Qt viewer (3-D view, property panel,
-  console), neither naming a bound type. \\
+  console), neither naming a bound type. Also the \lang{mcp} target: a stdio
+  server, an MCP host inside the viewer, and a Claude tab
+  (Ch.~\ref{ch:mcp}). \\
 \addlinespace
 \code{examples/scriptable-model} &
   The two-stage pipeline of Chapter~\ref{ch:scriptable}. \\
@@ -163,6 +165,24 @@ type list, its parameters appeared in the property panel with their declared
 ranges, and its method appeared as a button.
 
 That is what ``UI by query rather than by codegen'' buys, stated as a diff.
+
+\subsection*{The fourth consumer: an AI agent}
+
+The manifest also lists an \lang{mcp} target, and the viewer hosts an MCP
+server for its own scene, so Claude can be the next consumer --- from Claude
+Code in a terminal, or from the viewer's own Claude tab:
+
+\begin{lstlisting}[style=sh]
+./run.sh viewer
+claude mcp add --transport http scene-viewer http://127.0.0.1:8770/mcp
+\end{lstlisting}
+
+It needed no new metadata and no change to \code{scene.h}. Asked to ``make the
+cube red and subdivide the sphere once'', Claude made three tool calls
+(\code{set\_fields}, \code{call\_method subdivide},
+\code{call\_method triangleCount}) and the view changed under them; asked to
+relax the bunny, it sent one Lua script. Chapter~\ref{ch:mcp} walks through
+it.
 
 \section{Rosetta in the wild}
 
