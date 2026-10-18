@@ -93,6 +93,9 @@ namespace rosetta {
                 }
                 tag("choices: " + c);
             }
+            for (const auto &[label, text] : ann_facts(f.annotations)) {
+                tag(html_escape(label + (text.empty() ? "" : ": " + text)));
+            }
             return d;
         }
 
@@ -194,6 +197,16 @@ namespace rosetta {
                         }
                         if (!m.returns.empty()) {
                             out += "<p><em>Returns:</em> " + html_escape(m.returns) + "</p>\n";
+                        }
+                        const auto facts = ann_facts(m.annotations);
+                        if (!facts.empty()) {
+                            out += "<p>";
+                            for (const auto &[label, text] : facts) {
+                                out += "<span class=\"tag\">" +
+                                       html_escape(label + (text.empty() ? "" : ": " + text)) +
+                                       "</span> ";
+                            }
+                            out += "</p>\n";
                         }
                     }
                 }

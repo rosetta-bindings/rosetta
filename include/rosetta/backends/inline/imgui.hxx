@@ -173,8 +173,8 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
 
         // One field → one imgw:: helper call bound to `t.<name>`.
         inline std::string imgx_field(const GenField &f) {
-            const std::string disp = imgx_str(qtx_display(f.name, f.annotations));
-            const std::string tip  = imgx_str(f.doc);
+            const std::string disp = imgx_str(ui_label(f.name, f.annotations));
+            const std::string tip  = imgx_str(ui_tip(f.doc, f.annotations, &f.range, &f.choices));
             const std::string ro   = f.is_readonly ? "true" : "false";
             const std::string mem  = "t." + f.name;
             if (f.type.kind == "boolean") {
@@ -182,9 +182,18 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
                        tip + ");\n";
             }
             if (f.type.kind == "number") {
+                if (f.range.has && find_annotation<rosetta::widget::progress_tag>(f.annotations)) {
+                    return "    rosetta::imgw::progress(" + disp + ", " + mem + ", " +
+                           num_str(f.range.min) + ", " + num_str(f.range.max) + ", " + tip + ");\n";
+                }
+                const auto *st = find_annotation<rosetta::step>(f.annotations);
+                const auto *dc = find_annotation<rosetta::decimals>(f.annotations);
+                const bool  lg = find_annotation<rosetta::log_scale>(f.annotations) != nullptr;
                 return "    rosetta::imgw::scalar(" + disp + ", " + mem + ", " + ro + ", " +
                        (f.range.has ? "true" : "false") + ", " + num_str(f.range.min) + ", " +
                        num_str(f.range.max) + ", " + tip + ", " + imgx_hint(f.annotations) +
+                       ", " + (st ? num_lit(st->value) : "0") + ", " +
+                       (dc ? std::to_string(dc->count) : "-1") + ", " + (lg ? "true" : "false") +
                        ");\n";
             }
             if (f.type.kind == "string") {
@@ -227,6 +236,11 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
                        ", " + ro + ", " + tip + ");\n";
             }
             if (f.type.kind == "vector" && !f.type.element.empty() &&
+                f.type.element.front().kind == "number" &&
+                find_annotation<rosetta::widget::plot_tag>(f.annotations)) {
+                return "    rosetta::imgw::plot(" + disp + ", " + mem + ", " + tip + ");\n";
+            }
+            if (f.type.kind == "vector" && !f.type.element.empty() &&
                 f.type.element.front().kind == "number") {
                 return "    rosetta::imgw::scalar_vector(" + disp + ", " + mem + ", " + ro +
                        ", " + tip + ");\n";
@@ -244,7 +258,7 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
             if (!qtx_method_ok(m)) {
                 return {};
             }
-            const std::string disp = qtx_display(m.name, m.annotations);
+            const std::string disp = ui_label(m.name, m.annotations);
             std::string       btn  = disp; // bare button: the display name is the caption
             if (const auto *b = find_annotation<rosetta::button>(m.annotations); b && b->label &&
                 b->label[0]) {
@@ -264,15 +278,18 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
                 const GenType    &t  = m.params[i].type;
                 const std::string an = "a" + std::to_string(i);
                 const std::string lb = imgx_str(m.params[i].name);
+                // A defaulted parameter (C++ default or rosetta::default_value)
+                // starts at its default.
+                const std::string &dflt = m.params[i].default_text;
                 if (t.kind == "string") {
-                    s += "        static std::string " + an + ";\n";
+                    s += "        static std::string " + an + (dflt.empty() ? "" : " = " + dflt) + ";\n";
                     s += "        rosetta::imgw::text(" + lb + ", " + an + ", false, \"\");\n";
                 } else if (t.kind == "boolean") {
-                    s += "        static bool " + an + " = false;\n";
+                    s += "        static bool " + an + " = " + (dflt.empty() ? "false" : dflt) + ";\n";
                     s += "        rosetta::imgw::checkbox(" + lb + ", " + an + ", false, \"\");\n";
                 } else { // number — exact spelling keeps the call implicit-cast free
                     const std::string ty = qualify_std(t.spelling.empty() ? "double" : t.spelling);
-                    s += "        static " + ty + " " + an + " = {};\n";
+                    s += "        static " + ty + " " + an + " = " + (dflt.empty() ? "{}" : dflt) + ";\n";
                     s += "        rosetta::imgw::scalar(" + lb + ", " + an +
                          ", false, false, 0, 0, \"\");\n";
                 }
@@ -291,14 +308,18 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
                 expr = "std::to_string(" + call + ")";
             }
             s += "        static std::string result;\n";
-            s += "        if (ImGui::Button(" + imgx_str(btn) + ")) {\n";
+            const std::string question = ui_destructive_question(m.annotations);
+            s += question.empty()
+                     ? "        if (ImGui::Button(" + imgx_str(btn) + ")) {\n"
+                     : "        if (rosetta::imgw::confirm_button(" + imgx_str(btn) + ", " +
+                           imgx_str(question) + ")) {\n";
             s += "            try { result = (" + expr + "); }\n";
             s += "            catch (const std::exception &e) { result = e.what(); }\n";
             s += "        }\n";
             s += "        if (!result.empty()) { ImGui::SameLine(); "
                  "ImGui::TextUnformatted(result.c_str()); }\n";
-            if (!m.doc.empty()) {
-                s += "        rosetta::imgw::help_tip(" + imgx_str(m.doc) + ");\n";
+            if (const std::string tip = ui_tip(m.doc, m.annotations); !tip.empty()) {
+                s += "        rosetta::imgw::help_tip(" + imgx_str(tip) + ");\n";
             }
             if (!bare) {
                 s += "        ImGui::TreePop();\n";
@@ -310,8 +331,31 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
         inline std::string imgx_draw_fn(const GenClass &k) {
             std::string s =
                 "void rosetta_imgui::draw_" + exposed_of(k) + "(" + qualified_of(k) + " &t) {\n";
-            for (const auto &f : k.fields) {
-                s += imgx_field(f);
+            std::string group;
+            for (const GenField *fp : ui_ordered(k.fields)) {
+                const GenField &f = *fp;
+                if (const std::string g = ui_group(f); !g.empty() && g != group) {
+                    s += "    rosetta::imgw::section(" + imgx_str(g) + ");\n";
+                    group = g;
+                }
+                std::string row = imgx_field(f);
+                // An edit that breaks min / max / length / regex is reverted.
+                if (const std::string ok = ui_valid_expr(f, "t." + f.name); !ok.empty() && !f.is_readonly) {
+                    row = "    {\n        auto rosetta_old = t." + f.name + ";\n    " + row +
+                          "        if (!(" + ok + ")) t." + f.name + " = rosetta_old;\n    }\n";
+                }
+                if (const auto *e = find_annotation<rosetta::enabled_if>(f.annotations)) {
+                    if (const std::string c = ui_cpp_condition(e->expr, k, "t"); !c.empty()) {
+                        row = "    ImGui::BeginDisabled(!(" + c + "));\n" + row +
+                              "    ImGui::EndDisabled();\n";
+                    }
+                }
+                if (const auto *v = find_annotation<rosetta::visible_if>(f.annotations)) {
+                    if (const std::string c = ui_cpp_condition(v->expr, k, "t"); !c.empty()) {
+                        row = "    if (" + c + ") {\n" + row + "    }\n";
+                    }
+                }
+                s += row;
             }
             bool any_method = false;
             for (const auto &m : k.methods) {
@@ -355,7 +399,8 @@ Set `ROSETTA_IMGUI_FRAMES=N` to auto-exit after N frames (smoke tests / CI).
                             "do not edit by hand.\n";
             s += "#include \"imgui_inspector.h\"\n";
             s += "#include <rosetta/runtime/imgui.h>\n";
-            s += "#include <stdexcept>\n#include <string>\n\n";
+            s += "#include <stdexcept>\n#include <string>\n";
+            s += regex_include(c) + "\n";
             for (const auto &k : c.classes) {
                 s += imgx_draw_fn(k);
             }

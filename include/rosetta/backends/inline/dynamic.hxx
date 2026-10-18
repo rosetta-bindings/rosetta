@@ -273,7 +273,91 @@ int main() {
             tag("multiline", find_annotation<rosetta::widget::multiline_tag>(anns) != nullptr);
             tag("radio", find_annotation<rosetta::widget::radio_tag>(anns) != nullptr);
             tag("file", find_annotation<rosetta::widget::file_tag>(anns) != nullptr);
+            tag("plot", find_annotation<rosetta::widget::plot_tag>(anns) != nullptr);
+            tag("progress", find_annotation<rosetta::widget::progress_tag>(anns) != nullptr);
+
+            // Values are text the runtime reads back: numbers in shortest
+            // round-trip form, flags as "true", JSON (example, length) verbatim.
+            const auto add = [&](const char *key, std::string value) {
+                out.emplace_back(key, std::move(value));
+            };
+            const auto flag = [&](const char *key, bool present) {
+                if (present) {
+                    add(key, "true");
+                }
+            };
+            if (const auto *a = find_annotation<rosetta::unit>(anns)) add("unit", a->text);
+            if (const auto *a = find_annotation<rosetta::example>(anns)) add("example", a->json);
+            if (const auto *a = find_annotation<rosetta::min>(anns)) add("min", num_lit(a->value));
+            if (const auto *a = find_annotation<rosetta::max>(anns)) add("max", num_lit(a->value));
+            if (const auto *a = find_annotation<rosetta::length>(anns)) {
+                add("length", "[" + std::to_string(a->lo) + ", " + std::to_string(a->hi) + "]");
+            }
+            if (const auto *a = find_annotation<rosetta::regex>(anns)) add("regex", a->pattern);
+            if (const auto *a = find_annotation<rosetta::requires_>(anns)) {
+                add("requires", a->expr);
+                if (*a->message) {
+                    add("requires_message", a->message);
+                }
+            }
+            if (const auto *a = find_annotation<rosetta::confirm>(anns)) {
+                add("destructive", "true");
+                add("confirm", a->question);
+            } else {
+                flag("destructive", find_annotation<rosetta::destructive>(anns) != nullptr);
+            }
+            flag("expensive", find_annotation<rosetta::expensive>(anns) != nullptr);
+            if (const auto *a = find_annotation<rosetta::deprecated>(anns)) add("deprecated", a->use);
+            if (const auto *a = find_annotation<rosetta::since>(anns)) add("since", a->version);
+            if (const auto *a = find_annotation<rosetta::step>(anns)) add("step", num_lit(a->value));
+            if (const auto *a = find_annotation<rosetta::decimals>(anns)) {
+                add("decimals", std::to_string(a->count));
+            }
+            flag("log_scale", find_annotation<rosetta::log_scale>(anns) != nullptr);
+            if (const auto *a = find_annotation<rosetta::group>(anns)) add("group", a->name);
+            if (const auto *a = find_annotation<rosetta::order>(anns)) add("order", std::to_string(a->rank));
+            if (const auto *a = find_annotation<rosetta::enabled_if>(anns)) add("enabled_if", a->expr);
+            if (const auto *a = find_annotation<rosetta::visible_if>(anns)) add("visible_if", a->expr);
             return out;
+        }
+
+        /**
+         * @brief A parameter's default as JSON-ish text the dynamic core can read
+         * back (a number, true/false, a "quoted string", or an enumerator name),
+         * from the IR's default_text. Empty when the spelling is an expression
+         * the core could not evaluate — then the parameter stays required.
+         */
+        inline std::string dyn_default(const GenParam &p) {
+            if (!p.has_default || p.default_text.empty()) {
+                return {};
+            }
+            const std::string &d = p.default_text;
+            if (d == "true" || d == "false") {
+                return d;
+            }
+            if (d.size() >= 2 && d.front() == '"' && d.back() == '"') {
+                return d;
+            }
+            char       *end = nullptr;
+            std::string num = d;
+            // 1.0f, 10u, 3L — the literal suffixes a C++ default may carry.
+            while (!num.empty() && std::string("fFuUlL").find(num.back()) != std::string::npos) {
+                num.pop_back();
+            }
+            std::strtod(num.c_str(), &end);
+            if (!num.empty() && end && *end == '\0') {
+                return num;
+            }
+            if (p.type.kind == "enum") { // Mode::Fast -> "Fast", resolved by name
+                const auto pos = d.rfind("::");
+                return "\"" + (pos == std::string::npos ? d : d.substr(pos + 2)) + "\"";
+            }
+            return {};
+        }
+
+        inline std::string dyn_param_default(const GenParam &p) {
+            const std::string d = dyn_default(p);
+            return d.empty() ? std::string() : ", .default_value = " + dyn_quote(d);
         }
 
         /**
@@ -678,7 +762,8 @@ int main() {
                                       ", .type = &" + T.id(p.type, c) +
                                       (p.is_ref ? ", .is_ref = true" : "") +
                                       (p.is_mutable_ref ? ", .is_mutable_ref = true" : "") +
-                                      (p.is_out ? ", .is_out = true" : "") + "},\n";
+                                      (p.is_out ? ", .is_out = true" : "") +
+                                      dyn_param_default(p) + "},\n";
                     }
                     out.arrays += "    };\n";
                 }
@@ -755,7 +840,8 @@ int main() {
                     for (const auto &p : ps) {
                         out.arrays += "        {.name = " + dyn_quote(p.name) +
                                       ", .type = &" + T.id(p.type, c) +
-                                      (p.is_ref ? ", .is_ref = true" : "") + "},\n";
+                                      (p.is_ref ? ", .is_ref = true" : "") +
+                                      dyn_param_default(p) + "},\n";
                     }
                     out.arrays += "    };\n";
                 }
@@ -819,6 +905,9 @@ int main() {
             if (k.is_abstract) {
                 out.cls += "        .is_abstract = true,\n";
             }
+            // Class-level annotations (deprecated, since, ...) — same key/value
+            // lowering as a member's.
+            out.cls += dyn_ann_field(k.annotations, "k_" + id + "_anns", out.arrays);
             // A class with a non-public destructor (GEO::Logger and friends) is
             // NOT skipped here, unlike in the runtime backends where destroying
             // what you wrap is unavoidable. It simply cannot be created or owned
@@ -925,7 +1014,8 @@ int main() {
                     arrays += "    const MetaParam " + id + "_params[] = {\n";
                     for (const auto &p : f.params) {
                         arrays += "        {.name = " + dyn_quote(p.name) + ", .type = &" +
-                                  T.id(p.type, c) + (p.is_ref ? ", .is_ref = true" : "") + "},\n";
+                                  T.id(p.type, c) + (p.is_ref ? ", .is_ref = true" : "") +
+                                  dyn_param_default(p) + "},\n";
                     }
                     arrays += "    };\n";
                 }

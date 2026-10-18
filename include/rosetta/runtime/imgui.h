@@ -14,6 +14,7 @@
 
 #include <imgui.h>
 #include <imgui_stdlib.h> // ImGui::InputText(std::string*) — imgui/misc/cpp
+#include <cfloat>
 #include <cstdint>
 #include <cstdio> // snprintf; popen for the file-dialog helper
 #include <initializer_list>
@@ -78,22 +79,39 @@ namespace rosetta {
         // a typed input box instead — the right widget for values a drag or
         // slider can't reach precisely (an eps of 1e-7) — clamping when
         // ranged. Greyed out when readonly.
+        //
+        // `step` (rosetta::step) is the spin increment / drag speed, `decimals`
+        // (rosetta::decimals) the digits shown, `log` (rosetta::log_scale) a
+        // logarithmic slider for a range spanning orders of magnitude.
         template <typename T>
         bool scalar(const char *label, T &v, bool readonly, bool has_range, double lo, double hi,
-                    const char *doc, int hint = H_NONE) {
+                    const char *doc, int hint = H_NONE, double step = 0, int decimals = -1,
+                    bool log = false) {
             ImGui::BeginDisabled(readonly);
             bool changed = false;
+            char fmtbuf[16];
+            const char *fmt = nullptr;
+            if (std::is_floating_point_v<T>) {
+                if (decimals >= 0) {
+                    std::snprintf(fmtbuf, sizeof fmtbuf, "%%.%df", decimals);
+                    fmt = fmtbuf;
+                } else {
+                    fmt = "%g"; // scientific-friendly
+                }
+            }
             if (hint == H_SPIN) {
-                const char *fmt =
-                    std::is_floating_point_v<T> ? "%g" : nullptr; // scientific-friendly
-                changed = ImGui::InputScalar(label, detail::data_type<T>(), &v, nullptr, nullptr,
-                                             fmt);
+                T s = static_cast<T>(step);
+                changed = ImGui::InputScalar(label, detail::data_type<T>(), &v,
+                                             step > 0 ? &s : nullptr, nullptr, fmt);
             } else if (has_range) {
                 T tlo = static_cast<T>(lo);
                 T thi = static_cast<T>(hi);
-                changed = ImGui::SliderScalar(label, detail::data_type<T>(), &v, &tlo, &thi);
+                changed = ImGui::SliderScalar(label, detail::data_type<T>(), &v, &tlo, &thi, fmt,
+                                              log ? ImGuiSliderFlags_Logarithmic : 0);
             } else {
-                changed = ImGui::DragScalar(label, detail::data_type<T>(), &v, 0.1f);
+                changed = ImGui::DragScalar(label, detail::data_type<T>(), &v,
+                                            step > 0 ? static_cast<float>(step) : 0.1f, nullptr,
+                                            nullptr, fmt);
             }
             if (changed && has_range) { // input path: enforce the range annotation
                 if (static_cast<double>(v) < lo) v = static_cast<T>(lo);
@@ -319,6 +337,53 @@ namespace rosetta {
             ImGui::EndDisabled();
             help_tip(doc);
             return changed;
+        }
+
+        // A ranged number shown as a progress bar (widget::progress): a read-out.
+        template <typename T>
+        void progress(const char *label, const T &v, double lo, double hi, const char *doc) {
+            const double f = hi > lo ? (static_cast<double>(v) - lo) / (hi - lo) : 0.0;
+            char         over[64];
+            std::snprintf(over, sizeof over, "%g", static_cast<double>(v));
+            ImGui::ProgressBar(static_cast<float>(f < 0 ? 0 : f > 1 ? 1 : f), ImVec2(-FLT_MIN, 0),
+                               over);
+            ImGui::SameLine();
+            ImGui::TextUnformatted(label);
+            help_tip(doc);
+        }
+
+        // A numeric vector drawn as a line plot (widget::plot).
+        template <typename T>
+        void plot(const char *label, const std::vector<T> &v, const char *doc) {
+            std::vector<float> f(v.begin(), v.end());
+            ImGui::PlotLines(label, f.data(), static_cast<int>(f.size()), 0, nullptr, FLT_MAX,
+                             FLT_MAX, ImVec2(0, ImGui::GetFrameHeight() * 3));
+            help_tip(doc);
+        }
+
+        // A section header for rosetta::group.
+        inline void section(const char *name) { ImGui::SeparatorText(name); }
+
+        // A button that asks first (rosetta::confirm / destructive): returns
+        // true only once the user has confirmed in the modal.
+        inline bool confirm_button(const char *caption, const char *question) {
+            if (ImGui::Button(caption)) {
+                ImGui::OpenPopup(question);
+            }
+            bool yes = false;
+            if (ImGui::BeginPopupModal(question, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextUnformatted(question);
+                if (ImGui::Button("Yes")) {
+                    yes = true;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+            return yes;
         }
 
         // Placeholder for a member type the inspector can't edit.

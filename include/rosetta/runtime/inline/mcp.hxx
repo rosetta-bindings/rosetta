@@ -87,6 +87,12 @@ namespace rosetta::mcp {
             return j;
         }
 
+        // A MetaParam::default_value literal as JSON (0.001, true, "fast").
+        inline json default_json(const char *d) {
+            json v = json::parse(d, nullptr, false);
+            return v.is_discarded() ? json(std::string(d)) : v;
+        }
+
         inline json params_json(const dyn::MetaParam *ps, std::size_t n) {
             json out = json::array();
             for (std::size_t i = 0; i < n; ++i) {
@@ -95,9 +101,38 @@ namespace rosetta::mcp {
                 }
                 json p    = type_json(ps[i].type);
                 p["name"] = ps[i].name;
+                if (ps[i].default_value) {
+                    p["default"] = default_json(ps[i].default_value); // may be omitted
+                }
                 out.push_back(std::move(p));
             }
             return out;
+        }
+
+        /**
+         * @brief A member's annotations (unit, min, regex, group, destructive,
+         * deprecated, ...) as typed JSON, merged into its describe_class entry.
+         * The agent reads them the way a UI reads them.
+         */
+        inline void merge_annotations(json &into, const dyn::MetaAnnotation *a, std::size_t n) {
+            for (std::size_t i = 0; i < n; ++i) {
+                const std::string_view key = a[i].key;
+                const std::string      val = a[i].value;
+                if (key == "min" || key == "max" || key == "step") {
+                    into[a[i].key] = std::strtod(val.c_str(), nullptr);
+                } else if (key == "decimals" || key == "order") {
+                    into[a[i].key] = std::atoi(val.c_str());
+                } else if (key == "destructive" || key == "expensive" || key == "log_scale") {
+                    into[a[i].key] = true;
+                } else if (key == "length" || key == "example") {
+                    json v         = json::parse(val, nullptr, false);
+                    into[a[i].key] = v.is_discarded() ? json(val) : v;
+                } else if (key == "deprecated") {
+                    into["deprecated"] = val.empty() ? json(true) : json("use " + val);
+                } else {
+                    into[a[i].key] = val; // unit, regex, requires, group, since, label, ...
+                }
+            }
         }
 
         inline std::string signature(const char *name, const dyn::MetaParam *ps, std::size_t n,
@@ -362,7 +397,8 @@ namespace rosetta::mcp {
         // disagree the value stays as given and resolve() picks the overload.
         std::vector<const Signature *> fit;
         for (const Signature &s : cands) {
-            if (dyn::detail::input_arity(s.params, s.n_params) == raw.size()) {
+            if (dyn::detail::required_arity(s.params, s.n_params) <= raw.size() &&
+                raw.size() <= dyn::detail::input_arity(s.params, s.n_params)) {
                 fit.push_back(&s);
             }
         }
@@ -498,14 +534,21 @@ namespace rosetta::mcp {
         if (args.is_object()) {
             const Signature *hit = nullptr;
             for (const Signature &s : cands) {
-                if (dyn::detail::input_arity(s.params, s.n_params) != args.size()) {
-                    continue;
-                }
+                // Every key must name a parameter, and every parameter without a
+                // default must be given.
                 bool all = true;
+                std::size_t named = 0;
                 for (std::size_t i = 0; i < s.n_params && all; ++i) {
-                    all = s.params[i].is_out || args.contains(s.params[i].name);
+                    if (s.params[i].is_out) {
+                        continue;
+                    }
+                    if (args.contains(s.params[i].name)) {
+                        ++named;
+                    } else {
+                        all = s.params[i].default_value != nullptr;
+                    }
                 }
-                if (all) {
+                if (all && named == args.size()) {
                     if (hit) {
                         throw dyn::Error("named arguments match more than one overload — "
                                          "pass them positionally as an array");
@@ -523,10 +566,14 @@ namespace rosetta::mcp {
             }
             dyn::ArgList out;
             for (std::size_t i = 0; i < hit->n_params; ++i) {
-                if (!hit->params[i].is_out) {
-                    out.add(hit->params[i].name,
-                            coerce(from_json(args[hit->params[i].name]), hit->params[i].type));
+                const dyn::MetaParam &p = hit->params[i];
+                if (p.is_out) {
+                    continue;
                 }
+                // An omitted parameter takes its default explicitly, so a later
+                // named argument still lands in the right position.
+                out.add(p.name, args.contains(p.name) ? coerce(from_json(args[p.name]), p.type)
+                                                      : dyn::detail::default_any(p));
             }
             return out;
         }
@@ -561,6 +608,9 @@ namespace rosetta::mcp {
                       {"creatable", !k->is_abstract && k->destroy && k->n_ctors > 0}};
             if (*k->doc) {
                 c["doc"] = k->doc;
+            }
+            if (const char *d = k->annotation("deprecated")) {
+                c["deprecated"] = *d ? json("use " + std::string(d)) : json(true);
             }
             if (!factories.empty()) {
                 c["static_factories"] = factories;
@@ -640,6 +690,7 @@ namespace rosetta::mcp {
                 }
                 j["choices"] = ch;
             }
+            detail::merge_annotations(j, f->annotations, f->n_annotations);
             fields.push_back(std::move(j));
         }
 
@@ -664,6 +715,7 @@ namespace rosetta::mcp {
                 j["callable"]    = false;
                 j["skip_reason"] = m->skip_reason;
             }
+            detail::merge_annotations(j, m->annotations, m->n_annotations);
             methods.push_back(std::move(j));
         }
 
@@ -682,6 +734,7 @@ namespace rosetta::mcp {
         if (k->is_abstract) {
             out["abstract"] = true;
         }
+        detail::merge_annotations(out, k->annotations, k->n_annotations);
         return out;
     }
 
@@ -720,6 +773,17 @@ namespace rosetta::mcp {
         if (cands.empty()) {
             throw dyn::Error(std::string(k->name) + " has no method '" + method +
                              "' — describe_class lists them");
+        }
+
+        // rosetta::destructive / confirm: the agent must say it means it — and
+        // the tool description tells it to ask the user first.
+        for (const dyn::MetaMethod *m : k->overloads(method)) {
+            if (m->annotation("destructive") && !a.value("confirm", false)) {
+                const char *q = m->annotation("confirm");
+                throw dyn::Error(std::string(k->name) + "::" + method +
+                                 " is destructive" + (q ? std::string(" (\"") + q + "\")" : "") +
+                                 ". Ask the user; if they agree, call again with \"confirm\": true.");
+            }
         }
         const dyn::ArgList args = args_for(a.value("args", json()), cands);
 
@@ -857,8 +921,10 @@ namespace rosetta::mcp {
                      {"inputSchema", obj(json::object(), {})}});
         t.push_back({{"name", "describe_class"},
                      {"description",
-                      "Constructors, fields (type, doc, range, read-only) and methods "
-                      "(signature, doc) of one class, inherited members included."},
+                      "Constructors, fields and methods of one class, inherited members "
+                      "included: types, docs, units, defaults, examples and every constraint "
+                      "(range, min/max, choices, length, regex, requires, read-only), plus "
+                      "destructive / expensive / deprecated flags. Read it before using a class."},
                      {"inputSchema", obj({{"class", str("Class name, e.g. Mesh or scene::Mesh")}},
                                          {"class"})}});
         t.push_back(
@@ -876,13 +942,20 @@ namespace rosetta::mcp {
             {{"name", "call_method"},
              {"description",
               "Call a method on a live object, or a static method when `target` is a class "
-              "name. Overloads are resolved from the arguments. A returned object becomes a "
-              "new handle; large arrays come back summarized (length, head, min, max, mean)."},
+              "name. Overloads are resolved from the arguments; a parameter with a `default` "
+              "may be omitted. A method marked `destructive` needs \"confirm\": true, which you "
+              "may only send after asking the user. Batch `expensive` methods in a script. A "
+              "returned object becomes a new handle; large arrays come back summarized (length, "
+              "head, min, max, mean)."},
              {"inputSchema",
               obj({{"target", str("Object handle, or a class name for a static method")},
                    {"method", str("Method name")},
                    {"args", args_schema},
-                   {"store_as", str("Optional handle name for a returned object")}},
+                   {"store_as", str("Optional handle name for a returned object")},
+                   {"confirm",
+                    {{"type", "boolean"},
+                     {"description", "Required (true) for a method marked destructive — only "
+                                     "after the user has agreed"}}}},
                   {"target", "method"})}});
         t.push_back({{"name", "inspect_object"},
                      {"description", "Read every field of a live object."},

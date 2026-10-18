@@ -34,6 +34,13 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QApplication>
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <QMessageBox>
+#include <QPainter>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSlider>
@@ -42,6 +49,38 @@
 #include <QWidget>
 
 #include "../interp.h"
+
+/** @brief A numeric vector as a small line plot (rosetta::widget::plot). */
+class SparkLine : public QWidget {
+public:
+    SparkLine(std::vector<double> v, QWidget *parent) : QWidget(parent), v_(std::move(v)) {
+        setMinimumSize(160, 56); // a QFormLayout gives a hint-less widget no width
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.fillRect(rect(), palette().base());
+        if (v_.size() < 2) {
+            p.drawText(rect(), Qt::AlignCenter, QStringLiteral("(no data)"));
+            return;
+        }
+        const auto [lo, hi] = std::minmax_element(v_.begin(), v_.end());
+        const double span   = *hi > *lo ? *hi - *lo : 1;
+        QPolygonF    line;
+        for (std::size_t i = 0; i < v_.size(); ++i) {
+            line << QPointF(width() * double(i) / double(v_.size() - 1),
+                            height() - 4 - (height() - 8) * (v_[i] - *lo) / span);
+        }
+        p.setPen(QPen(palette().highlight().color(), 1.5));
+        p.drawPolyline(line);
+    }
+
+private:
+    std::vector<double> v_;
+};
 
 class PropertyPanel : public QWidget {
     Q_OBJECT
@@ -84,8 +123,62 @@ public:
 
         auto *form = new QFormLayout();
         form->setLabelAlignment(Qt::AlignRight);
+
+        // rosetta::order sorts the rows (unordered ones keep declaration order,
+        // after the ordered ones); rosetta::group opens a section.
+        std::vector<const dynui::rd::MetaField *> fields;
         for (std::size_t i = 0; i < k.n_fields; ++i) {
-            add_row(body, form, k.fields[i]);
+            fields.push_back(&k.fields[i]);
+        }
+        std::stable_sort(fields.begin(), fields.end(), [](auto *a, auto *b) {
+            const char *oa = a->annotation("order");
+            const char *ob = b->annotation("order");
+            if (!oa || !ob) {
+                return oa && !ob;
+            }
+            return std::atoi(oa) < std::atoi(ob);
+        });
+        // Then cluster by rosetta::group, groups in order of first appearance,
+        // so a section is never split in two.
+        std::vector<std::string> groups;
+        for (const auto *f : fields) {
+            const std::string g = f->annotation("group") ? f->annotation("group") : "";
+            if (std::find(groups.begin(), groups.end(), g) == groups.end()) {
+                groups.push_back(g);
+            }
+        }
+        std::stable_sort(fields.begin(), fields.end(), [&groups](auto *a, auto *b) {
+            const auto rank = [&groups](const dynui::rd::MetaField *f) {
+                const std::string g = f->annotation("group") ? f->annotation("group") : "";
+                return std::find(groups.begin(), groups.end(), g) - groups.begin();
+            };
+            return rank(a) < rank(b);
+        });
+        std::string group;
+        for (const auto *f : fields) {
+            if (const char *g = f->annotation("group"); g && group != g) {
+                group     = g;
+                auto *sec = new QLabel(QStringLiteral("<b>%1</b>").arg(QString::fromUtf8(g)), body);
+                sec->setContentsMargins(0, 6, 0, 0);
+                form->addRow(sec);
+            }
+            const int before = form->rowCount();
+            add_row(body, form, *f);
+            if (form->rowCount() == before) {
+                continue;
+            }
+            const int row = form->rowCount() - 1;
+            // enabled_if / visible_if, evaluated by the dynamic core against the
+            // live object; the panel is rebuilt after every edit, so they track it.
+            if (const char *e = f->annotation("visible_if")) {
+                form->setRowVisible(row, dynui::rd::condition(obj_, e));
+            }
+            if (const char *e = f->annotation("enabled_if")) {
+                if (auto *it = form->itemAt(row, QFormLayout::FieldRole); it && it->widget()) {
+                    it->widget()->setEnabled(it->widget()->isEnabled() &&
+                                             dynui::rd::condition(obj_, e));
+                }
+            }
         }
         col->addLayout(form);
 
@@ -143,9 +236,36 @@ private:
         }
     }
 
+    /** @brief Doc plus the annotation facts (unit, bounds, pattern, ...) for a tooltip. */
+    template <class M> static QString tip_of(const M &m) {
+        QString tip = QString::fromUtf8(m.doc);
+        for (std::size_t i = 0; i < m.n_annotations; ++i) {
+            const std::string key = m.annotations[i].key;
+            static const char *shown[] = {"unit",     "min",        "max",   "length",
+                                          "regex",    "requires",   "example", "deprecated",
+                                          "since",    "expensive",  "confirm"};
+            if (std::find(std::begin(shown), std::end(shown), key) != std::end(shown)) {
+                tip += (tip.isEmpty() ? "" : "\n") + QString::fromStdString(key) + ": " +
+                       QString::fromUtf8(m.annotations[i].value);
+            }
+        }
+        return tip;
+    }
+
+    /** @brief The row caption: label, unit, deprecation. */
+    template <class M> static QString caption_of(const M &m, QString cap) {
+        if (const char *u = m.annotation("unit")) {
+            cap += QStringLiteral(" [%1]").arg(QString::fromUtf8(u));
+        }
+        if (m.annotation("deprecated")) {
+            cap += QStringLiteral(" (deprecated)");
+        }
+        return cap;
+    }
+
     void add_row(QWidget *body, QFormLayout *form, const dynui::rd::MetaField &f) {
-        const QString cap = QString::fromStdString(dynui::label_of(f));
-        const QString tip = QString::fromUtf8(f.doc);
+        const QString cap = caption_of(f, QString::fromStdString(dynui::label_of(f)));
+        const QString tip = tip_of(f);
         QWidget      *w   = build_editor(body, f);
         if (!w) {
             return;
@@ -178,8 +298,24 @@ private:
         form->addRow(lab, cell);
     }
 
+    // rosetta::log_scale: the slider moves along log10 of the value.
+    static bool log_slider(const dynui::rd::MetaField &f) {
+        return f.annotation("log_scale") && f.range.lo > 0 && f.range.hi > f.range.lo;
+    }
+
     static double slider_value(const dynui::rd::MetaField &f, int raw) {
+        if (log_slider(f)) {
+            return f.range.lo * std::pow(f.range.hi / f.range.lo, raw / 1000.0);
+        }
         return f.range.lo + (f.range.hi - f.range.lo) * raw / 1000.0;
+    }
+
+    static int slider_raw(const dynui::rd::MetaField &f, double v) {
+        if (log_slider(f)) {
+            return int(1000.0 * std::log(v / f.range.lo) / std::log(f.range.hi / f.range.lo));
+        }
+        const double span = f.range.hi - f.range.lo;
+        return span > 0 ? int((v - f.range.lo) / span * 1000.0) : 0;
     }
 
     QWidget *build_editor(QWidget *body, const dynui::rd::MetaField &f) {
@@ -243,11 +379,18 @@ private:
 
         case rd::Kind::number: {
             const double now = cur.ok() ? cur.value.as_number() : 0.0;
+            if (f.range.has && kind == "progress") { // a read-out, not an editor
+                auto        *pb = new QProgressBar(body);
+                const double fr = (now - f.range.lo) / (f.range.hi - f.range.lo);
+                pb->setRange(0, 1000);
+                pb->setValue(int(1000 * std::clamp(fr, 0.0, 1.0)));
+                pb->setFormat(QString::number(now, 'g', 4));
+                return pb;
+            }
             if (f.range.has && kind == "slider") {
                 auto *sl = new QSlider(Qt::Horizontal, body);
                 sl->setRange(0, 1000);
-                const double span = f.range.hi - f.range.lo;
-                sl->setValue(span > 0 ? int((now - f.range.lo) / span * 1000.0) : 0);
+                sl->setValue(slider_raw(f, now));
                 connect(sl, &QSlider::valueChanged, this, [this, &f](int raw) {
                     const double v = slider_value(f, raw);
                     write(f, f.type->integral ? rd::Any::integer(static_cast<long long>(v))
@@ -259,14 +402,19 @@ private:
                 auto *sb = new QSpinBox(body);
                 sb->setRange(f.range.has ? int(f.range.lo) : -1000000,
                              f.range.has ? int(f.range.hi) : 1000000);
+                if (const char *st = f.annotation("step")) {
+                    sb->setSingleStep(std::max(1, std::atoi(st)));
+                }
                 sb->setValue(int(now));
                 connect(sb, &QSpinBox::valueChanged, this,
                         [this, &f](int v) { write(f, rd::Any::integer(v)); });
                 return sb;
             }
-            auto *sb = new QDoubleSpinBox(body);
-            sb->setDecimals(4);
-            sb->setSingleStep(0.1);
+            auto       *sb = new QDoubleSpinBox(body);
+            const char *dc = f.annotation("decimals");
+            const char *st = f.annotation("step");
+            sb->setDecimals(dc ? std::atoi(dc) : 4);
+            sb->setSingleStep(st ? std::atof(st) : 0.1);
             sb->setRange(f.range.has ? f.range.lo : -1e9, f.range.has ? f.range.hi : 1e9);
             sb->setValue(now);
             connect(sb, &QDoubleSpinBox::valueChanged, this,
@@ -344,6 +492,15 @@ private:
         }
 
         case rd::Kind::vector: {
+            if (kind == "plot" && cur.ok()) {
+                std::vector<double> v;
+                for (const auto &e : cur.value.as_list()) {
+                    if (e.kind() == rd::Kind::number) {
+                        v.push_back(e.as_number());
+                    }
+                }
+                return new SparkLine(std::move(v), body);
+            }
             auto *lab = new QLabel(
                 cur.ok() ? QString::fromStdString(cur.value.to_string()) : QString(), body);
             lab->setStyleSheet("color:gray");
@@ -370,11 +527,28 @@ private:
             if (caption.empty() || !m.invoke || m.n_params != 0) {
                 continue;
             }
-            auto *btn = new QPushButton(QString::fromStdString(caption), box);
-            btn->setToolTip(QString::fromUtf8(m.doc));
-            const std::string mname = m.name;
-            connect(btn, &QPushButton::clicked, this, [this, mname] {
+            auto *btn = new QPushButton(caption_of(m, QString::fromStdString(caption)), box);
+            btn->setToolTip(tip_of(m));
+            const std::string mname    = m.name;
+            const char       *question = m.annotation("confirm");
+            if (!question && m.annotation("destructive")) {
+                question = "Run this? It cannot be undone.";
+            }
+            const bool slow = m.annotation("expensive") != nullptr;
+            connect(btn, &QPushButton::clicked, this, [this, mname, question, slow] {
+                // rosetta::confirm / destructive: ask first.
+                if (question && QMessageBox::question(this, QStringLiteral("Confirm"),
+                                                      QString::fromUtf8(question)) !=
+                                    QMessageBox::Yes) {
+                    return;
+                }
+                if (slow) { // rosetta::expensive: say so while it runs
+                    QApplication::setOverrideCursor(Qt::WaitCursor);
+                }
                 const auto r = obj_.call(mname);
+                if (slow) {
+                    QApplication::restoreOverrideCursor();
+                }
                 if (!r.ok()) {
                     emit message(QString::fromStdString(r.error), true);
                 } else if (r.value.kind() != dynui::rd::Kind::void_) {

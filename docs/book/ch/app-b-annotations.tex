@@ -5,7 +5,7 @@
 
 \begin{center}
 \small
-\begin{longtable}{@{}lL{2.0cm}L{5.7cm}L{4.9cm}@{}}
+\begin{longtable}{@{}L{2.5cm}L{2.0cm}L{5.2cm}L{4.2cm}@{}}
 \toprule
 \textbf{Kind} & \textbf{Applies to} & \textbf{Inline / side-car} &
   \textbf{Meaning} \\
@@ -26,7 +26,7 @@
 \code{combobox} & string fields &
   \code{= rosetta::combobox\{\{"a","b"\}\}} \newline
   \code{"combobox": ["a","b"]} &
-  Allowed choices, maximum 16. \\
+  Allowed choices, maximum 16; enforced. \\
 \addlinespace
 \code{label} & fields, methods &
   \code{= rosetta::label\{"\ldots"\}} \newline \code{"label": "\ldots"} &
@@ -39,6 +39,56 @@
 \code{widget::*} & fields &
   \code{= rosetta::widget::slider} \newline \code{"widget": "slider"} &
   Editor hint; see below. \\
+\addlinespace
+\code{unit} & numbers, methods & \code{unit\{"m"\}} \newline \code{"unit"} &
+  Physical unit. \\
+\addlinespace
+\code{default\_value} & methods & \code{default\_value\{"p", v\}} \newline
+  \code{"default": \{"p": v\}} & Default of parameter \code{p}. \\
+\addlinespace
+\code{example} & fields, methods & \code{example\{"json"\}} \newline \code{"example"} &
+  Sample value or call. \\
+\addlinespace
+\code{min}, \code{max} & numbers & \code{min\{v\}} \newline \code{"min"} &
+  One-sided bounds; enforced. \\
+\addlinespace
+\code{length} & strings, vectors & \code{length\{lo, hi\}} \newline \code{"length"} &
+  Allowed size; enforced. \\
+\addlinespace
+\code{regex} & strings & \code{regex\{"p"\}} \newline \code{"regex"} &
+  Full-match pattern; enforced. \\
+\addlinespace
+\code{requires\_} & fields, methods & \code{requires\_\{"e", "m"\}} \newline
+  \code{"requires"} & Precondition; enforced by the dynamic core. \\
+\addlinespace
+\code{destructive} & methods & \code{destructive\{\}} \newline \code{"destructive"} &
+  Ask before calling. \\
+\addlinespace
+\code{confirm} & methods & \code{confirm\{"q"\}} \newline \code{"confirm"} &
+  Destructive, with the question. \\
+\addlinespace
+\code{expensive} & methods & \code{expensive\{\}} \newline \code{"expensive"} &
+  Slow; batch it. \\
+\addlinespace
+\code{hidden} & fields, methods & \code{hidden\{\}} \newline \code{"hidden"} &
+  Bound nowhere. \\
+\addlinespace
+\code{deprecated} & all & \code{deprecated\{"use"\}} \newline \code{"deprecated"} &
+  Flagged, still bound. \\
+\addlinespace
+\code{since} & all & \code{since\{"1.2"\}} \newline \code{"since"} & First version. \\
+\addlinespace
+\code{step}, \code{decimals} & numbers & \code{step\{0.1\}} \newline \code{"decimals"} &
+  Editor increment; digits. \\
+\addlinespace
+\code{log\_scale} & numbers & \code{log\_scale\{\}} \newline \code{"log\_scale"} &
+  Logarithmic slider. \\
+\addlinespace
+\code{group}, \code{order} & fields & \code{group\{"g"\}} \newline \code{"order"} &
+  Panel section; position. \\
+\addlinespace
+\code{enabled\_if}, \code{visible\_if} & fields & \code{enabled\_if\{"e"\}}
+  \newline \code{"visible\_if"} & Conditional editing / display. \\
 \bottomrule
 \end{longtable}
 \end{center}
@@ -62,6 +112,8 @@
 \code{multiline} & string & multi-line text area \\
 \code{radio}     & string + \code{combobox} & radio-button group \\
 \code{file}      & string path & entry + platform file dialog \\
+\code{plot}      & vector of numbers & line plot \\
+\code{progress}  & number + \code{range} & progress bar (read-out) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -76,16 +128,23 @@
 \midrule
 Scripting --- \lang{python}, \lang{nanobind}, \lang{node}, \lang{wasm},
   \lang{lua}, \lang{julia}, \lang{csharp}, \lang{java} &
-  \code{doc} (docstrings where the framework has them), \code{range}
-  (validating setters), \code{readonly} (getter-only properties). The UI kinds
+  \code{doc} (docstrings where the framework has them, with the facts in
+  Python), \code{range} / \code{min} / \code{max} / \code{combobox} /
+  \code{length} / \code{regex} (validating setters), \code{readonly}
+  (getter-only properties), \code{default\_value}, \code{hidden}. The UI kinds
   are ignored. \\
 \addlinespace
+Dynamic core --- \lang{dynamic}, \lang{mcp} &
+  Every kind: validation (including \code{requires\_}) enforced, defaults
+  filled, everything else reported as key/value metadata. \\
+\addlinespace
 UI inspectors --- \lang{qt}, \lang{qml}, \lang{imgui} &
-  Everything. \\
+  Everything except \code{requires\_}; \lang{qml} passes the layout hints to
+  its delegates. \\
 \addlinespace
 Documents --- \lang{markdown}, \lang{html}, \lang{openapi}, \lang{typescript} &
-  \code{doc} and the constraints (\code{range}, \code{readonly},
-  \code{combobox}) rendered into the reference text or schema. \\
+  \code{doc} and every constraint and fact, rendered into the reference text,
+  JSON Schema keywords or TSDoc tags. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -124,7 +183,7 @@ carrying any subset of:
 
 \begin{center}
 \small
-\begin{tabular}{@{}lll@{}}
+\begin{tabular}{@{}L{6.0cm}L{3.6cm}L{3.8cm}@{}}
 \toprule
 \textbf{Key} & \textbf{JSON type} & \textbf{Example} \\
 \midrule
@@ -135,6 +194,17 @@ carrying any subset of:
 \code{label}    & string       & \code{"Max iterations"} \\
 \code{button}   & string       & \code{"Run"} \\
 \code{widget}   & string       & \code{"slider"} \\
+\code{unit}, \code{group}, \code{since}, \code{regex}, \code{confirm},
+  \code{enabled\_if}, \code{visible\_if} & string & \code{"m"} \\
+\code{min}, \code{max}, \code{step}, \code{decimals}, \code{order} & number &
+  \code{0.1} \\
+\code{length} & 2-element array & \code{[1, 64]} \\
+\code{requires} & string, or [expr, message] & \code{["dt > 0", "why"]} \\
+\code{destructive}, \code{expensive}, \code{hidden}, \code{log\_scale} &
+  boolean & \code{true} \\
+\code{deprecated} & boolean or string & \code{"use foo()"} \\
+\code{default} & object & \code{\{"dt": 0.001\}} \\
+\code{example} & any JSON value & \code{\{"seconds": 2\}} \\
 \bottomrule
 \end{tabular}
 \end{center}

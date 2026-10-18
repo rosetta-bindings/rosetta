@@ -1,0 +1,27 @@
+{
+    "//1": "One documented C++ class, four targets. pendulum.h is plain C++;",
+    "//2": "doc / range / readonly live in Pendulum.ann.json, the method docs",
+    "//3": "in the header's Doxygen comments. Chapter 16 of the book uses it.",
+
+    "user_include": ".",
+    "rosetta_include": "../../include",
+    "generator_name": "pendulum_gen",
+    "module_name": "pendulum",
+
+    "targets": [
+        { "lang": "nanobind", "name": "pendulum" },
+        { "lang": "lua",      "name": "pendulum" },
+        { "lang": "mcp",      "name": "pendulum_mcp" },
+        { "lang": "markdown", "name": "pendulum" },
+        { "lang": "typescript", "name": "pendulum" },
+        { "lang": "openapi", "name": "pendulum" },
+        { "lang": "html", "name": "pendulum" },
+        { "lang": "qt", "name": "pendulum" },
+        { "lang": "imgui", "name": "pendulum" },
+        { "lang": "qml", "name": "pendulum" }
+    ],
+
+    "classes": [
+        { "name": "lab::Pendulum", "header": "pendulum.h", "annotations": "Pendulum.ann.json" }
+    ]
+}

@@ -214,7 +214,22 @@ the C++ types & \code{type} and \code{kind} & send a number, a string, a
   handle, an enumerator name \\
 \addlinespace
 \code{combobox\{\ldots\}} & \code{"choices": [\ldots]} & offer one of them
-  (listed, not enforced) \\
+  --- anything else is rejected \\
+\addlinespace
+\code{unit\{"m"\}} & \code{"unit": "m"} & reason in metres, convert what the
+  user gave \\
+\addlinespace
+\code{default\_value\{"dt", 0.001\}} & \code{"default": 0.001} on the
+  parameter & omit \code{dt}: \code{\{"seconds": 2\}} is enough \\
+\addlinespace
+\code{requires\_\{"dt < period() / 20", \ldots\}} & \code{"requires"}, with
+  its message & choose a valid \code{dt} up front --- and is refused if not \\
+\addlinespace
+\code{confirm\{"Reset?"\}} & \code{"destructive": true}, \code{"confirm"} &
+  ask the user, then pass \code{"confirm": true} \\
+\addlinespace
+\code{deprecated\{"period()"\}} & \code{"deprecated": "use period()"} &
+  prefer the replacement \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -259,11 +274,13 @@ and it is the natural choice for a third-party library you do not want to
 touch.
 \end{note}
 
-\begin{warn}
-Default arguments do not reach the dynamic tables: the agent must pass every
-parameter (\code{simulate(1)} is rejected as ``takes 2 argument(s), 1 given'').
-Document the value you would have defaulted, so the agent knows what to send.
-\end{warn}
+\begin{note}
+\textbf{Defaults.} A C++ default argument whose spelling is a plain literal
+reaches the agent as the parameter's \code{"default"}, and the agent may then
+omit it. When the declaration has no default --- or one rosetta cannot read ---
+state it with \code{default\_value} (Section~\ref{sec:ann-extended}); the
+pendulum example does, so \code{\{"seconds": 2\}} is a complete call.
+\end{note}
 
 \section{What a conversation looks like}
 \label{sec:mcp-chats}
@@ -451,10 +468,16 @@ the numbers to the physics --- including where the library's own
     read the result; every number came from your \code{simulate()}.
 \end{itemize}
 
-To reproduce them, point Claude Code at the server and ask:
+To reproduce them, use \code{examples/pendulum}: the same class, with the same
+metadata, bound as a Python module (\lang{nanobind}), a Lua module and this MCP
+server. There every annotation sits in the side-car, so all its targets build
+with a stock compiler, and the \code{damping} doc now states the equation of
+motion. Build the server and point Claude Code at it:
 
 \begin{lstlisting}[style=sh]
-claude mcp add lab -- "$PWD/lab_mcp"
+cd examples/pendulum
+./run.sh mcp      # builds it, runs a scripted session, prints the line below
+claude mcp add pendulum -- "$PWD/bindings/mcp/build/pendulum_mcp"
 claude
 \end{lstlisting}
 
@@ -566,10 +589,26 @@ call_method {"target": "bunny", "method": "onProgress", "args": [1]}
 The valid assignment in the first call (\code{shading}) still lands; only the
 two refused ones are reported.
 
+\subsection*{Methods the agent must not call lightly}
+
+A method annotated \code{destructive} --- or \code{confirm\{"question"\}} ---
+is refused unless the call carries \code{"confirm": true}, and the tool
+description tells the agent to ask the user before sending it:
+
+\begin{lstlisting}[style=plain]
+call_method {"target": "p", "method": "reset"}
+  -> error: Pendulum::reset is destructive ("Reset the pendulum? Its time and
+     trace are lost."). Ask the user; if they agree, call again with
+     "confirm": true.
+\end{lstlisting}
+
 \begin{warn}
-There is no authorisation model beyond your annotations: anything bound can be
-called. Bind only what an agent should be able to reach, and use
-\code{readonly} and \code{range} for what it may read but not freely change.
+Beyond that there is no authorisation model: anything bound can be called. Bind
+only what an agent should be able to reach --- \code{hidden} keeps a public
+member out --- and use \code{readonly}, \code{range}, \code{min} /
+\code{max}, \code{regex} and \code{requires\_} for what it may read but not
+freely change. The confirmation gate applies to the JSON tools; a script run
+with \code{run\_script} calls methods directly.
 \end{warn}
 
 \section{Scripts: one call instead of dozens}
@@ -762,6 +801,99 @@ The other entry points, for a non-Qt host or a test:
   \item \code{server.add\_tool(definition, fn)} --- your own tools next to the
     generic ones. \code{run\_script} and \code{run\_python} are added exactly
     this way.
+\end{itemize}
+
+\subsection*{With Python instead of Lua}
+
+\code{run\_python} is a drop-in alternative: include
+\code{<rosetta/runtime/mcp\_python.h>} and call \code{enable\_python} where the
+example above calls \code{enable\_lua}. The rest --- the server, the published
+objects, the HTTP host --- does not change. Register both and the agent gets
+both tools, and the two share the handle table.
+
+\begin{lstlisting}[style=cpp]
+#include <rosetta/runtime/mcp.h>
+#include <rosetta/runtime/mcp_python.h>   // run_python
+#include <rosetta/runtime/mcp_qt_http.h>  // QtHttpHost
+
+scene::register_all();
+
+rosetta::mcp::Server server({.name = "my-app"});
+
+rosetta::mcp::PythonOptions opts;          // optional; defaults: 30 s per call
+opts.default_timeout_s = 60;
+rosetta::mcp::enable_python(server, opts); // instead of (or as well as) enable_lua
+\end{lstlisting}
+
+The build needs Python 3.10+ with its development files, and pybind11 --- the
+\code{embed} target links the interpreter into your executable:
+
+\begin{lstlisting}[style=sh]
+# CMakeLists.txt
+find_package(Python 3.10 REQUIRED COMPONENTS Interpreter Development.Embed)
+find_package(pybind11 CONFIG REQUIRED)      # pip install pybind11
+target_link_libraries(my_app PRIVATE pybind11::embed)
+\end{lstlisting}
+
+For the generated server, it is one switch at configure time:
+
+\begin{lstlisting}[style=sh]
+cmake -S bindings/mcp -B bindings/mcp/build -DROSETTA_MCP_PYTHON=ON
+\end{lstlisting}
+
+The agent then sends Python. Here is the large-amplitude experiment of
+Section~\ref{sec:mcp-chats} as a \code{run\_python} call against the pendulum
+server. Note the keyword arguments, taken from the reflected parameter names,
+and that the value of the last expression is the result:
+
+\begin{lstlisting}[style=py]
+def measure(a0, dt=1e-4):
+    p = new("Pendulum")
+    p.length, p.damping, p.angle = 1.0, 0.0, a0
+    prev, tprev, cross = p.angle, 0.0, []
+    while len(cross) < 5:
+        a = p.simulate(seconds=dt, dt=dt)
+        t = p.time
+        if prev * a < 0:                               # a zero crossing
+            cross.append(tprev + (t - tprev) * prev / (prev - a))
+        prev, tprev = a, t
+    return (cross[4] - cross[0]) / 2, p.period()
+
+rows = {}
+for a0 in (5, 30, 80):
+    T, T0 = measure(a0)
+    rows[a0] = {"T": round(T, 5), "T0": round(T0, 5), "ratio": round(T / T0, 4)}
+rows
+\end{lstlisting}
+
+\begin{lstlisting}[style=json]
+{"elapsed_s": 0.23,
+ "result": {"5":  {"T": 2.00702, "T0": 2.00607, "ratio": 1.0005},
+            "30": {"T": 2.04099, "T0": 2.00607, "ratio": 1.0174},
+            "80": {"T": 2.28189, "T0": 2.00607, "ratio": 1.1375}}}
+\end{lstlisting}
+
+The same numbers as the Lua session, from the same \code{simulate()}. What
+Python adds is the environment: \code{numpy}, \code{scipy}, \code{statistics}
+are a plain \code{import} away --- fitting the decay of session~4, or comparing
+with \code{scipy.special.ellipk} for the exact period.
+
+What to know before choosing it:
+
+\begin{itemize}
+  \item \textbf{It is not sandboxed.} Lua sees only your library; Python sees
+    everything the process can --- files, network, other processes. Enable it
+    only for an agent you would let run Python on that machine.
+  \item \textbf{One interpreter, started on first use}, never finalised. If your
+    application already embeds Python (or \emph{is} a Python program), that
+    interpreter is reused. Each \code{run\_python} call gets fresh globals.
+  \item \textbf{Same thread.} Calls must come from the thread that started the
+    interpreter. With \code{QtHttpHost} that is the GUI thread, which is what
+    you want anyway.
+  \item \textbf{Qt is fine.} The header hides Qt's \code{slots} macro while
+    Python's headers are read, so it can be included after Qt headers.
+  \item \textbf{Limits.} A wall-clock timeout raises \code{TimeoutError} in the
+    script; a long call into C++ or into a numpy kernel finishes first.
 \end{itemize}
 
 \section{Limits}

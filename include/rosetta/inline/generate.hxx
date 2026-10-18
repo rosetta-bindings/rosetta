@@ -1823,6 +1823,7 @@ endif()
         }
 
         inline std::string num_str(double d); // defined below; used by default_value_str
+        inline void apply_default_values(GenMethod &m); // defined below; used by the IR walk
 
         // Render a field's default member initializer (read from a default-built
         // instance) to a string, for the kinds that map to a scalar property.
@@ -1889,6 +1890,7 @@ endif()
                 push_method<Fn>(name, false, ann::get_or<doc>(doc{""}, Anns...).text,
                                 ann::has<virtual_spec>(Anns...), vs);
                 (out.methods.back().annotations.emplace_back(Anns), ...);
+                apply_default_values(out.methods.back());
             }
 
             template <std::meta::info Fn, auto... Anns> void method_static(const char *name) {
@@ -1896,6 +1898,7 @@ endif()
                 push_method<Fn>(name, true, ann::get_or<doc>(doc{""}, Anns...).text, false,
                                 virtual_spec{});
                 (out.methods.back().annotations.emplace_back(Anns), ...);
+                apply_default_values(out.methods.back());
             }
 
             template <std::meta::info Ctor, auto... /*Anns*/> void constructor() {
@@ -1988,6 +1991,58 @@ endif()
             return buf;
         }
 
+        // A double as the SHORTEST decimal that reads back to the same value —
+        // for text that is re-emitted as C++ (a default argument), where %g's six
+        // digits would silently change 1.2345678 into 1.23457.
+        inline std::string num_lit(double d) {
+            if (d == static_cast<long long>(d) && std::abs(d) < 1e15) {
+                return std::to_string(static_cast<long long>(d));
+            }
+            char buf[40];
+            for (int prec = 1; prec <= 17; ++prec) {
+                std::snprintf(buf, sizeof buf, "%.*g", prec, d);
+                if (std::strtod(buf, nullptr) == d) {
+                    break;
+                }
+            }
+            return buf;
+        }
+
+        // rosetta::default_value{"param", v} on a method: the parameter becomes
+        // defaulted in the IR, exactly as if its C++ default had been harvested
+        // from the header — so every backend that renders defaults (keyword
+        // arguments, optional TypeScript parameters, OpenAPI `default`, reference
+        // signatures, the dynamic model) picks it up. The annotation wins over a
+        // harvested spelling: it was written for the binding.
+        inline void apply_default_values(GenMethod &m) {
+            for (const auto &a : m.annotations) {
+                const auto *d = std::any_cast<rosetta::default_value>(&a);
+                if (!d) {
+                    continue;
+                }
+                for (auto &p : m.params) {
+                    if (p.name != d->param) {
+                        continue;
+                    }
+                    p.has_default = true;
+                    if (d->text) {
+                        std::string lit = "\"";
+                        for (const char *c = d->text; *c; ++c) {
+                            if (*c == '"' || *c == '\\') {
+                                lit += '\\';
+                            }
+                            lit += *c;
+                        }
+                        p.default_text = lit + "\"";
+                    } else if (p.type.kind == "boolean") {
+                        p.default_text = d->number != 0 ? "true" : "false";
+                    } else {
+                        p.default_text = num_lit(d->number);
+                    }
+                }
+            }
+        }
+
         // The per-class Markdown fragment (heading + field table + methods),
         // rendered from the erased IR. Used as GenClass::doc (README bodies and
         // the markdown backend) and by rosetta::to_markdown<T>(). Mirrors what the
@@ -2008,11 +2063,46 @@ endif()
             return s;
         }
 
+        // The annotation-carried facts a reference page states about a member,
+        // as (label, text) pairs in a fixed order: unit, constraints (beyond
+        // range / choices, which every renderer already shows), behaviour,
+        // example, lifecycle. One list, so markdown, HTML and TSDoc agree.
+        inline std::vector<std::pair<std::string, std::string>>
+        ann_facts(const std::vector<std::any> &anns) {
+            std::vector<std::pair<std::string, std::string>> out;
+            if (const auto *a = find_annotation<rosetta::unit>(anns)) out.emplace_back("unit", a->text);
+            if (const auto *a = find_annotation<rosetta::min>(anns)) out.emplace_back("min", num_str(a->value));
+            if (const auto *a = find_annotation<rosetta::max>(anns)) out.emplace_back("max", num_str(a->value));
+            if (const auto *a = find_annotation<rosetta::length>(anns)) {
+                out.emplace_back("length", std::to_string(a->lo) + ".." + std::to_string(a->hi));
+            }
+            if (const auto *a = find_annotation<rosetta::regex>(anns)) out.emplace_back("pattern", a->pattern);
+            if (const auto *a = find_annotation<rosetta::requires_>(anns)) {
+                out.emplace_back("requires", std::string(a->expr) +
+                                                 (*a->message ? std::string(" — ") + a->message : ""));
+            }
+            if (const auto *a = find_annotation<rosetta::confirm>(anns)) {
+                out.emplace_back("destructive", a->question);
+            } else if (find_annotation<rosetta::destructive>(anns)) {
+                out.emplace_back("destructive", "");
+            }
+            if (find_annotation<rosetta::expensive>(anns)) out.emplace_back("expensive", "");
+            if (const auto *a = find_annotation<rosetta::example>(anns)) out.emplace_back("example", a->json);
+            if (const auto *a = find_annotation<rosetta::deprecated>(anns)) {
+                out.emplace_back("deprecated", *a->use ? std::string("use ") + a->use : std::string());
+            }
+            if (const auto *a = find_annotation<rosetta::since>(anns)) out.emplace_back("since", a->version);
+            return out;
+        }
+
         inline std::string class_markdown(const GenClass &gc) {
             std::string out = "# " + exposed_of(gc) + "\n\n";
             // The class's own documentation, when the header carried one.
             if (!gc.brief.empty()) {
                 out += gc.brief + "\n\n";
+            }
+            for (const auto &[label, text] : ann_facts(gc.annotations)) {
+                out += "*" + label + "*" + (text.empty() ? "" : ": " + text) + "\n\n";
             }
             if (!gc.fields.empty()) {
                 out +=
@@ -2037,6 +2127,9 @@ endif()
                     }
                     if (f.is_readonly) {
                         add("_(readonly)_");
+                    }
+                    for (const auto &[label, text] : ann_facts(f.annotations)) {
+                        add("_(" + label + (text.empty() ? "" : ": " + text) + ")_");
                     }
                     out +=
                         "| `" + f.name + "` | `" + readable_type(f.type) + "` | " + desc + " |\n";
@@ -2074,6 +2167,11 @@ endif()
                     }
                     if (!m.returns.empty()) {
                         out += "*Returns:* " + m.returns + "\n\n";
+                    }
+                    for (const auto &[label, text] : ann_facts(m.annotations)) {
+                        std::string l = label;
+                        l[0]          = static_cast<char>(std::toupper(static_cast<unsigned char>(l[0])));
+                        out += "*" + l + ":*" + (text.empty() ? "" : " " + text) + "\n\n";
                     }
                 }
             }

@@ -58,6 +58,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <regex>
 #include <vector>
 
 namespace rosetta::dyn {
@@ -312,7 +313,16 @@ namespace rosetta::dyn {
         bool            is_ref         = false;
         bool            is_mutable_ref = false;
         bool            is_out         = false; // manifest "out_params"; joins the return
+
+        // The default, as text the core reads back when the caller omits this
+        // (trailing) parameter: a number, true / false, a "quoted string", or a
+        // "quoted enumerator name". From rosetta::default_value, or from a C++
+        // default argument whose spelling is a plain literal. Null: required.
+        const char *default_value = nullptr;
     };
+
+    /** @brief The value of annotation `key` in a MetaAnnotation list, or null. */
+    const char *annotation(const MetaAnnotation *a, std::size_t n, std::string_view key);
 
     /**
      * @brief The one function-pointer shape everything callable reduces to.
@@ -353,6 +363,11 @@ namespace rosetta::dyn {
         // `set` is null for a readonly or unmarshalable field.
         Thunk get = nullptr;
         Thunk set = nullptr;
+
+        /** @brief Value of annotation `key` (unit, min, regex, group, ...), or null. */
+        const char *annotation(std::string_view key) const {
+            return dyn::annotation(annotations, n_annotations, key);
+        }
     };
 
     struct MetaMethod {
@@ -378,6 +393,11 @@ namespace rosetta::dyn {
 
         Thunk       invoke      = nullptr;
         const char *skip_reason = ""; // non-empty exactly when invoke is null
+
+        /** @brief Value of annotation `key` (requires, destructive, unit, ...), or null. */
+        const char *annotation(std::string_view key) const {
+            return dyn::annotation(annotations, n_annotations, key);
+        }
     };
 
     struct MetaCtor {
@@ -419,6 +439,11 @@ namespace rosetta::dyn {
         // argument to another method — `mesh.translate(vec)` would be
         // unexpressible. Set by the emitter; the two point at each other.
         const TypeDesc *self = nullptr;
+
+        /** @brief Value of a class-level annotation (deprecated, since), or null. */
+        const char *annotation(std::string_view key) const {
+            return dyn::annotation(annotations, n_annotations, key);
+        }
 
         // ---- lookup (linear; see resolve() for the caching note) ----
         const MetaField  *field(std::string_view n) const;
@@ -554,6 +579,33 @@ namespace rosetta::dyn {
     /** @brief Static-method and free-function calls (no receiver). */
     Result call_static(const MetaClass &k, std::string_view name, const ArgList &args = {});
     Result call_function(const MetaFunction &f, const ArgList &args = {});
+
+    // ---------------------------------------------------------------------
+    // Expressions — rosetta::requires_ / enabled_if / visible_if
+    // ---------------------------------------------------------------------
+
+    /**
+     * @brief Evaluate a small expression against an object.
+     *
+     * Grammar: numbers, "strings", true / false, identifiers, name() (a nullary
+     * method of `self`), unary - and !, * /, + -, < <= > >= == !=, &&, ||,
+     * parentheses. An identifier is, in order: a parameter (when `params` and
+     * `args` are given — a missing trailing argument takes its default), a field
+     * of `self`, or else a bare word compared as a string (so an enum field
+     * reads `shading == Wireframe`). Enum values compare by enumerator name.
+     *
+     * Returns a boolean, number or string Any; an error (unknown method, a
+     * type mismatch, a syntax error) comes back in Result::error.
+     */
+    Result evaluate(const Object &self, std::string_view expr, const MetaParam *params = nullptr,
+                    std::size_t n_params = 0, const ArgList *args = nullptr);
+
+    /**
+     * @brief A UI condition (enabled_if / visible_if): true when `expr`
+     * evaluates truthy. An expression that cannot be evaluated counts as true —
+     * a broken hint must never hide or lock a field for good.
+     */
+    bool condition(const Object &self, std::string_view expr);
 
     // ---------------------------------------------------------------------
     // Registry

@@ -80,7 +80,8 @@ sources apart.
 \code{combobox} & string fields &
   \code{= rosetta::combobox\{\{"a","b"\}\}} \newline
   \code{"combobox": ["a","b"]} &
-  Allowed choices (maximum 16). UI renders a drop-down. \\
+  Allowed choices (maximum 16), \textbf{enforced}: any other value is rejected.
+  UI renders a drop-down. \\
 \addlinespace
 \code{label} & fields, methods &
   \code{= rosetta::label\{"\ldots"\}} \newline \code{"label": "\ldots"} &
@@ -101,6 +102,139 @@ sources apart.
 \noindent$^*$ Class-level and free-function \code{doc} come from the
 \textbf{manifest} (a \field{doc} key on the entry), since free functions carry
 no in-source annotations.
+
+\subsection{Semantics, validation, behaviour and layout}
+\label{sec:ann-extended}
+
+Beyond the core set, annotations can state what a value \emph{means}, what it
+may be, what calling a method \emph{does}, where it is in its lifecycle, and how
+a property panel should lay it out.
+
+\begin{center}
+\small
+\begin{longtable}{@{}L{2.4cm}L{5.0cm}L{6.6cm}@{}}
+\toprule
+\textbf{Kind} & \textbf{Spellings} & \textbf{Meaning} \\
+\midrule
+\endhead
+\code{unit} & \code{= rosetta::unit\{"m"\}} \newline \code{"unit": "m"} &
+  Physical unit of a number (or a method's result): a UI label suffix, a
+  docstring line, \code{x-unit} in OpenAPI, \code{unit} in an MCP
+  \code{describe\_class}. \\
+\addlinespace
+\code{default\_value} & \code{= rosetta::default\_value\{"dt", 0.001\}}
+  \newline \code{"default": \{"dt": 0.001\}} &
+  On a method: the default of the named parameter. C++ cannot reflect a default
+  argument's \emph{value}; this states it. Bindings make the parameter optional
+  (Python keyword default, TypeScript \code{dt?}, OpenAPI \code{default}); the
+  dynamic core and the MCP server let a caller omit it. \\
+\addlinespace
+\code{example} & \code{= rosetta::example\{"\{\textbackslash"s\textbackslash": 2\}"\}}
+  \newline \code{"example": \{"s": 2\}} &
+  A sample value or call, as JSON: OpenAPI \code{examples}, TSDoc
+  \code{@example}, docstrings, MCP. \\
+\addlinespace
+\code{min}, \code{max} & \code{= rosetta::min\{0\}} \newline \code{"min": 0} &
+  One-sided bounds, enforced like \code{range}. \\
+\addlinespace
+\code{length} & \code{= rosetta::length\{1, 64\}} \newline \code{"length": [1, 64]} &
+  Allowed size of a string or a vector, enforced. \\
+\addlinespace
+\code{regex} & \code{= rosetta::regex\{"[a-z]+"\}} \newline \code{"regex": "[a-z]+"} &
+  A pattern the whole string must match, enforced. \\
+\addlinespace
+\code{requires\_} & \code{= rosetta::requires\_\{"dt < period() / 20", "msg"\}}
+  \newline \code{"requires": ["expr", "msg"]} &
+  A precondition in the expression language below --- on a field checked with
+  the \emph{new} value, on a method with the call's arguments. Enforced by the
+  dynamic core; documented everywhere. (\code{requires} is a C++ keyword,
+  hence the underscore.) \\
+\addlinespace
+\code{destructive} & \code{= rosetta::destructive\{\}} \newline
+  \code{"destructive": true} &
+  The method discards state: UIs ask first, an MCP client must pass
+  \code{"confirm": true}. \\
+\addlinespace
+\code{confirm} & \code{= rosetta::\bk confirm\{"Discard?"\}} \newline
+  \code{"confirm": "Discard?"} &
+  \code{destructive}, with the question to ask. \\
+\addlinespace
+\code{expensive} & \code{= rosetta::expensive\{\}} \newline \code{"expensive": true} &
+  Slow: a busy cursor in UIs; agents are told to batch such calls in a script. \\
+\addlinespace
+\code{hidden} & \code{= rosetta::hidden\{\}} \newline \code{"hidden": true} &
+  Public in C++, bound \emph{nowhere}. \\
+\addlinespace
+\code{deprecated} & \code{= rosetta::\bk deprecated\{"foo()"\}} \newline
+  \code{"deprecated": "foo()"} &
+  Still bound, flagged everywhere (label, \code{@deprecated}, OpenAPI,
+  docstring, MCP). \\
+\addlinespace
+\code{since} & \code{= rosetta::since\{"1.2"\}} \newline \code{"since": "1.2"} &
+  The version that introduced the member. \\
+\addlinespace
+\code{step}, \code{decimals} & \code{= rosetta::step\{0.1\}} \newline
+  \code{"decimals": 3} &
+  Spin increment; digits shown. \\
+\addlinespace
+\code{log\_scale} & \code{= rosetta::log\_scale\{\}} \newline \code{"log\_scale": true} &
+  A slider moving along $\log_{10}$ of the value, for a positive range spanning
+  orders of magnitude. \\
+\addlinespace
+\code{group}, \code{order} & \code{= rosetta::group\{"Rod"\}} \newline
+  \code{"order": 3} &
+  Panel section (a group's fields stay together) and position. \\
+\addlinespace
+\code{enabled\_if}, \code{visible\_if} & \code{= rosetta::enabled\_if\{"pinBoundary"\}}
+  \newline \code{"visible\_if": "shading != Wireframe"} &
+  Editable / shown only while the condition holds. \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{The expression language}
+
+\code{requires\_}, \code{enabled\_if} and \code{visible\_if} share a small
+grammar: numbers, \code{"strings"}, \code{true} / \code{false}, identifiers,
+\code{name()} (a nullary method of the object), unary \code{-} and \code{!},
+\code{* /}, \code{+ -}, comparisons, \code{\&\&}, \code{||} and parentheses. An
+identifier is a parameter of the call (for a method's \code{requires\_}), else a
+field, else a bare word compared as a string --- so an enum field reads
+\code{shading == Wireframe}.
+
+The dynamic core evaluates them at run time; the generated Qt and ImGui
+inspectors translate the UI conditions into C++ over the object. A condition
+that cannot be evaluated or translated counts as true: a broken hint must never
+lock a field.
+
+\subsection{An example}
+
+The pendulum of \code{examples/pendulum} uses most of them, entirely from a
+side-car, so its header stays plain C++:
+
+\begin{lstlisting}[style=json]
+{
+  "length":   { "doc": "Length of the rod", "unit": "m", "range": [0.1, 10],
+                "step": 0.1, "decimals": 2, "group": "Rod", "order": 1 },
+  "damping":  { "unit": "1/s", "min": 0, "max": 1, "group": "Physics" },
+  "integrator": { "combobox": ["symplectic", "euler"], "widget": "radio" },
+  "name":     { "length": [1, 32], "regex": "[A-Za-z][A-Za-z0-9_ ]*" },
+  "trace":    { "unit": "deg", "readonly": true, "widget": "plot",
+                "visible_if": "recordTrace" },
+  "scratch":  { "hidden": true },
+  "simulate": { "default": { "dt": 0.001 },
+                "requires": ["dt < period() / 20", "time step too coarse"],
+                "example": { "seconds": 2.0 }, "since": "1.0" },
+  "oldPeriod": { "deprecated": "period()" },
+  "reset":    { "confirm": "Reset the pendulum? Its time and trace are lost." }
+}
+\end{lstlisting}
+
+From that one file, Python gets \code{simulate(seconds, dt=0.001)} and a
+\code{ValueError} for \code{name = "9lives"}; the Qt inspector gets sections,
+units, a plot of the trace and a confirmation before \code{reset}; the MCP
+server reports all of it and refuses \code{dt = 0.5} with ``time step too
+coarse''.
 
 \subsection{Widget hints}
 
@@ -127,6 +261,9 @@ consumed by the three UI inspector backends and ignored everywhere else.
   group instead of a drop-down \\
 \code{file}      & string path & text entry + browse button opening the platform
   file dialog \\
+\code{plot}      & vector of numbers & a small line plot of the values \\
+\code{progress}  & number + \code{range} & a progress bar: a read-out, not an
+  editor \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -134,20 +271,35 @@ consumed by the three UI inspector backends and ignored everywhere else.
 \section{Who consumes what}
 
 \begin{description}[leftmargin=0cm,style=nextline,font=\normalfont\itshape]
+  \item[Every backend] \code{hidden} (the member is never visited), and
+    \code{default\_value} wherever defaults are rendered.
   \item[Scripting backends] (\lang{python}, \lang{nanobind}, \lang{node},
     \lang{wasm}, \lang{lua}, \lang{julia}, plus \lang{csharp} / \lang{java}):
-    \code{doc} becomes docstrings where the framework has them; \code{range}
-    becomes validating setters; \code{readonly} becomes getter-only properties.
-    \code{label}, \code{button} and \code{widget::*} are ignored --- they are UI
-    concepts.
-  \item[UI inspectors] (\lang{qt}, \lang{qml}, \lang{imgui}): everything.
-    \code{doc} as tooltips, \code{range} as slider bounds or commit validation,
-    \code{readonly} as disabled editors, \code{combobox} as drop-downs, plus
-    \code{label}, \code{button} and \code{widget::*}.
+    \code{doc} becomes docstrings where the framework has them; \code{range},
+    \code{min}, \code{max}, \code{combobox}, \code{length} and \code{regex}
+    become validating setters (\lang{python}, \lang{nanobind}, \lang{lua},
+    \lang{julia}, \lang{wasm}); \code{readonly} becomes getter-only properties.
+    Python docstrings also state the unit, the allowed values, preconditions,
+    examples and the lifecycle. The UI kinds are ignored.
+  \item[The dynamic core] (\lang{dynamic}, \lang{mcp}, and everything built
+    on them --- the MCP server, \code{run\_script}, dynamic UIs): enforces
+    every validation kind including \code{requires\_}, fills defaults, and
+    exposes every annotation as key/value metadata. The MCP server reports them
+    in \code{describe\_class} and refuses a \code{destructive} method without
+    \code{"confirm": true} (Chapter~\ref{ch:mcp}).
+  \item[UI inspectors] (\lang{qt}, \lang{qml}, \lang{imgui}): \code{doc} and
+    the facts as tooltips, the unit and deprecation in labels, \code{range},
+    \code{step}, \code{decimals}, \code{log\_scale} in editors, \code{group} and
+    \code{order} for layout, the two conditions, \code{plot} and
+    \code{progress}, a confirmation before a \code{destructive} call, a busy
+    cursor for an \code{expensive} one; an edit that breaks \code{min},
+    \code{max}, \code{length} or \code{regex} is refused. (\lang{qml} hands the
+    layout hints to its QML delegates.)
   \item[Document backends] (\lang{markdown}, \lang{html}, \lang{openapi},
-    \lang{typescript}): \code{doc} and the constraints (\code{range},
-    \code{readonly}, \code{combobox}) are rendered into the reference text or
-    schema.
+    \lang{typescript}): \code{doc} and every constraint and fact, as reference
+    text, JSON Schema keywords (\code{minimum}, \code{maxLength},
+    \code{pattern}, \code{examples}, \code{deprecated}, \code{x-unit}) and
+    TSDoc tags.
 \end{description}
 
 An annotation a backend has no use for is simply ignored --- never an error.

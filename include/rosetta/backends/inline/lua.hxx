@@ -642,17 +642,14 @@ local {{LIB}} = require("{{LIB}}")
             if (lx_field_readonly(f)) {
                 return "    c[\"" + f.name + "\"] = sol::readonly(" + mp + ");\n";
             }
-            if (f.range.has && f.type.kind == "number") {
-                const std::string ty = f.type.spelling;
-                const std::string lo = num_str(f.range.min);
-                const std::string hi = num_str(f.range.max);
+            if (setter_checked(f)) {
                 std::string s;
                 s += "    c[\"" + f.name + "\"] = sol::property(\n";
                 s += "        [](const " + self + " &s) { return s." + f.name + "; },\n";
-                s += "        [](" + self + " &s, " + ty + " v) {\n";
-                s += "            if (v < " + lo + " || v > " + hi + ")\n";
-                s += "                throw std::runtime_error(\"" + f.name + " out of range [" +
-                     lo + ", " + hi + "]\");\n";
+                s += "        [](" + self + " &s, " + setter_param(f, f.type.spelling) + ") {\n";
+                s += setter_checks(f, "            ", [](const std::string &m) {
+                    return "throw std::runtime_error(" + m + ")";
+                });
                 s += "            s." + f.name + " = v;\n";
                 s += "        });\n";
                 return s;
@@ -998,6 +995,7 @@ local {{LIB}} = require("{{LIB}}")
                    "#include <string>\n"
                    "#include <unordered_map>\n"
                    "#include <vector>\n";
+            out += regex_include(c);
             // sol2-only: just the user's (stock) headers below.
             auto add = [&](const std::string &h) { append_include(out, h); };
             out += init_includes(c);

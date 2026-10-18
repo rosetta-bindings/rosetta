@@ -158,7 +158,7 @@ namespace rosetta::mcp {
             const Server::Signature *hit = nullptr;
             std::vector<dyn::Any>     ordered;
             for (const Server::Signature &s : sigs) {
-                if (dyn::detail::input_arity(s.params, s.n_params) != raw.size() + kwargs.size()) {
+                if (dyn::detail::input_arity(s.params, s.n_params) < raw.size() + kwargs.size()) {
                     continue;
                 }
                 std::vector<dyn::Any> trial = raw;
@@ -175,6 +175,8 @@ namespace rosetta::mcp {
                     if (kwargs.contains(n)) {
                         trial.push_back(from_py(kwargs[n]));
                         ++used;
+                    } else if (s.params[i].default_value) {
+                        trial.push_back(dyn::detail::default_any(s.params[i])); // omitted
                     } else {
                         ok = false;
                     }
