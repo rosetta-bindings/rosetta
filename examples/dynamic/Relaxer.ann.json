@@ -15,7 +15,7 @@
   "lastPasses":    { "doc": "Passes actually run, after clamping", "readonly": true,
                      "label": "Passes run" },
 
-  "run":           { "doc": "Relax the mesh in place", "button": "Relax" },
+  "run":           { "doc": "Relax the mesh in place", "button": "Relax", "expensive": true },
   "report":        { "doc": "One line describing the last run", "button": "Report" },
   "quality":       { "doc": "Mean triangle quality of a mesh, in [0,1]" },
   "minQuality":    { "doc": "Quality of the worst triangle in a mesh" }

@@ -24,6 +24,14 @@ set(CMAKE_AUTOMOC ON)
 
 set(QT_DIR "{{QT_DIR}}" CACHE PATH "Qt 6 install prefix")
 list(PREPEND CMAKE_PREFIX_PATH "${QT_DIR}")
+# macOS 15 removed the AGL framework, but Qt's FindWrapOpenGL still falls back to
+# `-framework AGL`, which fails at link time. Point it at OpenGL instead.
+if(APPLE AND CMAKE_OSX_SYSROOT AND
+   NOT EXISTS "${CMAKE_OSX_SYSROOT}/System/Library/Frameworks/AGL.framework")
+    find_library(_rosetta_gl NAMES OpenGL)
+    set(WrapOpenGL_AGL "${_rosetta_gl}" CACHE FILEPATH
+        "Stand-in for the AGL framework the macOS 15 SDK removed" FORCE)
+endif()
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets)
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -93,18 +101,222 @@ The app opens one inspector tab per default-constructible class.
             return name;
         }
 
+        // ---- shared by the Qt and ImGui inspectors ---------------------------
+
+        // The row label: display name, plus the unit and a deprecation marker.
+        inline std::string ui_label(const std::string &name, const std::vector<std::any> &anns) {
+            std::string l = qtx_display(name, anns);
+            if (const auto *u = find_annotation<rosetta::unit>(anns)) {
+                l += std::string(" [") + u->text + "]";
+            }
+            if (find_annotation<rosetta::deprecated>(anns)) {
+                l += " (deprecated)";
+            }
+            return l;
+        }
+
+        // The tooltip: the doc, then one line per annotation fact.
+        inline std::string ui_tip(const std::string &doc, const std::vector<std::any> &anns,
+                                  const GenRange *range = nullptr,
+                                  const std::vector<std::string> *choices = nullptr) {
+            return px_join_doc(doc, px_ann_lines(anns, range, choices));
+        }
+
+        // Fields in panel order: rosetta::order first (ascending), the rest in
+        // declaration order after them; stable, so equal ranks keep theirs.
+        inline std::vector<const GenField *> ui_ordered(const std::vector<GenField> &fields) {
+            std::vector<const GenField *> out;
+            for (const auto &f : fields) {
+                out.push_back(&f);
+            }
+            std::stable_sort(out.begin(), out.end(), [](const GenField *a, const GenField *b) {
+                const auto *oa = find_annotation<rosetta::order>(a->annotations);
+                const auto *ob = find_annotation<rosetta::order>(b->annotations);
+                if (!oa || !ob) {
+                    return oa && !ob;
+                }
+                return oa->rank < ob->rank;
+            });
+            // Then cluster by rosetta::group, groups in order of first appearance,
+            // so a section is never split in two.
+            std::vector<std::string> groups;
+            const auto rank = [&groups](const GenField *f) {
+                const auto *g    = find_annotation<rosetta::group>(f->annotations);
+                const std::string n = g ? g->name : "";
+                const auto it = std::find(groups.begin(), groups.end(), n);
+                return static_cast<std::size_t>(it - groups.begin());
+            };
+            for (const GenField *f : out) {
+                const auto *g = find_annotation<rosetta::group>(f->annotations);
+                const std::string n = g ? g->name : "";
+                if (std::find(groups.begin(), groups.end(), n) == groups.end()) {
+                    groups.push_back(n);
+                }
+            }
+            std::stable_sort(out.begin(), out.end(),
+                             [&rank](const GenField *a, const GenField *b) { return rank(a) < rank(b); });
+            return out;
+        }
+
+        inline std::string ui_group(const GenField &f) {
+            const auto *g = find_annotation<rosetta::group>(f.annotations);
+            return g ? g->name : "";
+        }
+
+        /**
+         * @brief A rosetta::requires_ / enabled_if / visible_if expression as C++
+         * over the object `var`, for an inspector that has the object at
+         * compile time. Fields become `var.f`, `name()` becomes `var.name()`, a
+         * bare word that names an enumerator of one of the class's enum fields
+         * becomes `Enum::Word`. Returns "" when a word is none of these — the
+         * caller then skips the condition rather than emit broken C++.
+         */
+        inline std::string ui_cpp_condition(const std::string &expr, const GenClass &k,
+                                            const std::string &var) {
+            std::string out;
+            for (std::size_t i = 0; i < expr.size();) {
+                const char ch = expr[i];
+                if (ch == '"') { // string literal: verbatim
+                    const std::size_t end = expr.find('"', i + 1);
+                    if (end == std::string::npos) {
+                        return {};
+                    }
+                    out += expr.substr(i, end - i + 1);
+                    i = end + 1;
+                    continue;
+                }
+                if (!(std::isalpha(static_cast<unsigned char>(ch)) || ch == '_')) {
+                    out += ch;
+                    ++i;
+                    continue;
+                }
+                std::size_t j = i;
+                while (j < expr.size() &&
+                       (std::isalnum(static_cast<unsigned char>(expr[j])) || expr[j] == '_')) {
+                    ++j;
+                }
+                const std::string word = expr.substr(i, j - i);
+                i                      = j;
+                if (word == "true" || word == "false") {
+                    out += word;
+                    continue;
+                }
+                bool done = false;
+                for (const auto &f : k.fields) {
+                    if (f.name == word) {
+                        out += var + "." + word;
+                        done = true;
+                        break;
+                    }
+                }
+                if (!done) {
+                    std::size_t p = i;
+                    while (p < expr.size() && expr[p] == ' ') {
+                        ++p;
+                    }
+                    if (p < expr.size() && expr[p] == '(') {
+                        for (const auto &m : k.methods) {
+                            if (m.name == word && m.params.empty()) {
+                                out += var + "." + word;
+                                done = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!done) {
+                    for (const auto &f : k.fields) {
+                        if (f.type.kind != "enum") {
+                            continue;
+                        }
+                        for (const auto &e : f.type.enumerators) {
+                            if (e.name == word) {
+                                out += f.type.object + "::" + word;
+                                done = true;
+                                break;
+                            }
+                        }
+                        if (done) {
+                            break;
+                        }
+                    }
+                }
+                if (!done) {
+                    return {};
+                }
+            }
+            return out;
+        }
+
+        // A C++ boolean expression that is false when `v` breaks one of the
+        // field's min / max / length / regex constraints ("" when it has none):
+        // the inspectors revert such an edit instead of storing it.
+        inline std::string ui_valid_expr(const GenField &f, const std::string &v) {
+            std::vector<std::string> conds;
+            if (const auto *a = find_annotation<rosetta::min>(f.annotations)) {
+                conds.push_back(v + " >= " + num_lit(a->value));
+            }
+            if (const auto *a = find_annotation<rosetta::max>(f.annotations)) {
+                conds.push_back(v + " <= " + num_lit(a->value));
+            }
+            if (f.type.kind == "string") {
+                if (const auto *a = find_annotation<rosetta::length>(f.annotations)) {
+                    conds.push_back(v + ".size() >= " + std::to_string(a->lo) + " && " + v +
+                                    ".size() <= " + std::to_string(a->hi));
+                }
+                if (const auto *a = find_annotation<rosetta::regex>(f.annotations)) {
+                    conds.push_back("std::regex_match(" + v + ", std::regex(\"" + py_lit(a->pattern) +
+                                    "\"))");
+                }
+            }
+            std::string out;
+            for (const auto &c : conds) {
+                out += (out.empty() ? "" : " && ") + std::string("(") + c + ")";
+            }
+            return out;
+        }
+
+        inline std::string ui_destructive_question(const std::vector<std::any> &anns) {
+            if (const auto *c = find_annotation<rosetta::confirm>(anns)) {
+                return c->question;
+            }
+            return find_annotation<rosetta::destructive>(anns) ? "Run this? It cannot be undone."
+                                                               : "";
+        }
+
         inline std::string qtx_qstr(const std::string &s) {
             return "QStringLiteral(\"" + py_lit(s) + "\")";
         }
 
         // One field → an add_field<F>(...) (F deduced from t.<name>) or, for
         // non-scalar types, an add_unsupported(...).
+        // Returns statements that leave the row index in `row` (int).
         inline std::string qtx_field(const GenField &f) {
-            const std::string disp = qtx_qstr(qtx_display(f.name, f.annotations));
-            const std::string tip  = qtx_qstr(f.doc);
-            if (!qtx_scalar(f.type)) {
-                return "    rosetta::qtw::add_unsupported(form, " + disp + ", " + tip + ");\n";
+            const std::string disp = qtx_qstr(ui_label(f.name, f.annotations));
+            const std::string tip  = qtx_qstr(ui_tip(f.doc, f.annotations, &f.range, &f.choices));
+            if (f.type.kind == "vector" && !f.type.element.empty() &&
+                f.type.element.front().kind == "number" &&
+                find_annotation<rosetta::widget::plot_tag>(f.annotations)) {
+                return "    row = rosetta::qtw::add_plot(form, " + disp + ", " + tip + ", t." +
+                       f.name + ");\n";
             }
+            if (!qtx_scalar(f.type)) {
+                return "    rosetta::qtw::add_unsupported(form, " + disp + ", " + tip +
+                       ");\n    row = form->rowCount() - 1;\n";
+            }
+            // The commit validates min / max / length / regex (throwing; the
+            // runtime logs the refusal), stores, then re-checks conditions.
+            std::string guard;
+            if (const std::string ok = ui_valid_expr(f, "v"); !ok.empty()) {
+                guard = "if (!(" + ok + ")) throw std::runtime_error(\"" +
+                        py_lit(f.name + " is outside its allowed values") + "\"); ";
+            }
+            const auto *st = find_annotation<rosetta::step>(f.annotations);
+            const auto *dc = find_annotation<rosetta::decimals>(f.annotations);
+            const bool  pg = find_annotation<rosetta::widget::progress_tag>(f.annotations) != nullptr;
+            const std::string opts = "rosetta::qtw::FieldOpts{" + (st ? num_lit(st->value) : "0") +
+                                     ", " + (dc ? std::to_string(dc->count) : "-1") + ", " +
+                                     (pg ? "true" : "false") + "}";
             const std::string mp = "t." + f.name;
             // combobox choices (string fields only, but harmless to always pass)
             std::string choices = "QStringList{";
@@ -112,18 +324,21 @@ The app opens one inspector tab per default-constructible class.
                 choices += (i ? ", " : "") + qtx_qstr(f.choices[i]);
             }
             choices += "}";
-            std::string s = "    rosetta::qtw::add_field(form, " + disp + ", " + tip + ", " + mp +
+            std::string s = "    row = rosetta::qtw::add_field(form, " + disp + ", " + tip + ", " + mp +
                             ", " + (f.is_readonly ? "true" : "false") + ", " +
                             (f.range.has ? "true" : "false") + ", " + num_str(f.range.min) + ", " +
                             num_str(f.range.max) + ", " + choices + ", " + qtx_hint(f.annotations) +
-                            ",\n        [&t](auto v) { t." + f.name + " = v; }, log, \"" + f.name +
-                            "\");\n";
+                            ",\n        [&t, conds](auto v) { " + guard + "t." + f.name +
+                            " = v; conds->run(); }, log, \"" + f.name + "\", " + opts + ");\n";
             return s;
         }
 
         // Per-parameter QString → typed conversion, by IR kind.
-        inline std::string qtx_arg(const GenType &t, std::size_t i) {
+        inline std::string qtx_arg(const GenType &t, std::size_t i, const std::string &dflt = {}) {
             const std::string a = "args.value(" + std::to_string(i) + ")";
+            if (!dflt.empty()) { // an empty box takes the parameter's default
+                return "(" + a + ".isEmpty() ? " + dflt + " : " + qtx_arg(t, i) + ")";
+            }
             if (t.kind == "string") {
                 return a + ".toStdString()";
             }
@@ -158,22 +373,27 @@ The app opens one inspector tab per default-constructible class.
             if (!qtx_method_ok(m)) {
                 return {};
             }
-            const std::string disp = qtx_qstr(qtx_display(m.name, m.annotations));
-            const std::string tip  = qtx_qstr(m.doc);
+            const std::string disp = qtx_qstr(ui_label(m.name, m.annotations));
+            const std::string tip  = qtx_qstr(ui_tip(m.doc, m.annotations));
             std::string       btn;
             if (const auto *b = find_annotation<rosetta::button>(m.annotations); b && b->label) {
                 btn = b->label;
             }
             std::string names = "QStringList{";
             for (std::size_t i = 0; i < m.params.size(); ++i) {
-                names += (i ? ", " : "") + qtx_qstr(m.params[i].name);
+                const std::string &d = m.params[i].default_text;
+                names += (i ? ", " : "") +
+                         qtx_qstr(m.params[i].name + (d.empty() ? "" : " = " + d));
             }
             names += "}";
 
             // call expression
             std::string call = (m.is_static ? cls + "::" : "t.") + m.name + "(";
             for (std::size_t i = 0; i < m.params.size(); ++i) {
-                call += (i ? ", " : "") + qtx_arg(m.params[i].type, i);
+                const std::string d = m.params[i].type.kind == "string" && !m.params[i].default_text.empty()
+                                          ? "std::string(" + m.params[i].default_text + ")"
+                                          : m.params[i].default_text;
+                call += (i ? ", " : "") + qtx_arg(m.params[i].type, i, d);
             }
             call += ")";
 
@@ -189,6 +409,15 @@ The app opens one inspector tab per default-constructible class.
                 body = "return QString::number(" + call + ");";
             }
 
+            // rosetta::confirm / destructive: ask first; expensive: a wait cursor.
+            if (const std::string q = ui_destructive_question(m.annotations); !q.empty()) {
+                body = "if (!rosetta::qtw::confirm(" + qtx_qstr(q) +
+                       ")) return QStringLiteral(\"cancelled\"); " + body;
+            }
+            if (find_annotation<rosetta::expensive>(m.annotations)) {
+                body = "QApplication::setOverrideCursor(Qt::WaitCursor); struct R { ~R() { "
+                       "QApplication::restoreOverrideCursor(); } } r_; " + body;
+            }
             const std::string cap     = m.is_static ? "[]" : "[&t]";
             const std::string argname = m.params.empty() ? "const QStringList&"
                                                           : "const QStringList& args";
@@ -208,8 +437,31 @@ The app opens one inspector tab per default-constructible class.
             s += "    QFormLayout *form = shell.form;\n";
             s += "    QTextEdit *log = shell.log;\n";
             s += "    (void)log;\n";
-            for (const auto &f : k.fields) {
+            s += "    auto conds = shell.conds;\n";
+            s += "    int row = 0;\n    (void)row;\n";
+            std::string group;
+            for (const GenField *fp : ui_ordered(k.fields)) {
+                const GenField &f = *fp;
+                if (const std::string g = ui_group(f); !g.empty() && g != group) {
+                    s += "    rosetta::qtw::add_section(form, " + qtx_qstr(g) + ");\n";
+                    group = g;
+                }
                 s += qtx_field(f);
+                for (const bool vis : {false, true}) {
+                    const char *expr = nullptr;
+                    if (vis) {
+                        if (const auto *v = find_annotation<rosetta::visible_if>(f.annotations)) expr = v->expr;
+                    } else if (const auto *e = find_annotation<rosetta::enabled_if>(f.annotations)) {
+                        expr = e->expr;
+                    }
+                    if (!expr) {
+                        continue;
+                    }
+                    if (const std::string c = ui_cpp_condition(expr, k, "t"); !c.empty()) {
+                        s += "    rosetta::qtw::add_condition(shell, row, [&t] { return " + c +
+                             "; }, " + (vis ? "true" : "false") + ");\n";
+                    }
+                }
             }
             for (const auto &m : k.methods) {
                 if (m.is_extension) {
@@ -243,7 +495,8 @@ The app opens one inspector tab per default-constructible class.
             std::string s = "// Generated by rosetta::generate (expanded, reflection-free) — "
                             "do not edit by hand.\n";
             s += "#include \"qt_inspector.h\"\n";
-            s += "#include <rosetta/runtime/qt_widgets.h>\n\n";
+            s += "#include <rosetta/runtime/qt_widgets.h>\n#include <QApplication>\n#include <stdexcept>\n";
+            s += regex_include(c) + "\n";
             for (const auto &k : c.classes) {
                 s += qtx_build_fn(k);
             }

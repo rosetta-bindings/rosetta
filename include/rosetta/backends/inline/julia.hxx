@@ -325,13 +325,12 @@ using .{{LIB}}
             if (jx_field_readonly(f)) {
                 return s;
             }
-            if (f.range.has && f.type.kind == "number") {
-                const std::string lo = num_str(f.range.min);
-                const std::string hi = num_str(f.range.max);
-                s += "    c.method(\"" + f.name + "!\", [](" + self + " &s, " + ty + " v) {\n";
-                s += "        if (v < " + lo + " || v > " + hi + ")\n";
-                s += "            throw std::out_of_range(\"" + f.name + " out of range [" + lo +
-                     ", " + hi + "]\");\n";
+            if (setter_checked(f)) {
+                s += "    c.method(\"" + f.name + "!\", [](" + self + " &s, " + setter_param(f, ty) +
+                     ") {\n";
+                s += setter_checks(f, "        ", [](const std::string &m) {
+                    return "throw std::out_of_range(" + m + ")";
+                });
                 s += "        s." + f.name + " = v;\n";
                 s += "    });\n";
                 return s;
@@ -586,6 +585,7 @@ using .{{LIB}}
                    "#include <stdexcept>\n"
                    "#include <string>\n"
                    "#include <vector>\n";
+            out += regex_include(c);
             out += using_namespaces_of(c); // `using namespace` for namespaced user types
             // C++ inheritance: jlcxx requires a SuperType specialization for
             // every type registered with julia_base_type (single base).

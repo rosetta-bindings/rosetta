@@ -434,6 +434,61 @@ script once per interpreter.)MD";
         // either — `help()` prints the docstring — so the convention every hand
         // written binding follows is a section per argument, which is what this
         // renders. `py::arg` still carries the NAMES; this carries their prose.
+        // The annotation-carried facts a docstring should state (unit,
+        // constraints, lifecycle, behaviour), one "Label: text" line each — what
+        // help() shows below the prose. Empty when there are none.
+        inline std::string px_ann_lines(const std::vector<std::any> &anns, const GenRange *range = nullptr,
+                                        const std::vector<std::string> *choices = nullptr) {
+            std::string out;
+            const auto  line = [&](const std::string &l) { out += (out.empty() ? "" : "\n") + l; };
+            if (const auto *a = find_annotation<rosetta::unit>(anns)) line(std::string("Unit: ") + a->text);
+            std::string allowed;
+            const auto  add = [&](const std::string &t) { allowed += (allowed.empty() ? "" : ", ") + t; };
+            if (range && range->has) add(num_str(range->min) + " .. " + num_str(range->max));
+            if (const auto *a = find_annotation<rosetta::min>(anns)) add(">= " + num_str(a->value));
+            if (const auto *a = find_annotation<rosetta::max>(anns)) add("<= " + num_str(a->value));
+            if (choices && !choices->empty()) {
+                std::string list;
+                for (const auto &c : *choices) list += (list.empty() ? "" : " | ") + c;
+                add("one of " + list);
+            }
+            if (const auto *a = find_annotation<rosetta::length>(anns)) {
+                add("length " + std::to_string(a->lo) + ".." + std::to_string(a->hi));
+            }
+            if (const auto *a = find_annotation<rosetta::regex>(anns)) add(std::string("matches ") + a->pattern);
+            if (!allowed.empty()) line("Allowed: " + allowed);
+            if (const auto *a = find_annotation<rosetta::requires_>(anns)) {
+                line(std::string("Requires: ") + a->expr + (*a->message ? std::string(" (") + a->message + ")" : ""));
+            }
+            if (const auto *a = find_annotation<rosetta::confirm>(anns)) {
+                line(std::string("Destructive: ") + a->question);
+            } else if (find_annotation<rosetta::destructive>(anns)) {
+                line("Destructive.");
+            }
+            if (find_annotation<rosetta::expensive>(anns)) line("Expensive: takes noticeable time.");
+            if (const auto *a = find_annotation<rosetta::example>(anns)) line(std::string("Example: ") + a->json);
+            if (const auto *a = find_annotation<rosetta::deprecated>(anns)) {
+                line(std::string("Deprecated") + (*a->use ? std::string(": use ") + a->use + "." : "."));
+            }
+            if (const auto *a = find_annotation<rosetta::since>(anns)) line(std::string("Since: ") + a->version);
+            return out;
+        }
+
+        inline std::string px_join_doc(std::string doc, const std::string &more) {
+            if (more.empty()) {
+                return doc;
+            }
+            return doc.empty() ? more : doc + "\n\n" + more;
+        }
+
+        inline std::string px_field_doc(const GenField &f) {
+            return px_join_doc(f.doc, px_ann_lines(f.annotations, &f.range, &f.choices));
+        }
+
+        inline std::string px_class_doc(const GenClass &k) {
+            return px_join_doc(k.brief, px_ann_lines(k.annotations));
+        }
+
         inline std::string px_method_doc(const GenMethod &m) {
             std::string out = m.doc;
             bool        any = false;
@@ -454,7 +509,7 @@ script once per interpreter.)MD";
                 out += out.empty() ? "" : "\n\n";
                 out += "Returns:\n    " + m.returns;
             }
-            return out;
+            return px_join_doc(out, px_ann_lines(m.annotations));
         }
 
         // Same, for a free function: GenFunction carries the same doc / returns
@@ -738,6 +793,8 @@ script once per interpreter.)MD";
             return s;
         }
 
+        inline std::string regex_include(const GenContext &c); // defined with the setters below
+
         // The #include block: pybind11 + the user headers. No rosetta header, so
         // the TU pulls in no reflection machinery whatsoever.
         inline std::string expanded_includes(const GenContext &c) {
@@ -750,6 +807,7 @@ script once per interpreter.)MD";
                             "#include <memory>\n"     // std::shared_ptr holders
                             "#include <type_traits>\n"
                             "#include <vector>\n";
+            s += regex_include(c);
             // Caster headers for the opted-in foreign libraries (manifest
             // "interop"). Without one, a signature naming an Eigen type still
             // COMPILES and then throws at call time — the shape the STL-caster
@@ -982,6 +1040,83 @@ script once per interpreter.)MD";
             return s;
         }
 
+
+        // ---- validating setters (shared by python, nanobind, lua, julia, wasm) ----
+        //
+        // The annotation-declared constraints a compiled binding enforces on
+        // assignment, beyond readonly: range / min / max on a number;
+        // combobox choices, length and regex on a std::string. (A vector's
+        // length, and requires_, are enforced by the dynamic core only.)
+
+        inline bool setter_checked(const GenField &f) {
+            if (f.type.kind == "number") {
+                return f.range.has || find_annotation<rosetta::min>(f.annotations) ||
+                       find_annotation<rosetta::max>(f.annotations);
+            }
+            if (f.type.kind == "string") {
+                return !f.choices.empty() || find_annotation<rosetta::length>(f.annotations) ||
+                       find_annotation<rosetta::regex>(f.annotations);
+            }
+            return false;
+        }
+
+        // The setter's value parameter: by value for a number, by const& for a string.
+        inline std::string setter_param(const GenField &f, const std::string &number_type) {
+            return f.type.kind == "string" ? "const std::string &v" : number_type + " v";
+        }
+
+        // C++ statements checking `v`; `raise` wraps a string-literal message in
+        // the backend's throw (py::value_error, nb::value_error, std::runtime_error).
+        inline std::string setter_checks(const GenField &f, const std::string &ind,
+                                         const std::function<std::string(const std::string &)> &raise) {
+            std::string s;
+            const auto  fail = [&](const std::string &cond, const std::string &msg) {
+                s += ind + "if (" + cond + ")\n" + ind + "    " + raise("\"" + py_lit(msg) + "\"") + ";\n";
+            };
+            if (f.type.kind == "number") {
+                if (f.range.has) {
+                    const std::string lo = num_str(f.range.min), hi = num_str(f.range.max);
+                    fail("v < " + lo + " || v > " + hi, f.name + " out of range [" + lo + ", " + hi + "]");
+                }
+                if (const auto *m = find_annotation<rosetta::min>(f.annotations)) {
+                    fail("v < " + num_lit(m->value), f.name + " is below the minimum " + num_str(m->value));
+                }
+                if (const auto *m = find_annotation<rosetta::max>(f.annotations)) {
+                    fail("v > " + num_lit(m->value), f.name + " is above the maximum " + num_str(m->value));
+                }
+            } else if (f.type.kind == "string") {
+                if (!f.choices.empty()) {
+                    std::string cond, list;
+                    for (std::size_t i = 0; i < f.choices.size(); ++i) {
+                        cond += (i ? " && " : "") + std::string("v != \"") + py_lit(f.choices[i]) + "\"";
+                        list += (i ? ", " : "") + f.choices[i];
+                    }
+                    fail(cond, f.name + " must be one of: " + list);
+                }
+                if (const auto *l = find_annotation<rosetta::length>(f.annotations)) {
+                    fail("v.size() < " + std::to_string(l->lo) + " || v.size() > " + std::to_string(l->hi),
+                         f.name + " length must be " + std::to_string(l->lo) + ".." + std::to_string(l->hi));
+                }
+                if (const auto *r = find_annotation<rosetta::regex>(f.annotations)) {
+                    fail("!std::regex_match(v, std::regex(\"" + py_lit(r->pattern) + "\"))",
+                         f.name + " must match " + r->pattern);
+                }
+            }
+            return s;
+        }
+
+        // "#include <regex>\n" when some bound field carries a rosetta::regex.
+        inline std::string regex_include(const GenContext &c) {
+            for (const auto &k : c.classes) {
+                for (const auto &f : k.fields) {
+                    if (find_annotation<rosetta::regex>(f.annotations)) {
+                        return "#include <regex>\n";
+                    }
+                }
+            }
+            return {};
+        }
+
         // Explicit pybind for one field, mirroring PybindVisitor::field():
         // readonly -> def_readonly; arithmetic + range -> validating def_property;
         // otherwise def_readwrite. Member pointers keep the field type implicit,
@@ -989,21 +1124,17 @@ script once per interpreter.)MD";
         inline std::string expanded_field(const GenClass &k, const GenField &f) {
             const std::string self  = qualified_of(k);
             const std::string mp    = "&" + self + "::" + f.name; // member pointer
-            const std::string dq    = doc_arg(f.doc);
+            const std::string dq    = doc_arg(px_field_doc(f));
             if (f.is_readonly) {
                 return "    c.def_readonly(\"" + f.name + "\", " + mp + dq + ");\n";
             }
-            if (f.range.has && f.type.kind == "number") {
-                const std::string ty  = f.type.spelling; // arithmetic -> compilable spelling
-                const std::string lo  = num_str(f.range.min);
-                const std::string hi  = num_str(f.range.max);
+            if (setter_checked(f)) {
                 std::string s;
                 s += "    c.def_property(\"" + f.name + "\",\n";
                 s += "        [](const " + self + " &s) { return s." + f.name + "; },\n";
-                s += "        [](" + self + " &s, " + ty + " v) {\n";
-                s += "            if (v < " + lo + " || v > " + hi + ")\n";
-                s += "                throw py::value_error(\"" + f.name + " out of range [" + lo +
-                     ", " + hi + "]\");\n";
+                s += "        [](" + self + " &s, " + setter_param(f, f.type.spelling) + ") {\n";
+                s += setter_checks(f, "            ",
+                                   [](const std::string &m) { return "throw py::value_error(" + m + ")"; });
                 s += "            s." + f.name + " = v;\n";
                 s += "        }" + dq + ");\n";
                 return s;
@@ -1033,7 +1164,7 @@ script once per interpreter.)MD";
         }
 
         inline std::string expanded_member_object(const GenClass &k, const GenField &f) {
-            const std::string dq = doc_arg(f.doc);
+            const std::string dq = doc_arg(px_field_doc(f));
             const std::string ft =
                 f.type.object_qualified.empty() ? f.type.object : f.type.object_qualified;
             std::string s;
@@ -1236,7 +1367,7 @@ script once per interpreter.)MD";
         // casterless foreign type).
         inline std::string px_seq_field(const GenClass &k, const GenField &f) {
             const std::string vt = adapt_boundary_cpp(f.type);
-            const std::string dq = doc_arg(f.doc);
+            const std::string dq = doc_arg(px_field_doc(f));
             std::string       s;
             const std::string get = "[](const " + k.name + " &s) { return " +
                                     adapt_from_expr(f.type, "s." + f.name) + "; }";
@@ -1639,7 +1770,7 @@ script once per interpreter.)MD";
             // The class's own doc comment becomes the Python type's docstring —
             // what `help(Cls)` prints above the members.
             std::string s = "    {\n        " + decl + " c(m, \"" + exposed_of(k) + "\"" +
-                            doc_arg(k.brief) + ");\n";
+                            doc_arg(px_class_doc(k)) + ");\n";
             // The block-local helper lines are written at one indent; reuse the
             // module-level emitters and shift them in by four spaces.
             auto indent = [](const std::string &block) {

@@ -367,6 +367,19 @@ target_include_directories(mcp PRIVATE ${CMAKE_SOURCE_DIR}/../include)
 target_link_libraries(mcp PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
 gtest_discover_tests(mcp)
 
+# The extended annotation set: through the generator (annotations_ext, C++26)
+# and through the dynamic core + MCP server (dynamic_annotations, stock).
+add_executable(annotations_ext annotations_ext.cpp)
+target_include_directories(annotations_ext PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(annotations_ext PRIVATE -fannotation-attributes)
+target_link_libraries(annotations_ext PRIVATE GTest::gtest_main)
+gtest_discover_tests(annotations_ext)
+
+add_executable(dynamic_annotations dynamic_annotations.cpp)
+target_include_directories(dynamic_annotations PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_link_libraries(dynamic_annotations PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
+gtest_discover_tests(dynamic_annotations)
+
 # The scripting tools (run_script / run_python) over the same fixture. Built
 # only when Lua 5.3+ is found; the Python half joins when Python 3.10+ and
 # pybind11 are found too.

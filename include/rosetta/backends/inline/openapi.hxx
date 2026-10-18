@@ -113,6 +113,33 @@ namespace rosetta {
                 e += "]";
                 extra.push_back(e);
             }
+            // The rest of the constraint vocabulary maps onto JSON Schema
+            // keywords one for one; the unit rides as an x- extension.
+            if (const auto *a = find_annotation<rosetta::min>(f.annotations)) {
+                extra.push_back("\"minimum\":" + oa_num(a->value));
+            }
+            if (const auto *a = find_annotation<rosetta::max>(f.annotations)) {
+                extra.push_back("\"maximum\":" + oa_num(a->value));
+            }
+            if (const auto *a = find_annotation<rosetta::length>(f.annotations)) {
+                const bool str = f.type.kind == "string";
+                extra.push_back(std::string("\"") + (str ? "minLength" : "minItems") +
+                                "\":" + std::to_string(a->lo));
+                extra.push_back(std::string("\"") + (str ? "maxLength" : "maxItems") +
+                                "\":" + std::to_string(a->hi));
+            }
+            if (const auto *a = find_annotation<rosetta::regex>(f.annotations)) {
+                extra.push_back("\"pattern\":\"^(?:" + oa_esc(a->pattern) + ")$\"");
+            }
+            if (const auto *a = find_annotation<rosetta::example>(f.annotations)) {
+                extra.push_back(std::string("\"examples\":[") + a->json + "]");
+            }
+            if (find_annotation<rosetta::deprecated>(f.annotations)) {
+                extra.push_back("\"deprecated\":true");
+            }
+            if (const auto *a = find_annotation<rosetta::unit>(f.annotations)) {
+                extra.push_back("\"x-unit\":\"" + oa_esc(a->text) + "\"");
+            }
             return oa_inject(oa_schema(f.type, c), extra);
         }
 
@@ -275,8 +302,18 @@ namespace rosetta {
                         odesc += (odesc.empty() ? "" : "\n\n");
                         odesc += "Returns: " + m.returns;
                     }
-                    const std::string odesc_json =
+                    for (const auto &[label, text] : ann_facts(m.annotations)) {
+                        if (label == "deprecated") {
+                            continue; // an operation keyword of its own, below
+                        }
+                        odesc += (odesc.empty() ? "" : "\n\n");
+                        odesc += label + (text.empty() ? "" : ": " + text);
+                    }
+                    std::string odesc_json =
                         odesc.empty() ? "" : ("\"description\":\"" + oa_esc(odesc) + "\",");
+                    if (find_annotation<rosetta::deprecated>(m.annotations)) {
+                        odesc_json += "\"deprecated\":true,";
+                    }
                     paths.push_back("\"" + path + "\":{\"post\":{\"summary\":\"" + m.name + "\"," +
                                     odesc_json + tag + "," + params_arr +
                                     oa_args_request(m.params, c) + ",\"responses\":{" + resps +

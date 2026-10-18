@@ -28,6 +28,9 @@
 #include <QIntValidator>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
+#include <QPainter>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSlider>
 #include <QSpinBox>
@@ -38,7 +41,10 @@
 #include <QVariant>
 #include <QWidget>
 #include <climits>
+#include <memory>
+#include <vector>
 #include <functional>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 
@@ -90,11 +96,105 @@ namespace rosetta {
 
         // ---- the inspector shell (mirrors qt_visitor's build_inspector) ----
 
+        // enabled_if / visible_if: one re-check per conditional row, run after
+        // every committed edit (the generated commit lambdas call run()).
+        struct Conditions {
+            std::vector<std::function<void()>> checks;
+            void run() const {
+                for (const auto &c : checks) {
+                    c();
+                }
+            }
+        };
+
         struct Shell {
             QWidget     *root = nullptr;
             QFormLayout *form = nullptr; // fields + methods share this, in walk order
             QTextEdit   *log  = nullptr; // nullptr when with_log == false
+            std::shared_ptr<Conditions> conds = std::make_shared<Conditions>();
         };
+
+        // Editor options from rosetta::step / decimals / widget::progress.
+        struct FieldOpts {
+            double step     = 0;     // spin-box increment (0: Qt's default)
+            int    decimals = -1;    // digits shown (-1: 6)
+            bool   progress = false; // ranged number shown as a progress bar
+        };
+
+        // A bold section row (rosetta::group).
+        inline void add_section(QFormLayout *form, const QString &name) {
+            auto *l = new QLabel(QStringLiteral("<b>") + name.toHtmlEscaped() + QStringLiteral("</b>"));
+            l->setContentsMargins(0, 8, 0, 0);
+            form->addRow(l);
+        }
+
+        // Show / enable row `row` of `form` while `cond` holds; re-checked on
+        // every edit through shell.conds.
+        inline void add_condition(const Shell &shell, int row, std::function<bool()> cond,
+                                  bool visibility) {
+            QFormLayout *form  = shell.form;
+            auto         check = [form, row, cond, visibility] {
+                const bool on = cond();
+                if (visibility) {
+                    form->setRowVisible(row, on);
+                } else if (auto *it = form->itemAt(row, QFormLayout::FieldRole); it && it->widget()) {
+                    it->widget()->setEnabled(on);
+                }
+            };
+            shell.conds->checks.push_back(check);
+            check();
+        }
+
+        // A numeric vector as a small line plot (widget::plot), a snapshot.
+        class PlotWidget : public QWidget {
+        public:
+            explicit PlotWidget(std::vector<double> v) : v_(std::move(v)) {
+                setMinimumSize(160, 60); // a QFormLayout gives a hint-less widget no width
+                setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            }
+
+        protected:
+            void paintEvent(QPaintEvent *) override {
+                QPainter p(this);
+                p.setRenderHint(QPainter::Antialiasing);
+                p.fillRect(rect(), palette().base());
+                if (v_.size() < 2) {
+                    p.drawText(rect(), Qt::AlignCenter, QStringLiteral("(no data)"));
+                    return;
+                }
+                double lo = v_[0], hi = v_[0];
+                for (double x : v_) {
+                    lo = x < lo ? x : lo;
+                    hi = x > hi ? x : hi;
+                }
+                const double span = hi > lo ? hi - lo : 1;
+                QPolygonF    line;
+                for (std::size_t i = 0; i < v_.size(); ++i) {
+                    line << QPointF(width() * double(i) / double(v_.size() - 1),
+                                    height() - 4 - (height() - 8) * (v_[i] - lo) / span);
+                }
+                p.setPen(QPen(palette().highlight().color(), 1.5));
+                p.drawPolyline(line);
+            }
+
+        private:
+            std::vector<double> v_;
+        };
+
+        template <typename T>
+        inline int add_plot(QFormLayout *form, const QString &display, const QString &tip,
+                            const std::vector<T> &v) {
+            auto *lab = new QLabel(display);
+            lab->setToolTip(tip);
+            form->addRow(lab, new PlotWidget(std::vector<double>(v.begin(), v.end())));
+            return form->rowCount() - 1;
+        }
+
+        // Ask before a destructive call (rosetta::confirm / destructive).
+        inline bool confirm(const QString &question) {
+            return QMessageBox::question(nullptr, QStringLiteral("Confirm"), question) ==
+                   QMessageBox::Yes;
+        }
 
         inline Shell make_shell(const QString &type_name, bool with_log) {
             Shell s;
@@ -132,10 +232,10 @@ namespace rosetta {
         // F stays deduced solely from `initial`. Range / readonly / widget-hint /
         // combobox behaviour matches the reflective QtVisitor exactly.
         template <typename F, typename Commit>
-        inline void add_field(QFormLayout *form, const QString &display, const QString &tip,
-                              const F &initial, bool ro, bool has_rng, double rmin, double rmax,
-                              const QStringList &choices, int hint, Commit commit, QTextEdit *log,
-                              const QString &cname) {
+        inline int add_field(QFormLayout *form, const QString &display, const QString &tip,
+                             const F &initial, bool ro, bool has_rng, double rmin, double rmax,
+                             const QStringList &choices, int hint, Commit commit, QTextEdit *log,
+                             const QString &cname, const FieldOpts &opts = {}) {
             QWidget                                   *editor = nullptr;
             std::function<QVariant()>                  read_editor;
             std::function<void(std::function<void()>)> wire_commit;
@@ -251,7 +351,19 @@ namespace rosetta {
                 wire_commit = [cb](std::function<void()> c) {
                     QObject::connect(cb, &QCheckBox::toggled, cb, [c](bool) { c(); });
                 };
-            } else if constexpr (std::is_integral_v<F>) {
+            } else if constexpr (std::is_arithmetic_v<F> && !std::is_same_v<F, bool>) {
+              if (opts.progress && has_rng) {
+                // widget::progress: a read-out, never an editor.
+                auto *pb = new QProgressBar();
+                pb->setRange(0, 1000);
+                const double f = rmax > rmin ? (double(initial) - rmin) / (rmax - rmin) : 0;
+                pb->setValue(static_cast<int>(1000 * (f < 0 ? 0 : f > 1 ? 1 : f)));
+                pb->setFormat(QString::number(double(initial)));
+                editor      = pb;
+                read_editor = [] { return QVariant{}; };
+                wire_commit = [](std::function<void()>) {};
+                ro          = true;
+              } else if constexpr (std::is_integral_v<F>) {
                 if (hint == H_SLIDER && has_rng) {
                     auto *wrap = new QWidget();
                     auto *whb  = new QHBoxLayout(wrap);
@@ -303,6 +415,9 @@ namespace rosetta {
                     } else {
                         sb->setRange(INT_MIN, INT_MAX);
                     }
+                    if (opts.step > 0) {
+                        sb->setSingleStep(static_cast<int>(opts.step));
+                    }
                     sb->setValue(static_cast<int>(initial));
                     sb->setReadOnly(ro);
                     editor      = sb;
@@ -311,7 +426,7 @@ namespace rosetta {
                         QObject::connect(sb, &QSpinBox::valueChanged, sb, [c](int) { c(); });
                     };
                 }
-            } else if constexpr (std::is_floating_point_v<F>) {
+              } else { // floating point
                 if (hint == H_TEXTFIELD) {
                     auto *le = new QLineEdit();
                     auto *vv = new QDoubleValidator(le);
@@ -334,7 +449,10 @@ namespace rosetta {
                     } else {
                         sb->setRange(-1e12, 1e12);
                     }
-                    sb->setDecimals(6);
+                    sb->setDecimals(opts.decimals >= 0 ? opts.decimals : 6);
+                    if (opts.step > 0) {
+                        sb->setSingleStep(opts.step);
+                    }
                     sb->setValue(static_cast<double>(initial));
                     sb->setReadOnly(ro);
                     editor      = sb;
@@ -344,6 +462,7 @@ namespace rosetta {
                                          [c](double) { c(); });
                     };
                 }
+              }
             } else {
                 auto *le = new QLineEdit();
                 le->setReadOnly(true);
@@ -366,7 +485,15 @@ namespace rosetta {
                             }
                         }
                     }
-                    commit(val);
+                    // The commit may refuse (min / max / length / regex): it
+                    // throws, and the refusal is logged instead of stored.
+                    try {
+                        commit(val);
+                    } catch (const std::exception &e) {
+                        log_line(lp, cname + QStringLiteral(": ") + QString::fromUtf8(e.what()),
+                                 false);
+                        return;
+                    }
                     log_line(lp, cname + QStringLiteral(" ← ") + to_variant<F>(val).toString(),
                              true);
                 };
@@ -378,6 +505,7 @@ namespace rosetta {
                 lab->setToolTip(tip);
             }
             form->addRow(lab, editor);
+            return form->rowCount() - 1;
         }
 
         // A field whose type Qt can't edit (object / vector / enum): a disabled

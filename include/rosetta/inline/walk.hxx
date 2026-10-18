@@ -311,8 +311,18 @@ namespace rosetta {
             constexpr auto name = std::define_static_string(std::meta::identifier_of(m));
             using Owner = [:std::meta::parent_of(m):];
             constexpr auto anns = std::define_static_array(detail::member_annotations<Owner>(m));
+            // rosetta::hidden: public in C++, but not API — no visitor sees it,
+            // so no backend binds it.
+            constexpr bool hide = [] {
+                for (std::meta::info a : anns) {
+                    if (std::meta::remove_cvref(std::meta::type_of(a)) == ^^rosetta::hidden) {
+                        return true;
+                    }
+                }
+                return false;
+            }();
 
-            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            if constexpr (!hide) [&]<std::size_t... Is>(std::index_sequence<Is...>) {
                 if constexpr (std::meta::is_static_member(m)) {
                     v.template method_static<m, ([:anns[Is]:])...>(name);
                 } else if constexpr (is_exportable_member_function(m)) {

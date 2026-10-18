@@ -108,6 +108,10 @@ A vector longer than `Options::max_list_items` (default 64) comes back as
 
 An agent needs to know that a mesh has 35 947 vertices and roughly where they are, not to read 107 841 doubles into its context. The statistics are included when every element is a number. To work on the full data, the agent runs `run_script` / `run_python`, which receive vectors whole, next to the objects; reading it from outside is a job for the expanded bindings (Python, …). An export-to-file tool is listed under *Next steps*.
 
+### 4b. Annotations are part of the contract
+
+`describe_class` reports every annotation the class carries — `unit`, `min` / `max`, `length`, `regex`, `requires`, `example`, `group`, `deprecated`, `since`, ... — and each parameter's `default`, so the agent reads units and limits as data, not prose. The core enforces the validation kinds (choices, bounds, length, pattern, preconditions), a caller may omit a defaulted parameter, and a method marked `destructive` / `confirm` is refused unless the call carries `"confirm": true` — the tool description tells the agent to ask the user first. See [ANNOTATIONS](ANNOTATIONS.md).
+
 ### 5. Errors are tool results, not protocol errors
 
 A failed call (bad overload, range violation, unknown handle, C++ exception) returns `isError: true` with the explanation as text. The agent reads it and corrects its next call. JSON-RPC errors are kept for real protocol faults: malformed JSON (-32700), unknown method (-32601), unknown tool (-32602).

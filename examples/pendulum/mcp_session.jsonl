@@ -1,0 +1,6 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"describe_class","arguments":{"class":"Pendulum"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_object","arguments":{"class":"Pendulum","name":"p"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"set_fields","arguments":{"object":"p","values":{"length":25,"time":3}}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"set_fields","arguments":{"object":"p","values":{"length":2.0,"damping":0}}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"call_method","arguments":{"target":"p","method":"simulate","args":{"seconds":1.418,"dt":0.001}}}}

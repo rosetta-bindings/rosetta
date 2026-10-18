@@ -27,7 +27,10 @@
 
 #include <algorithm>
 #include <any>
+#include <cctype>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <experimental/meta>
 #include <filesystem>
 #include <fstream>

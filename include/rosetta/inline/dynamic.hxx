@@ -6,6 +6,10 @@
 #pragma once
 
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <regex>
 #include <sstream>
 
 namespace rosetta::dyn {
@@ -440,6 +444,22 @@ namespace rosetta::dyn {
             return k;
         }
 
+        // Parameters the caller MUST supply: the input ones, minus the trailing
+        // run that carries a default (MetaParam::default_value).
+        inline std::size_t required_arity(const MetaParam *ps, std::size_t n) {
+            std::size_t req = input_arity(ps, n);
+            for (std::size_t i = n; i-- > 0;) {
+                if (ps[i].is_out) {
+                    continue;
+                }
+                if (!ps[i].default_value) {
+                    break;
+                }
+                --req;
+            }
+            return req;
+        }
+
         inline std::string signature_of(const MetaParam *ps, std::size_t n) {
             std::string s = "(";
             bool        first = true;
@@ -474,15 +494,17 @@ namespace rosetta::dyn {
                 return -1;
             }
             const std::size_t need = input_arity(ps, n);
-            if (args.size() != need) {
+            const std::size_t req  = required_arity(ps, n);
+            if (args.size() < req || args.size() > need) {
                 notes += std::string("\n  ") + label + signature_of(ps, n) + " — takes " +
-                         std::to_string(need) + " argument(s), " + std::to_string(args.size()) +
-                         " given";
+                         (req == need ? std::to_string(need)
+                                      : std::to_string(req) + " to " + std::to_string(need)) +
+                         " argument(s), " + std::to_string(args.size()) + " given";
                 return -1;
             }
             int         score = 0;
             std::size_t ai    = 0;
-            for (std::size_t i = 0; i < n; ++i) {
+            for (std::size_t i = 0; i < n && ai < args.size(); ++i) {
                 if (ps[i].is_out) {
                     continue;
                 }
@@ -497,6 +519,387 @@ namespace rosetta::dyn {
                 ++ai;
             }
             return score;
+        }
+
+        // ---- defaults ------------------------------------------------------
+
+        /** @brief A MetaParam::default_value text as an Any of the parameter's type. */
+        inline Any default_any(const MetaParam &p) {
+            const std::string d = p.default_value ? p.default_value : "";
+            const TypeDesc   *t = p.type;
+            if (d == "true" || d == "false") {
+                return Any::boolean(d == "true");
+            }
+            if (d.size() >= 2 && d.front() == '"' && d.back() == '"') {
+                const std::string text = d.substr(1, d.size() - 2);
+                if (t && t->kind == Kind::enum_) {
+                    for (std::size_t i = 0; i < t->n_enumerators; ++i) {
+                        if (text == t->enumerators[i].name) {
+                            return Any::enumeration(t->enumerators[i].value, t);
+                        }
+                    }
+                    throw Error("default '" + text + "' is not a " + t->spelling);
+                }
+                return Any::text(text, t && t->kind == Kind::string ? t : nullptr);
+            }
+            const double v = std::strtod(d.c_str(), nullptr);
+            if (t && t->kind == Kind::number && !t->integral) {
+                return Any::real(v, t);
+            }
+            if (t && t->kind == Kind::enum_) {
+                return Any::enumeration(static_cast<long long>(v), t);
+            }
+            return Any::integer(static_cast<long long>(v), t && t->kind == Kind::number ? t : nullptr);
+        }
+
+        /** @brief `args` with every omitted trailing parameter filled from its default. */
+        inline ArgList complete(const MetaParam *ps, std::size_t n, const ArgList &args) {
+            if (args.size() >= input_arity(ps, n)) {
+                return args;
+            }
+            ArgList     out = args;
+            std::size_t ai  = 0;
+            for (std::size_t i = 0; i < n; ++i) {
+                if (ps[i].is_out) {
+                    continue;
+                }
+                if (ai++ >= args.size()) {
+                    out.add(ps[i].name, default_any(ps[i]));
+                }
+            }
+            return out;
+        }
+
+        // ---- expressions ---------------------------------------------------
+
+        struct Val {
+            enum K { num, str, boolean } k = num;
+            double      d = 0;
+            std::string s;
+            bool        b = false;
+
+            static Val number(double x) { return {num, x, {}, false}; }
+            static Val text(std::string x) { return {str, 0, std::move(x), false}; }
+            static Val flag(bool x) { return {boolean, 0, {}, x}; }
+
+            bool truthy() const { return k == boolean ? b : k == num ? d != 0 : !s.empty(); }
+        };
+
+        inline Val val_of(const Any &a) {
+            switch (a.kind()) {
+            case Kind::boolean:
+                return Val::flag(a.as_bool());
+            case Kind::number:
+                return Val::number(a.as_number());
+            case Kind::string:
+                return Val::text(a.as_string());
+            case Kind::enum_: {
+                const TypeDesc *t = a.type();
+                for (std::size_t i = 0; t && i < t->n_enumerators; ++i) {
+                    if (t->enumerators[i].value == a.as_int()) {
+                        return Val::text(t->enumerators[i].name);
+                    }
+                }
+                return Val::number(static_cast<double>(a.as_int()));
+            }
+            case Kind::vector:
+                return Val::number(static_cast<double>(a.as_list().size())); // its size
+            default:
+                throw Error(std::string("cannot use a ") + kind_name(a.kind()) + " in an expression");
+            }
+        }
+
+        /**
+         * @brief Recursive-descent evaluator for the rosetta::requires_ grammar.
+         * Throws Error on a syntax error or an unknown name.
+         */
+        struct Expr {
+            std::string_view src;
+            std::size_t      i = 0;
+            const Object    *self;
+            const MetaParam *ps;
+            std::size_t      n;
+            const ArgList   *args;
+            std::string_view bound_name; // a field under assignment: its NEW value
+            const Any       *bound_value;
+
+            void ws() {
+                while (i < src.size() && std::isspace(static_cast<unsigned char>(src[i]))) {
+                    ++i;
+                }
+            }
+            bool eat(std::string_view tok) {
+                ws();
+                if (src.substr(i, tok.size()) == tok) {
+                    i += tok.size();
+                    return true;
+                }
+                return false;
+            }
+            [[noreturn]] void fail(const std::string &what) const {
+                throw Error("in `" + std::string(src) + "`: " + what);
+            }
+
+            Val run() {
+                Val v = disj();
+                ws();
+                if (i != src.size()) {
+                    fail("unexpected '" + std::string(src.substr(i)) + "'");
+                }
+                return v;
+            }
+
+            Val disj() {
+                Val v = conj();
+                while (eat("||")) {
+                    const Val r = conj();
+                    v           = Val::flag(v.truthy() || r.truthy());
+                }
+                return v;
+            }
+            Val conj() {
+                Val v = cmp();
+                while (eat("&&")) {
+                    const Val r = cmp();
+                    v           = Val::flag(v.truthy() && r.truthy());
+                }
+                return v;
+            }
+            Val cmp() {
+                Val l = sum();
+                for (const char *op : {"<=", ">=", "==", "!=", "<", ">"}) {
+                    if (eat(op)) {
+                        return compare(l, sum(), op);
+                    }
+                }
+                return l;
+            }
+            Val compare(const Val &l, const Val &r, std::string_view op) {
+                if (l.k == Val::str || r.k == Val::str) {
+                    const std::string a = l.k == Val::str ? l.s : as_text(l);
+                    const std::string b = r.k == Val::str ? r.s : as_text(r);
+                    if (op == "==") return Val::flag(a == b);
+                    if (op == "!=") return Val::flag(a != b);
+                    fail("strings compare with == and != only");
+                }
+                const double a = l.k == Val::boolean ? l.b : l.d;
+                const double b = r.k == Val::boolean ? r.b : r.d;
+                if (op == "<") return Val::flag(a < b);
+                if (op == "<=") return Val::flag(a <= b);
+                if (op == ">") return Val::flag(a > b);
+                if (op == ">=") return Val::flag(a >= b);
+                if (op == "==") return Val::flag(a == b);
+                return Val::flag(a != b);
+            }
+            static std::string as_text(const Val &v) {
+                if (v.k == Val::boolean) {
+                    return v.b ? "true" : "false";
+                }
+                std::ostringstream os;
+                os << v.d;
+                return os.str();
+            }
+            double num(const Val &v) {
+                if (v.k == Val::str) {
+                    fail("'" + v.s + "' is not a number");
+                }
+                return v.k == Val::boolean ? v.b : v.d;
+            }
+            Val sum() {
+                Val v = prod();
+                for (;;) {
+                    if (eat("+")) {
+                        v = Val::number(num(v) + num(prod()));
+                    } else if (eat("-")) {
+                        v = Val::number(num(v) - num(prod()));
+                    } else {
+                        return v;
+                    }
+                }
+            }
+            Val prod() {
+                Val v = unary();
+                for (;;) {
+                    if (eat("*")) {
+                        v = Val::number(num(v) * num(unary()));
+                    } else if (eat("/")) {
+                        v = Val::number(num(v) / num(unary()));
+                    } else {
+                        return v;
+                    }
+                }
+            }
+            Val unary() {
+                if (eat("!")) {
+                    return Val::flag(!unary().truthy());
+                }
+                if (eat("-")) {
+                    return Val::number(-num(unary()));
+                }
+                return primary();
+            }
+            Val primary() {
+                ws();
+                if (eat("(")) {
+                    Val v = disj();
+                    if (!eat(")")) {
+                        fail("missing ')'");
+                    }
+                    return v;
+                }
+                if (i < src.size() && src[i] == '"') {
+                    const std::size_t end = src.find('"', i + 1);
+                    if (end == std::string_view::npos) {
+                        fail("unterminated string");
+                    }
+                    Val v = Val::text(std::string(src.substr(i + 1, end - i - 1)));
+                    i     = end + 1;
+                    return v;
+                }
+                if (i < src.size() &&
+                    (std::isdigit(static_cast<unsigned char>(src[i])) || src[i] == '.')) {
+                    char        *end = nullptr;
+                    const std::string rest(src.substr(i));
+                    const double v = std::strtod(rest.c_str(), &end);
+                    i += static_cast<std::size_t>(end - rest.c_str());
+                    return Val::number(v);
+                }
+                const std::size_t start = i;
+                while (i < src.size() &&
+                       (std::isalnum(static_cast<unsigned char>(src[i])) || src[i] == '_')) {
+                    ++i;
+                }
+                if (start == i) {
+                    fail("expected a value");
+                }
+                const std::string name(src.substr(start, i - start));
+                if (eat("(")) {
+                    if (!eat(")")) {
+                        fail(name + "(): only nullary methods can be called");
+                    }
+                    if (!self || !self->valid()) {
+                        fail(name + "(): no object to call it on");
+                    }
+                    const Result r = self->call(name);
+                    if (!r.ok()) {
+                        fail(r.error);
+                    }
+                    return val_of(r.value);
+                }
+                return identifier(name);
+            }
+            Val identifier(const std::string &name) {
+                if (name == "true" || name == "false") {
+                    return Val::flag(name == "true");
+                }
+                if (!bound_name.empty() && name == bound_name) {
+                    return val_of(*bound_value);
+                }
+                if (ps && args) {
+                    for (std::size_t p = 0, ai = 0; p < n; ++p) {
+                        if (ps[p].is_out) {
+                            continue;
+                        }
+                        if (name == ps[p].name) {
+                            return val_of(ai < args->size() ? (*args)[ai] : default_any(ps[p]));
+                        }
+                        ++ai;
+                    }
+                }
+                if (self && self->valid() && self->meta()->field(name)) {
+                    const Result r = self->get(name);
+                    if (!r.ok()) {
+                        fail(r.error);
+                    }
+                    return val_of(r.value);
+                }
+                return Val::text(name); // a bare word: an enumerator name, say
+            }
+        };
+
+        // ---- validation ----------------------------------------------------
+
+        inline double ann_number(const char *v) { return std::strtod(v, nullptr); }
+
+        /**
+         * @brief Every annotation-declared constraint on a field value, beyond
+         * range and readonly. Empty when `v` passes; else the reason.
+         */
+        inline std::string check_field(const MetaField &f, const Any &v, const Object &self) {
+            const std::string name = f.name;
+            // combobox: the choices are the allowed values, not a suggestion.
+            if (f.n_choices && v.kind() == Kind::string) {
+                bool ok = false;
+                for (std::size_t i = 0; i < f.n_choices && !ok; ++i) {
+                    ok = v.as_string() == f.choices[i];
+                }
+                if (!ok) {
+                    std::string list;
+                    for (std::size_t i = 0; i < f.n_choices; ++i) {
+                        list += (i ? ", " : "") + std::string(f.choices[i]);
+                    }
+                    return name + " = \"" + v.as_string() + "\" is not one of: " + list;
+                }
+            }
+            if (v.kind() == Kind::number || v.kind() == Kind::enum_) {
+                const double d = v.as_number();
+                std::ostringstream os;
+                if (const char *m = f.annotation("min"); m && d < ann_number(m)) {
+                    os << name << " = " << d << " is below the minimum " << m;
+                    return os.str();
+                }
+                if (const char *m = f.annotation("max"); m && d > ann_number(m)) {
+                    os << name << " = " << d << " is above the maximum " << m;
+                    return os.str();
+                }
+            }
+            if (const char *len = f.annotation("length")) {
+                std::size_t lo = 0, hi = 0;
+                std::sscanf(len, "[%zu, %zu]", &lo, &hi);
+                std::size_t size = 0;
+                bool        has  = true;
+                if (v.kind() == Kind::string) {
+                    size = v.as_string().size();
+                } else if (v.kind() == Kind::vector) {
+                    size = v.as_list().size();
+                } else {
+                    has = false;
+                }
+                if (has && (size < lo || size > hi)) {
+                    return name + " has length " + std::to_string(size) + ", allowed " +
+                           std::to_string(lo) + ".." + std::to_string(hi);
+                }
+            }
+            if (const char *re = f.annotation("regex"); re && v.kind() == Kind::string) {
+                if (!std::regex_match(v.as_string(), std::regex(re))) {
+                    return name + " = \"" + v.as_string() + "\" does not match " + re;
+                }
+            }
+            if (const char *req = f.annotation("requires")) {
+                Expr e{req, 0, &self, nullptr, 0, nullptr, f.name, &v};
+                if (!e.run().truthy()) {
+                    const char *msg = f.annotation("requires_message");
+                    return name + " = " + v.to_string() + " violates `" + req + "`" +
+                           (msg && *msg ? std::string(": ") + msg : std::string());
+                }
+            }
+            return {};
+        }
+
+        /** @brief A method's rosetta::requires_ precondition, with its (completed) arguments. */
+        inline std::string check_call(const MetaMethod &m, const Object &self, const ArgList &args,
+                                      const char *owner) {
+            const char *req = m.annotation("requires");
+            if (!req) {
+                return {};
+            }
+            Expr e{req, 0, &self, m.params, m.n_params, &args, {}, nullptr};
+            if (e.run().truthy()) {
+                return {};
+            }
+            const char *msg = m.annotation("requires_message");
+            return std::string(owner) + "::" + m.name + ": precondition `" + req + "` failed" +
+                   (msg && *msg ? std::string(" — ") + msg : std::string());
         }
 
     } // namespace detail
@@ -592,7 +995,7 @@ namespace rosetta::dyn {
 
         void *p = nullptr;
         try {
-            p = best->construct(args);
+            p = best->construct(detail::complete(best->params, best->n_params, args));
         } catch (const std::exception &e) {
             return {Any::none(), std::string("constructing ") + k.name + ": " + e.what()};
         }
@@ -676,6 +1079,14 @@ namespace rosetta::dyn {
                 return {Any::none(), os.str()};
             }
         }
+        // ...and so are combobox choices, min / max, length, regex, requires_.
+        try {
+            if (std::string why = detail::check_field(*f, v, *this); !why.empty()) {
+                return {Any::none(), why};
+            }
+        } catch (const std::exception &e) {
+            return {Any::none(), std::string("checking ") + f->name + ": " + e.what()};
+        }
         try {
             f->set(ref_, ArgList{v});
             return {Any::none(), {}};
@@ -697,7 +1108,11 @@ namespace rosetta::dyn {
             return call_static(*ref_.cls, name, args);
         }
         try {
-            return {m->invoke(ref_, args), {}};
+            const ArgList full = detail::complete(m->params, m->n_params, args);
+            if (std::string why = detail::check_call(*m, *this, full, ref_.cls->name); !why.empty()) {
+                return {Any::none(), why};
+            }
+            return {m->invoke(ref_, full), {}};
         } catch (const std::exception &e) {
             return {Any::none(), std::string(ref_.cls->name) + "::" + m->name + ": " + e.what()};
         }
@@ -713,7 +1128,11 @@ namespace rosetta::dyn {
             return {Any::none(), std::string(k.name) + "::" + m->name + " needs a receiver"};
         }
         try {
-            return {m->invoke(ObjectRef{}, args), {}};
+            const ArgList full = detail::complete(m->params, m->n_params, args);
+            if (std::string why = detail::check_call(*m, Object{}, full, k.name); !why.empty()) {
+                return {Any::none(), why};
+            }
+            return {m->invoke(ObjectRef{}, full), {}};
         } catch (const std::exception &e) {
             return {Any::none(), std::string(k.name) + "::" + m->name + ": " + e.what()};
         }
@@ -727,9 +1146,54 @@ namespace rosetta::dyn {
                                      " does not match:" + notes};
         }
         try {
-            return {f.invoke(ObjectRef{}, args), {}};
+            return {f.invoke(ObjectRef{}, detail::complete(f.params, f.n_params, args)), {}};
         } catch (const std::exception &e) {
             return {Any::none(), std::string(f.qualified) + ": " + e.what()};
+        }
+    }
+
+    inline const char *annotation(const MetaAnnotation *a, std::size_t n, std::string_view key) {
+        for (std::size_t i = 0; i < n; ++i) {
+            if (key == a[i].key) {
+                return a[i].value;
+            }
+        }
+        return nullptr;
+    }
+
+    inline Result evaluate(const Object &self, std::string_view expr, const MetaParam *params,
+                           std::size_t n_params, const ArgList *args) {
+        try {
+            detail::Expr     e{expr, 0, &self, params, n_params, args, {}, nullptr};
+            const detail::Val v = e.run();
+            switch (v.k) {
+            case detail::Val::boolean:
+                return {Any::boolean(v.b), {}};
+            case detail::Val::num:
+                return {Any::real(v.d), {}};
+            case detail::Val::str:
+                return {Any::text(v.s), {}};
+            }
+        } catch (const std::exception &e) {
+            return {Any::none(), e.what()};
+        }
+        return {Any::none(), "unreachable"};
+    }
+
+    inline bool condition(const Object &self, std::string_view expr) {
+        const Result r = evaluate(self, expr);
+        if (!r.ok()) {
+            return true; // fail open: a broken hint must not lock a field
+        }
+        switch (r.value.kind()) {
+        case Kind::boolean:
+            return r.value.as_bool();
+        case Kind::number:
+            return r.value.as_number() != 0;
+        case Kind::string:
+            return !r.value.as_string().empty();
+        default:
+            return true;
         }
     }
 

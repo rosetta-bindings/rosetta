@@ -1,3 +1,5 @@
+> **Implemented since this list was written** (see [ANNOTATIONS](ANNOTATIONS.md)): `hidden`, `min` / `max`, `length`, `regex`, choice enforcement (`combobox`), `default_value`, `example`, `deprecated`, `since`, `unit`, `step`, `group`, `order`, the `slider` / `color` / `file` widgets (plus `plot` and `progress`), and the labels (`label`). Still open below: per-backend renaming, `writeonly`, serialization shape, REST routing, `experimental`, threading / `async`, and persistence.
+
 # Naming & visibility per backend
 
 - alias("foo") / rename_for("python", "foo_bar") — override the exposed name; lets you keep snake_case in Python and 

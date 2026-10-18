@@ -866,16 +866,16 @@ namespace rosetta_wx {
                        " &s) { return s." + f.name + "; },\n            +[](" + self + " &, " + ty +
                        ") { throw std::runtime_error(\"" + f.name + " is read-only\"); })";
             }
-            if (f.range.has && f.type.kind == "number") {
+            if (setter_checked(f)) {
                 const std::string ty = wx_cpp_type(f.type);
-                const std::string lo = num_str(f.range.min);
-                const std::string hi = num_str(f.range.max);
                 return ".property(\"" + f.name + "\",\n            +[](const " + self +
-                       " &s) { return s." + f.name + "; },\n            +[](" + self + " &s, " + ty +
-                       " v) {\n                if (v < " + lo + " || v > " + hi +
-                       ")\n                    throw std::runtime_error(\"" + f.name +
-                       " out of range [" + lo + ", " + hi + "]\");\n                s." + f.name +
-                       " = v;\n            })";
+                       " &s) { return s." + f.name + "; },\n            +[](" + self + " &s, " +
+                       setter_param(f, ty) + ") {\n" +
+                       setter_checks(f, "                ",
+                                     [](const std::string &m) {
+                                         return "throw std::runtime_error(" + m + ")";
+                                     }) +
+                       "                s." + f.name + " = v;\n            })";
             }
             return ".property(\"" + f.name + "\", &" + self + "::" + f.name + ")";
         }
@@ -1253,6 +1253,7 @@ namespace rosetta_wx {
             out += "#include <optional>\n";
             out += "#include <stdexcept>\n";
             out += "#include <string>\n";
+            out += regex_include(c);
             out += "#include <type_traits>\n";
             out += "#include <unordered_map>\n";
             out += "#include <vector>\n";

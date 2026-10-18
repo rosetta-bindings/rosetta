@@ -1,0 +1,25 @@
+{
+  "length":      { "doc": "Length of the rod", "unit": "m", "range": [0.1, 10],
+                   "step": 0.1, "decimals": 2, "group": "Rod", "order": 1 },
+  "angle":       { "doc": "Current angle from the vertical", "unit": "deg", "range": [-90, 90],
+                   "decimals": 1, "group": "State", "order": 2 },
+  "damping":     { "doc": "Friction coefficient c in theta'' = -(g/L) sin(theta) - c theta'; 0 swings forever",
+                   "unit": "1/s", "min": 0, "max": 1, "step": 0.01, "group": "Physics", "order": 3 },
+  "integrator":  { "doc": "Time-stepping scheme; symplectic keeps the energy, euler drifts",
+                   "combobox": ["symplectic", "euler"], "widget": "radio", "group": "Physics", "order": 4 },
+  "name":        { "doc": "A label for this pendulum", "length": [1, 32],
+                   "regex": "[A-Za-z][A-Za-z0-9_ ]*", "group": "Info", "order": 5 },
+  "recordTrace": { "doc": "Record the angle every 0.05 s while simulating", "group": "State", "order": 6 },
+  "time":        { "doc": "Simulated time so far", "unit": "s", "readonly": true, "group": "State", "order": 7 },
+  "trace":       { "doc": "Recorded angles, one every 0.05 s", "unit": "deg", "readonly": true,
+                   "widget": "plot", "visible_if": "recordTrace", "group": "State", "order": 8 },
+  "scratch":     { "hidden": true },
+
+  "simulate":    { "default": { "dt": 0.001 },
+                   "requires": ["dt < period() / 20", "time step too coarse for this rod: keep dt under period()/20"],
+                   "example": { "seconds": 2.0 }, "unit": "deg", "since": "1.0" },
+  "period":      { "unit": "s" },
+  "frequency":   { "unit": "Hz", "since": "1.1" },
+  "oldPeriod":   { "deprecated": "period()", "unit": "s" },
+  "reset":       { "confirm": "Reset the pendulum? Its time and trace are lost.", "button": "Reset" }
+}

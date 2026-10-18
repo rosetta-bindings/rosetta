@@ -27,6 +27,14 @@ set(CMAKE_AUTORCC ON)
 
 set(QT_DIR "{{QT_DIR}}" CACHE PATH "Qt 6 install prefix")
 list(PREPEND CMAKE_PREFIX_PATH "${QT_DIR}")
+# macOS 15 removed the AGL framework, but Qt's FindWrapOpenGL still falls back to
+# `-framework AGL`, which fails at link time. Point it at OpenGL instead.
+if(APPLE AND CMAKE_OSX_SYSROOT AND
+   NOT EXISTS "${CMAKE_OSX_SYSROOT}/System/Library/Frameworks/AGL.framework")
+    find_library(_rosetta_gl NAMES OpenGL)
+    set(WrapOpenGL_AGL "${_rosetta_gl}" CACHE FILEPATH
+        "Stand-in for the AGL framework the macOS 15 SDK removed" FORCE)
+endif()
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -135,12 +143,26 @@ The app opens a QtQuick inspector on the first default-constructible class.
                 return {}; // object / vector / enum: skip (QVariant can't marshal it)
             }
             const std::string nm   = "QStringLiteral(\"" + f.name + "\")";
-            const std::string disp = qtx_qstr(qtx_display(f.name, f.annotations));
+            const std::string disp = qtx_qstr(ui_label(f.name, f.annotations));
             std::string       s    = "    {\n        QVariantMap info;\n";
             s += "        info[QStringLiteral(\"name\")] = " + nm + ";\n";
             s += "        info[QStringLiteral(\"displayName\")] = " + disp + ";\n";
             s += "        info[QStringLiteral(\"type\")] = " + qtx_qstr(qmlx_tag(f.type)) + ";\n";
-            s += "        info[QStringLiteral(\"doc\")] = " + qtx_qstr(f.doc) + ";\n";
+            s += "        info[QStringLiteral(\"doc\")] = " +
+                 qtx_qstr(ui_tip(f.doc, f.annotations, &f.range, &f.choices)) + ";\n";
+            // Presentation hints a QML delegate may use (absent keys: no hint).
+            if (const auto *a = find_annotation<rosetta::unit>(f.annotations)) {
+                s += "        info[QStringLiteral(\"unit\")] = " + qtx_qstr(a->text) + ";\n";
+            }
+            if (const auto *a = find_annotation<rosetta::step>(f.annotations)) {
+                s += "        info[QStringLiteral(\"step\")] = " + num_lit(a->value) + ";\n";
+            }
+            if (const auto *a = find_annotation<rosetta::decimals>(f.annotations)) {
+                s += "        info[QStringLiteral(\"decimals\")] = " + std::to_string(a->count) + ";\n";
+            }
+            if (const auto *a = find_annotation<rosetta::group>(f.annotations)) {
+                s += "        info[QStringLiteral(\"group\")] = " + qtx_qstr(a->name) + ";\n";
+            }
             s += std::string("        info[QStringLiteral(\"readonly\")] = ") +
                  (f.is_readonly ? "true" : "false") + ";\n";
             s += std::string("        info[QStringLiteral(\"hasRange\")] = ") +
@@ -189,6 +211,14 @@ The app opens a QtQuick inspector on the first default-constructible class.
                      num_str(f.range.min) + ", " + num_str(f.range.max) + "]\");\n";
                 s += "            self->" + f.name + " = val;\n";
                 s += "            return {};\n        });\n";
+            } else if (const std::string ok = ui_valid_expr(f, "val"); !ok.empty()) {
+                // min / max / length / regex
+                s += "[self](const QVariant &v) -> QString {\n";
+                s += "            auto val = " + qmlx_conv(f.type, "v") + ";\n";
+                s += "            if (!(" + ok + "))\n";
+                s += "                return " + nm + " + QStringLiteral(\" is outside its allowed values\");\n";
+                s += "            self->" + f.name + " = val;\n";
+                s += "            return {};\n        });\n";
             } else {
                 s += "[self](const QVariant &v) -> QString { self->" + f.name + " = " +
                      qmlx_conv(f.type, "v") + "; return {}; });\n";
@@ -202,7 +232,7 @@ The app opens a QtQuick inspector on the first default-constructible class.
                 return {};
             }
             const std::string nm   = "QStringLiteral(\"" + m.name + "\")";
-            const std::string disp = qtx_qstr(qtx_display(m.name, m.annotations));
+            const std::string disp = qtx_qstr(ui_label(m.name, m.annotations));
             std::string       btn;
             if (const auto *b = find_annotation<rosetta::button>(m.annotations); b && b->label) {
                 btn = b->label;
@@ -210,7 +240,7 @@ The app opens a QtQuick inspector on the first default-constructible class.
             std::string s = "    {\n        QVariantMap info;\n";
             s += "        info[QStringLiteral(\"name\")] = " + nm + ";\n";
             s += "        info[QStringLiteral(\"displayName\")] = " + disp + ";\n";
-            s += "        info[QStringLiteral(\"doc\")] = " + qtx_qstr(m.doc) + ";\n";
+            s += "        info[QStringLiteral(\"doc\")] = " + qtx_qstr(ui_tip(m.doc, m.annotations)) + ";\n";
             s += "        info[QStringLiteral(\"button\")] = " + qtx_qstr(btn) + ";\n";
             s += "        info[QStringLiteral(\"arity\")] = " + std::to_string(m.params.size()) +
                  ";\n";
@@ -290,6 +320,7 @@ The app opens a QtQuick inspector on the first default-constructible class.
             std::string h = "// Generated by rosetta::generate (expanded, reflection-free) — "
                             "do not edit by hand.\n#pragma once\n\n";
             h += "#include <rosetta/visitors/qml_reflected_object.h>\n";
+            h += regex_include(c);
             for (const auto &k : c.classes) {
                 append_include(h, k.header);
             }

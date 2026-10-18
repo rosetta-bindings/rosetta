@@ -12,20 +12,24 @@ namespace rosetta {
         // ---- minimal recursive-descent parser over a string_view ----
 
         consteval double to_double(std::string_view t) {
+            // Digits are accumulated as an INTEGER mantissa and scaled by a power
+            // of ten once, at the end: summing 0.1-steps digit by digit turned
+            // "0.01" into 0.010000000000000002, which then showed up verbatim in
+            // generated code.
             std::size_t i    = 0;
             double      sign = 1;
             if (i < t.size() && (t[i] == '+' || t[i] == '-')) {
                 if (t[i] == '-') sign = -1;
                 ++i;
             }
-            double v = 0;
-            for (; i < t.size() && t[i] >= '0' && t[i] <= '9'; ++i) v = v * 10 + (t[i] - '0');
+            double mant = 0;
+            int    exp10 = 0;
+            for (; i < t.size() && t[i] >= '0' && t[i] <= '9'; ++i) mant = mant * 10 + (t[i] - '0');
             if (i < t.size() && t[i] == '.') {
                 ++i;
-                double scale = 0.1;
                 for (; i < t.size() && t[i] >= '0' && t[i] <= '9'; ++i) {
-                    v += (t[i] - '0') * scale;
-                    scale *= 0.1;
+                    mant = mant * 10 + (t[i] - '0');
+                    --exp10;
                 }
             }
             // Scientific notation (a range like [1e-10, 1e-6] is routine for a
@@ -37,11 +41,13 @@ namespace rosetta {
                     eneg = (t[i] == '-');
                     ++i;
                 }
-                int exp = 0;
-                for (; i < t.size() && t[i] >= '0' && t[i] <= '9'; ++i) exp = exp * 10 + (t[i] - '0');
-                for (; exp > 0; --exp) v = eneg ? v / 10 : v * 10;
+                int e = 0;
+                for (; i < t.size() && t[i] >= '0' && t[i] <= '9'; ++i) e = e * 10 + (t[i] - '0');
+                exp10 += eneg ? -e : e;
             }
-            return sign * v;
+            double scale = 1;
+            for (int k = exp10 < 0 ? -exp10 : exp10; k > 0; --k) scale *= 10; // exact up to 1e22
+            return sign * (exp10 < 0 ? mant / scale : mant * scale);
         }
 
         struct parser {
@@ -187,6 +193,94 @@ namespace rosetta {
                         } else if (k == "widget") {
                             m.has_widget = true;
                             m.widget     = p.str();
+                        } else if (k == "unit") {
+                            m.unit = p.str();
+                        } else if (k == "example") {
+                            // Any JSON value, kept as its raw text.
+                            p.ws();
+                            const std::size_t start = p.i;
+                            p.skip_value();
+                            m.example = src.substr(start, p.i - start);
+                        } else if (k == "min") {
+                            m.has_min = true;
+                            m.vmin    = p.number();
+                        } else if (k == "max") {
+                            m.has_max = true;
+                            m.vmax    = p.number();
+                        } else if (k == "length") {
+                            m.has_length = true;
+                            p.eat('[');
+                            m.len_lo = p.number();
+                            p.eat(',');
+                            m.len_hi = p.number();
+                            p.eat(']');
+                        } else if (k == "regex") {
+                            m.regex = p.str();
+                        } else if (k == "requires") {
+                            if (p.eat('[')) {
+                                m.requires_expr = p.str();
+                                if (p.eat(',')) m.requires_msg = p.str();
+                                p.eat(']');
+                            } else {
+                                m.requires_expr = p.str();
+                            }
+                        } else if (k == "destructive") {
+                            m.destructive = p.keyword("true") || (!p.keyword("false") && p.number() != 0);
+                        } else if (k == "confirm") {
+                            m.confirm = p.str();
+                        } else if (k == "expensive") {
+                            m.expensive = p.keyword("true") || (!p.keyword("false") && p.number() != 0);
+                        } else if (k == "hidden") {
+                            m.hidden = p.keyword("true") || (!p.keyword("false") && p.number() != 0);
+                        } else if (k == "log_scale") {
+                            m.log_scale = p.keyword("true") || (!p.keyword("false") && p.number() != 0);
+                        } else if (k == "deprecated") {
+                            p.ws();
+                            if (p.i < src.size() && src[p.i] == '"') {
+                                m.has_deprecated = true;
+                                m.deprecated     = p.str();
+                            } else {
+                                m.has_deprecated = p.keyword("true") || (!p.keyword("false") && p.number() != 0);
+                            }
+                        } else if (k == "since") {
+                            m.since = p.str();
+                        } else if (k == "step") {
+                            m.has_step = true;
+                            m.step     = p.number();
+                        } else if (k == "decimals") {
+                            m.has_decimals = true;
+                            m.decimals     = static_cast<int>(p.number());
+                        } else if (k == "group") {
+                            m.group = p.str();
+                        } else if (k == "order") {
+                            m.has_order = true;
+                            m.order     = static_cast<int>(p.number());
+                        } else if (k == "enabled_if") {
+                            m.enabled_if = p.str();
+                        } else if (k == "visible_if") {
+                            m.visible_if = p.str();
+                        } else if (k == "default") {
+                            if (p.eat('{') && !p.eat('}')) {
+                                do {
+                                    member_ann::default_entry d;
+                                    d.param = p.str();
+                                    p.eat(':');
+                                    p.ws();
+                                    if (p.i < src.size() && src[p.i] == '"') {
+                                        d.is_text = true;
+                                        d.text    = p.str();
+                                    } else if (p.keyword("true")) {
+                                        d.number = 1;
+                                    } else if (p.keyword("false")) {
+                                        d.number = 0;
+                                    } else {
+                                        d.number = p.number();
+                                    }
+                                    if (m.n_defaults < member_ann::MAX_DEFAULTS)
+                                        m.defaults[m.n_defaults++] = d;
+                                } while (p.eat(','));
+                                p.eat('}');
+                            }
                         } else {
                             p.skip_value();
                         }
@@ -202,6 +296,29 @@ namespace rosetta {
     } // namespace ann_json
 
     namespace detail {
+
+        // JSON string escapes, resolved when a side-car string is baked into an
+        // annotation: a "regex": "\\d+" must reach std::regex as \d+.
+        consteval std::string ann_unescape(std::string_view in) {
+            std::string out;
+            for (std::size_t i = 0; i < in.size(); ++i) {
+                if (in[i] != '\\' || i + 1 >= in.size()) {
+                    out += in[i];
+                    continue;
+                }
+                switch (in[++i]) {
+                case 'n': out += '\n'; break;
+                case 't': out += '\t'; break;
+                case 'r': out += '\r'; break;
+                default: out += in[i]; break; // \\  \"  \/
+                }
+            }
+            return out;
+        }
+
+        consteval const char *ann_str(std::string_view v) {
+            return std::define_static_string(ann_unescape(v));
+        }
 
         template <class T>
         consteval std::vector<std::meta::info> json_annotations_for(std::string_view member) {
@@ -249,6 +366,42 @@ namespace rosetta {
                         out.push_back(std::meta::reflect_constant(rosetta::widget::radio));
                     else if (m.widget == "file")
                         out.push_back(std::meta::reflect_constant(rosetta::widget::file));
+                    else if (m.widget == "plot")
+                        out.push_back(std::meta::reflect_constant(rosetta::widget::plot));
+                    else if (m.widget == "progress")
+                        out.push_back(std::meta::reflect_constant(rosetta::widget::progress));
+                }
+                auto add = [&out](auto a) { out.push_back(std::meta::reflect_constant(a)); };
+                if (!m.unit.empty()) add(rosetta::unit{ann_str(m.unit)});
+                if (!m.example.empty())
+                    add(rosetta::example{std::define_static_string(m.example)}); // raw JSON
+                if (m.has_min) add(rosetta::min{m.vmin});
+                if (m.has_max) add(rosetta::max{m.vmax});
+                if (m.has_length)
+                    add(rosetta::length{static_cast<std::size_t>(m.len_lo),
+                                        static_cast<std::size_t>(m.len_hi)});
+                if (!m.regex.empty()) add(rosetta::regex{ann_str(m.regex)});
+                if (!m.requires_expr.empty())
+                    add(rosetta::requires_{ann_str(m.requires_expr), ann_str(m.requires_msg)});
+                if (m.destructive) add(rosetta::destructive{});
+                if (!m.confirm.empty()) add(rosetta::confirm{ann_str(m.confirm)});
+                if (m.expensive) add(rosetta::expensive{});
+                if (m.hidden) add(rosetta::hidden{});
+                if (m.has_deprecated) add(rosetta::deprecated{ann_str(m.deprecated)});
+                if (!m.since.empty()) add(rosetta::since{ann_str(m.since)});
+                if (m.has_step) add(rosetta::step{m.step});
+                if (m.has_decimals) add(rosetta::decimals{m.decimals});
+                if (m.log_scale) add(rosetta::log_scale{});
+                if (!m.group.empty()) add(rosetta::group{ann_str(m.group)});
+                if (m.has_order) add(rosetta::order{m.order});
+                if (!m.enabled_if.empty()) add(rosetta::enabled_if{ann_str(m.enabled_if)});
+                if (!m.visible_if.empty()) add(rosetta::visible_if{ann_str(m.visible_if)});
+                for (std::size_t d = 0; d < m.n_defaults; ++d) {
+                    const auto &e = m.defaults[d];
+                    if (e.is_text)
+                        add(rosetta::default_value{ann_str(e.param), ann_str(e.text)});
+                    else
+                        add(rosetta::default_value{ann_str(e.param), e.number});
                 }
             }
             return out;

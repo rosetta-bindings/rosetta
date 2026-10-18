@@ -89,7 +89,51 @@ namespace rosetta {
             bool             has_widget = false; // "widget": "slider" | "spin" |
             std::string_view widget{};           //   "checkbox" | "textfield" |
                                                  //   "color" | "multiline" |
-                                                 //   "radio" | "file"
+                                                 //   "radio" | "file" | "plot" |
+                                                 //   "progress"
+
+            // ---- semantics / validation / behaviour / lifecycle / layout ----
+            // String values are kept verbatim here and unescaped when baked.
+            std::string_view unit{};               // "unit": "m"
+            std::string_view example{};            // "example": <any JSON value, raw>
+            bool             has_min = false;      // "min": 0
+            double           vmin    = 0;
+            bool             has_max = false;      // "max": 1
+            double           vmax    = 0;
+            bool             has_length = false;   // "length": [1, 64]
+            double           len_lo = 0, len_hi = 0;
+            std::string_view regex{};              // "regex": "#[0-9a-f]{6}"
+            std::string_view requires_expr{};      // "requires": "expr" | ["expr", "message"]
+            std::string_view requires_msg{};
+            bool             destructive = false;  // "destructive": true
+            std::string_view confirm{};            // "confirm": "Discard?"
+            bool             expensive = false;    // "expensive": true
+            bool             hidden    = false;    // "hidden": true
+            bool             has_deprecated = false; // "deprecated": true | "use foo()"
+            std::string_view deprecated{};
+            std::string_view since{};              // "since": "1.2"
+            bool             has_step = false;     // "step": 0.1
+            double           step     = 0;
+            bool             has_decimals = false; // "decimals": 3
+            int              decimals     = 0;
+            bool             log_scale = false;    // "log_scale": true
+            std::string_view group{};              // "group": "Advanced"
+            bool             has_order = false;    // "order": 3
+            int              order     = 0;
+            std::string_view enabled_if{};         // "enabled_if": "pinBoundary"
+            std::string_view visible_if{};         // "visible_if": "shading == Wireframe"
+
+            // "default": {"dt": 0.001, "mode": "fast"} on a method — one entry
+            // per parameter.
+            static constexpr std::size_t MAX_DEFAULTS = 8;
+            struct default_entry {
+                std::string_view param{};
+                bool             is_text = false;
+                double           number  = 0;
+                std::string_view text{};
+            };
+            default_entry defaults[MAX_DEFAULTS]{};
+            std::size_t   n_defaults = 0;
         };
 
         inline constexpr std::size_t MAX_MEMBERS = 256;

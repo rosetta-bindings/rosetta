@@ -138,8 +138,10 @@ namespace rosetta {
         // per documented argument, then `@returns`. Emitted only when there is
         // something to say, so an undocumented API keeps its clean shape.
         inline std::string ts_doc(const std::string &doc, const std::vector<GenParam> &ps,
-                                  const std::string &returns, const std::string &indent) {
-            bool any = !doc.empty() || !returns.empty();
+                                  const std::string &returns, const std::string &indent,
+                                  const std::vector<std::any> *anns = nullptr) {
+            const auto facts = anns ? ann_facts(*anns) : decltype(ann_facts({})){};
+            bool       any   = !doc.empty() || !returns.empty() || !facts.empty();
             for (const auto &p : ps) {
                 any = any || (!p.doc.empty() && !is_out_param(p));
             }
@@ -186,6 +188,19 @@ namespace rosetta {
             if (!returns.empty()) {
                 out += indent + " * @returns " + safe(returns) + "\n";
             }
+            // Annotations: the TSDoc tags where one exists, @remarks otherwise.
+            for (const auto &[label, text] : facts) {
+                if (label == "example") {
+                    out += indent + " * @example " + safe(text) + "\n";
+                } else if (label == "deprecated") {
+                    out += indent + " * @deprecated" + (text.empty() ? "" : " " + safe(text)) + "\n";
+                } else if (label == "since") {
+                    out += indent + " * @since " + safe(text) + "\n";
+                } else {
+                    out += indent + " * @remarks " + label + (text.empty() ? "" : ": " + safe(text)) +
+                           "\n";
+                }
+            }
             return out + indent + " */\n";
         }
 
@@ -227,7 +242,7 @@ namespace rosetta {
 
             for (const auto &k : c.classes) {
                 if (!k.brief.empty()) {
-                    out += ts_doc(k.brief, {}, {}, "    ");
+                    out += ts_doc(k.brief, {}, {}, "    ", &k.annotations);
                 }
                 out += "    export class " + exposed_of(k) + " {\n";
 
@@ -260,9 +275,7 @@ namespace rosetta {
                             clashes = clashes || m.name == f.name;
                         }
                         if (bound && !clashes) {
-                            if (!f.doc.empty()) {
-                                out += "        /** " + f.doc + " */\n";
-                            }
+                            out += ts_doc(f.doc, {}, {}, "        ", &f.annotations);
                             out += "        readonly " + f.name + ": " + ts_type(f.type, c) + ";\n";
                             coverage::note_bound_field("typescript", k, f);
                         } else {
@@ -274,9 +287,7 @@ namespace rosetta {
                         }
                         continue;
                     }
-                    if (!f.doc.empty()) {
-                        out += "        /** " + f.doc + " */\n";
-                    }
+                    out += ts_doc(f.doc, {}, {}, "        ", &f.annotations);
                     out += "        " + std::string(f.is_readonly ? "readonly " : "") + f.name +
                            ": " + ts_type(f.type, c) + ";\n";
                     coverage::note_bound_field("typescript", k, f);
@@ -329,7 +340,7 @@ namespace rosetta {
                         }
                         continue;
                     }
-                    out += ts_doc(m.doc, m.params, m.returns, "        ");
+                    out += ts_doc(m.doc, m.params, m.returns, "        ", &m.annotations);
                     out += "        " + std::string(m.is_static ? "static " : "") + m.name + "(" +
                            ts_params(m.params, c) + "): " + ts_return(m.ret, m.params, c) + ";\n";
                     coverage::note_bound("typescript", k, m);

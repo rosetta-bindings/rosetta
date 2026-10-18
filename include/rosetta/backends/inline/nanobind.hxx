@@ -192,21 +192,17 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
         inline std::string nbx_field_segment(const GenClass &k, const GenField &f) {
             const std::string self = qualified_of(k);
             const std::string mp   = "&" + self + "::" + f.name;
-            const std::string dq   = nbx_doc_arg(f.doc);
+            const std::string dq   = nbx_doc_arg(px_field_doc(f));
             if (f.is_readonly) {
                 return ".def_ro(\"" + f.name + "\", " + mp + dq + ")";
             }
-            if (f.range.has && f.type.kind == "number") {
-                const std::string ty = f.type.spelling; // arithmetic -> compilable spelling
-                const std::string lo = num_str(f.range.min);
-                const std::string hi = num_str(f.range.max);
-                std::string       s;
+            if (setter_checked(f)) {
+                std::string s;
                 s += ".def_prop_rw(\"" + f.name + "\",\n";
                 s += "            [](const " + self + " &s) { return s." + f.name + "; },\n";
-                s += "            [](" + self + " &s, " + ty + " v) {\n";
-                s += "                if (v < " + lo + " || v > " + hi + ")\n";
-                s += "                    throw nb::value_error(\"" + f.name + " out of range [" +
-                     lo + ", " + hi + "]\");\n";
+                s += "            [](" + self + " &s, " + setter_param(f, f.type.spelling) + ") {\n";
+                s += setter_checks(f, "                ",
+                                   [](const std::string &m) { return "throw nb::value_error(" + m + ")"; });
                 s += "                s." + f.name + " = v;\n";
                 s += "            }" + dq + ")";
                 return s;
@@ -253,7 +249,7 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
         // casterless foreign type).
         inline std::string nbx_seq_field_segment(const GenClass &k, const GenField &f) {
             const std::string vt  = adapt_boundary_cpp(f.type);
-            const std::string dq  = nbx_doc_arg(f.doc);
+            const std::string dq  = nbx_doc_arg(px_field_doc(f));
             const std::string get = "[](const " + qualified_of(k) + " &s) { return " +
                                     adapt_from_expr(f.type, "s." + f.name) + "; }";
             if (f.is_readonly) {
@@ -448,7 +444,8 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             // why there is at most one).
             const std::string base = nb_bound_base(k, c);
             std::string       s    = "    nb::class_<" + qualified_of(k) +
-                            (base.empty() ? "" : ", " + base) + ">(m, \"" + exposed_of(k) + "\")";
+                            (base.empty() ? "" : ", " + base) + ">(m, \"" + exposed_of(k) + "\"" +
+                            doc_arg(px_class_doc(k)) + ")"; // the class comment: help(Cls) prints it
             for (const auto &seg : segs) {
                 s += "\n        " + seg;
             }
@@ -540,6 +537,7 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             out += "#include <algorithm>\n";
             out += "#include <filesystem>\n";
             out += "#include <vector>\n";
+            out += regex_include(c);
             // Caster headers for the opted-in foreign libraries (manifest
             // "interop"). nanobind splits these per library exactly as it
             // splits the STL casters, and the failure mode is the same one:
