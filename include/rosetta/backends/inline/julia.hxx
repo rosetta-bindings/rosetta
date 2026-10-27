@@ -105,7 +105,27 @@ using .{{LIB}}
             return false;
         }
 
+        // A C string (or a std::filesystem::path) crosses as a std::string
+        // through a wrapping lambda (jx_string_lambda): jlcxx has no caster that
+        // would bind either as the type it is.
+        inline bool jx_string_shape(const GenType &t) { return t.is_cstring || t.is_path; }
+
+        inline bool jx_touches_string(const GenMethod &m) {
+            if (jx_string_shape(m.ret)) {
+                return true;
+            }
+            for (const auto &p : m.params) {
+                if (jx_string_shape(p.type)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         inline bool jx_marshalable(const GenType &t, const GenContext &c) {
+            if (t.is_cstring) {
+                return true; // adapted — see jx_string_lambda
+            }
             // Raw pointer to a bound class: jlcxx passes/returns it as a
             // CxxPtr-style non-owning handle to the registered type.
             if (t.is_pointer) {
@@ -126,7 +146,21 @@ using .{{LIB}}
                 }
                 return jx_marshalable(t.element.front(), c);
             }
-            return true; // number / boolean / string / enum / void
+            if (t.kind == "enum") {
+                // jlcxx resolves every argument type when the method is
+                // REGISTERED, so a signature naming an enum the module never
+                // add_bits'd fails the whole module load ("No appropriate
+                // factory for type vtkDataArray::MemorySpace") — not just the
+                // one call, as in pybind or embind.
+                for (const auto &e : c.enums) {
+                    if (t.object_qualified.empty() ? e.name == t.object
+                                                   : qualified_of(e) == t.object_qualified) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            return true; // number / boolean / string / void
         }
 
         // Copies at the boundary need copyable payloads (same rule as
@@ -345,6 +379,211 @@ using .{{LIB}}
             return s;
         }
 
+        // --- Held (reference-counted) classes: manifest "holders" -----------
+        // jlcxx's own ownership model is the "allocated" box: an object Julia
+        // owns, with a finalizer. A held class reuses it — every pointer that
+        // crosses into Julia takes ONE reference and is boxed with a finalizer
+        // that drops it (jx_holder_finalizers registers that finalizer, since
+        // jlcxx only installs `delete` for destructible types). Pointers are
+        // boxed as their most-derived bound class, so `GetOutputDataObject()`
+        // hands Julia a vtkPolyData, not a vtkDataObject.
+
+        // Index of k's policy among distinct_holders(c) — names its box helper.
+        inline std::size_t jx_policy_index(const GenClass &k, const GenContext &c) {
+            const auto hs = distinct_holders(c);
+            for (std::size_t i = 0; i < hs.size(); ++i) {
+                if (hs[i]->holder.holder == k.holder.holder) {
+                    return i;
+                }
+            }
+            return 0;
+        }
+
+        inline std::string jx_box_fn(const GenClass &held, const GenContext &c) {
+            return "rosetta_jl_box_" + std::to_string(jx_policy_index(held, c));
+        }
+
+        // `rosetta_jl_box_N(P *r)`: nothing for a null pointer, else retain and
+        // box as the deepest bound class r really is. One template per policy,
+        // the candidate chain sorted deepest-first so a derived class is tried
+        // before its bases; `if constexpr` drops the candidates unrelated to P.
+        inline std::string jx_box_helpers(const GenContext &c) {
+            std::string s;
+            const auto  hs = distinct_holders(c);
+            for (std::size_t i = 0; i < hs.size(); ++i) {
+                std::vector<const GenClass *> held;
+                for (const auto &k : c.classes) {
+                    if (has_holder(k) && k.holder.holder == hs[i]->holder.holder) {
+                        held.push_back(&k);
+                    }
+                }
+                std::stable_sort(held.begin(), held.end(),
+                                 [&](const GenClass *a, const GenClass *b) {
+                                     return bound_depth(*a, c) > bound_depth(*b, c);
+                                 });
+                s += "\n// Retain a borrowed pointer and box it as its most-derived bound class.\n";
+                s += "template <class P> jl_value_t *rosetta_jl_box_" + std::to_string(i) +
+                     "(P *r) {\n";
+                s += "    if (r == nullptr) {\n        return jl_nothing;\n    }\n";
+                s += "    r->" + hs[i]->holder.retain + ";\n";
+                s += "    if constexpr (std::is_polymorphic_v<P>) {\n";
+                for (const GenClass *k : held) {
+                    const std::string kq = qualified_of(*k);
+                    s += "        if constexpr (std::is_base_of_v<P, " + kq + ">) {\n"
+                         "            if (auto *d = dynamic_cast<" + kq + " *>(r)) {\n"
+                         "                return jlcxx::boxed_cpp_pointer(d, jlcxx::julia_type<" + kq +
+                         ">(), true).value;\n"
+                         "            }\n"
+                         "        }\n";
+                }
+                s += "    }\n";
+                s += "    return jlcxx::boxed_cpp_pointer(r, jlcxx::julia_type<P>(), true).value;\n";
+                s += "}\n";
+            }
+            return s;
+        }
+
+        // The finalizer of every held class's box: drop the one reference the
+        // box stands for. Registered in CxxWrap's own module, where jlcxx would
+        // have put its `delete`-based one for a destructible type.
+        inline std::string jx_holder_finalizers(const GenContext &c) {
+            std::string s;
+            for (const auto &k : c.classes) {
+                if (!has_holder(k)) {
+                    continue;
+                }
+                s += "    mod.method(\"__delete\", [](" + qualified_of(k) + " *p) { p->" +
+                     k.holder.release + "; });\n";
+            }
+            if (s.empty()) {
+                return s;
+            }
+            return "    mod.set_override_module(jlcxx::get_cxxwrap_module());\n" + s +
+                   "    mod.unset_override_module();\n";
+        }
+
+        inline bool jx_has_held_pointer_param(const std::vector<GenParam> &params,
+                                              const GenContext &c) {
+            for (const auto &p : params) {
+                if (held_pointee(p.type, c) != nullptr) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // A lambda for a method / function touching held pointers. `as_refs`:
+        // every held-pointer parameter is taken by REFERENCE (a Julia box only
+        // dispatches as `T` / `CxxRef{T}`, never as the `CxxPtr{T}` a `T*`
+        // maps to) and its address is passed on; the pointer form stays bound
+        // too, so `C_NULL` still reaches it. A held-pointer RESULT is boxed.
+        inline std::string jx_held_lambda(const GenClass *k, const GenMethod &m,
+                                          const std::string &callee, bool as_refs,
+                                          const GenContext &c) {
+            std::vector<std::string> decls, args;
+            const bool receiver = k != nullptr && !m.is_static && !m.is_extension;
+            if (receiver || m.is_extension) {
+                decls.push_back(std::string(m.is_const ? "const " : "") + qualified_of(*k) +
+                                " &self");
+            }
+            const bool exact = m.param_cpp.size() == m.params.size();
+            for (std::size_t j = 0; j < m.params.size(); ++j) {
+                const std::string an = "arg" + std::to_string(j);
+                const GenClass   *hp = held_pointee(m.params[j].type, c);
+                if (as_refs && hp != nullptr) {
+                    decls.push_back(qualified_of(*hp) + " &" + an);
+                    args.push_back("&" + an);
+                } else {
+                    decls.push_back((exact ? qualify_std(m.param_cpp[j])
+                                           : jx_cpp_type(m.params[j].type)) +
+                                    " " + an);
+                    args.push_back(an);
+                }
+            }
+            std::string call;
+            if (m.is_extension) {
+                call = m.ext_qualified + "(self" + (args.empty() ? "" : ", " + join(args, ", ")) + ")";
+            } else if (receiver) {
+                call = "self." + m.name + "(" + join(args, ", ") + ")";
+            } else {
+                call = callee + "(" + join(args, ", ") + ")";
+            }
+            const GenClass *ret = held_pointee(m.ret, c);
+            if (ret != nullptr) {
+                return "[](" + join(decls, ", ") + ") -> jl_value_t * { return " +
+                       jx_box_fn(*ret, c) + "(" + call + "); }";
+            }
+            return "[](" + join(decls, ", ") + ") { return " + call + "; }";
+        }
+
+        // Registration lines for a method / function touching held pointers:
+        // the boxed form, plus the by-reference overload when a parameter is a
+        // held pointer.
+        inline std::string jx_held_method(const GenClass *k, const GenMethod &m,
+                                          const std::string &owner, const std::string &callee,
+                                          const GenContext &c) {
+            std::string s;
+            if (held_pointee(m.ret, c) != nullptr) {
+                s += "    " + owner + ".method(\"" + m.name + "\", " +
+                     jx_held_lambda(k, m, callee, false, c) + ");\n";
+            }
+            if (jx_has_held_pointer_param(m.params, c)) {
+                s += "    " + owner + ".method(\"" + m.name + "\", " +
+                     jx_held_lambda(k, m, callee, true, c) + ");\n";
+            }
+            return s;
+        }
+
+        // `[](self, std::string a0, ...) { char *str0 = a0.data(); return
+        // std::string(self.m(str0)); }` — a method or free function whose
+        // signature names a C string or a path, re-typed to speak std::string
+        // (jx_string_shape). Also boxes a held-pointer result, so the two
+        // adapters compose.
+        inline std::string jx_string_lambda(const GenClass *k, const GenMethod &m,
+                                            const std::string &callee, const GenContext &c) {
+            std::vector<std::string> decls, args;
+            std::string              pre;
+            const bool receiver = k != nullptr && !m.is_static && !m.is_extension;
+            if (receiver || m.is_extension) {
+                decls.push_back(std::string(m.is_const ? "const " : "") + qualified_of(*k) +
+                                " &self");
+            }
+            const bool exact = m.param_cpp.size() == m.params.size();
+            for (std::size_t j = 0; j < m.params.size(); ++j) {
+                const std::string an = "arg" + std::to_string(j);
+                const GenType    &t  = m.params[j].type;
+                if (jx_string_shape(t)) {
+                    const std::string sn = adapt_local(t, j);
+                    decls.push_back("std::string " + an);
+                    pre += adapt_decl_stmts(t, an, sn, "        ");
+                    args.push_back(sn);
+                } else {
+                    decls.push_back((exact ? qualify_std(m.param_cpp[j]) : jx_cpp_type(t)) + " " +
+                                    an);
+                    args.push_back(an);
+                }
+            }
+            std::string call;
+            if (m.is_extension) {
+                call = m.ext_qualified + "(self" + (args.empty() ? "" : ", " + join(args, ", ")) + ")";
+            } else if (receiver) {
+                call = "self." + m.name + "(" + join(args, ", ") + ")";
+            } else {
+                call = callee + "(" + join(args, ", ") + ")";
+            }
+            std::string body;
+            if (jx_string_shape(m.ret)) {
+                body = "        return " + adapt_from_expr(m.ret, call) + ";\n";
+            } else if (const GenClass *h = held_pointee(m.ret, c)) {
+                body = "        return " + jx_box_fn(*h, c) + "(" + call + ");\n";
+            } else if (m.ret.kind == "void") {
+                body = "        " + call + ";\n";
+            } else {
+                body = "        return " + call + ";\n";
+            }
+            return "[](" + join(decls, ", ") + ") {\n" + pre + body + "    }";
+        }
+
         // One method. jlcxx makes the object the first Julia argument
         // (`name(obj, ...)`); a static becomes a module-level function. The
         // member pointer is disambiguated with an explicit cast to the exact
@@ -354,8 +593,12 @@ using .{{LIB}}
         // by VALUE — the same copy pybind's `automatic` policy makes — so the
         // Julia side always holds a plain object. An extension method binds
         // its free function directly (receiver-first, exactly jlcxx's shape).
-        inline std::string jx_method(const GenClass &k, const GenMethod &m) {
-            const std::string owner = m.is_static ? "mod" : "c";
+        inline std::string jx_method(const GenClass &k, const GenMethod &m, const GenContext &c) {
+            // An extension is a free function: jlcxx's TypeWrapper::method takes
+            // only member pointers and lambdas, so it is registered on the
+            // module, where Julia's dispatch on its first (receiver) argument
+            // makes it a method of the class all the same.
+            const std::string owner = (m.is_static || m.is_extension) ? "mod" : "c";
             const bool        copy_ret =
                 m.ret_is_ref && (m.ret.kind == "object" || m.ret.kind == "vector");
             std::string primary;
@@ -386,8 +629,18 @@ using .{{LIB}}
                                 : (ret + " (" + qualified_of(k) + "::*)(" + args + ")" + quals);
                 primary = "static_cast<" + fp + ">(&" + qualified_of(k) + "::" + m.name + ")";
             }
-            std::string s =
-                "    " + owner + ".method(\"" + m.name + "\", " + primary + ");\n";
+            std::string s;
+            if (jx_touches_string(m)) {
+                return "    " + owner + ".method(\"" + m.name + "\", " +
+                       jx_string_lambda(&k, m, qualified_of(k) + "::" + m.name, c) + ");\n";
+            }
+            // A held-pointer result is boxed (jx_held_method) instead of being
+            // handed out as a non-owning CxxPtr; a held-pointer parameter gains
+            // a by-reference overload next to the pointer form.
+            if (held_pointee(m.ret, c) == nullptr) {
+                s += "    " + owner + ".method(\"" + m.name + "\", " + primary + ");\n";
+            }
+            s += jx_held_method(&k, m, owner, qualified_of(k) + "::" + m.name, c);
             // Numeric-vector parameters: add the plain-Julia-Vector overload.
             if (jx_wants_arrayref_overload(m.params) && !m.is_extension) {
                 const JxAdapterParams ap = jx_arrayref_params(m.params, m.param_cpp);
@@ -415,6 +668,16 @@ using .{{LIB}}
         inline std::string jx_ctors(const GenClass &k, const GenContext &c) {
             std::string s;
             bool        saw_default = false;
+            // A held class: its library's factory is the constructor, and the
+            // box adopts the reference the factory returns (finalized by
+            // jx_holder_finalizers). Its own constructors are not public.
+            if (has_holder(k)) {
+                if (k.holder.creatable) {
+                    s += "    c.constructor([]() { return " + qualified_of(k) + "::" +
+                         k.holder.factory + "(); });\n";
+                }
+                return s;
+            }
             for (std::size_t i = 0; !k.is_abstract && i < k.ctor_param_cpp.size(); ++i) {
                 bool ok = true;
                 for (const auto &p : k.ctors[i]) {
@@ -481,6 +744,26 @@ using .{{LIB}}
             return s;
         }
 
+        // A static method is registered on the MODULE, so two bound classes
+        // declaring the same static (VTK: SafeDownCast / IsTypeOf in every
+        // class) would define one Julia method twice — the later silently
+        // replacing the earlier. True when a class listed before `k` already
+        // owns a static with this name and exact parameter list.
+        inline bool jx_static_taken(const GenClass &k, const GenMethod &m, const GenContext &c) {
+            for (const auto &other : c.classes) {
+                if (&other == &k) {
+                    return false;
+                }
+                for (const auto &om : other.methods) {
+                    if (om.is_static && om.name == m.name && om.param_cpp == m.param_cpp &&
+                        jx_method_ok(om, c) && !owned_pointer_return(om.name, om.ret, c)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         inline std::string jx_class_members(const GenClass &k, const GenContext &c) {
             std::string s = "    {\n";
             s += "    auto &c = c_" + exposed_of(k) + ";\n";
@@ -497,12 +780,26 @@ using .{{LIB}}
             // maps onto the host's own idiom exactly. jx_method spells an
             // explicit cast, so the C++ member pointer is unambiguous.
             for (const auto &m : k.methods) {
+                if (owned_pointer_return(m.name, m.ret, c)) {
+                    coverage::note_skip("julia", k, m, "owned_pointer_return",
+                                        "returns a new reference (a factory, per the holder "
+                                        "policy's owned_returns); the constructor creates "
+                                        "objects instead");
+                    continue;
+                }
                 if (!jx_method_ok(m, c)) {
                     coverage::note_skip("julia", k, m, "unmarshalable_signature",
                                         "jlcxx has no conversion for a type in this signature");
                     continue; // signature the emitted jlcxx line could not compile
                 }
-                s += jx_method(k, m);
+                if (m.is_static && jx_static_taken(k, m, c)) {
+                    coverage::note_skip("julia", k, m, "static_name_collision",
+                                        "a static method becomes a module-level Julia function, "
+                                        "and an earlier class already defines one with this "
+                                        "name and signature");
+                    continue;
+                }
+                s += jx_method(k, m, c);
                 coverage::note_bound("julia", k, m);
             }
             s += "    }\n";
@@ -525,7 +822,25 @@ using .{{LIB}}
             return s;
         }
 
+        inline std::vector<std::pair<std::string, std::string>>
+        julia_sources(const GenContext &c); // defined below
+
         inline std::string julia_expanded_source(const GenContext &c) {
+            return julia_sources(c).front().second;
+        }
+
+        // The julia binding as (file name, contents) pairs: auto_jlcxx.cpp,
+        // then one auto_jlcxx_part_K.cpp per extra class slice. Phase 1 (every
+        // add_type) and the finalizers stay in the module entry, which then
+        // calls `rosetta_jl_part_K(mod)` for the phase-2 member blocks. A part
+        // has no `c_X` wrapper of its own, so it rebuilds one from what
+        // add_type registered: the concrete "Allocated" box type is
+        // julia_type<T>(), its supertype the abstract type.
+        inline std::vector<std::pair<std::string, std::string>>
+        julia_sources(const GenContext &c) {
+            const auto               slices = class_slices(c);
+            const bool               split  = slices.size() > 1;
+            std::vector<std::string> parts;
             std::string body;
             for (const auto &e : c.enums) {
                 body += jx_enum(e);
@@ -535,8 +850,25 @@ using .{{LIB}}
             for (const auto &k : c.classes) {
                 body += jx_class_decl(k, c);
             }
-            for (const auto &k : c.classes) {
-                body += jx_class_members(k, c);
+            body += jx_holder_finalizers(c);
+            for (const auto &[lo, hi] : slices) {
+                if (!split) {
+                    for (std::size_t i = lo; i < hi; ++i) {
+                        body += jx_class_members(c.classes[i], c);
+                    }
+                    continue;
+                }
+                std::string part;
+                for (std::size_t i = lo; i < hi; ++i) {
+                    const GenClass   &k = c.classes[i];
+                    const std::string q = qualified_of(k);
+                    part += "    jlcxx::TypeWrapper<" + q + "> c_" + exposed_of(k) +
+                            "(mod, jlcxx::julia_type<" + q + ">()->super, jlcxx::julia_type<" + q +
+                            ">());\n";
+                    part += jx_class_members(k, c);
+                }
+                body += "    rosetta_jl_part_" + std::to_string(parts.size()) + "(mod);\n";
+                parts.push_back(std::move(part));
             }
             for (const auto &f : c.functions) {
                 GenMethod probe; // free functions go through the same gates
@@ -549,8 +881,24 @@ using .{{LIB}}
                                                  "signature");
                     continue;
                 }
+                if (owned_pointer_return(f.name, f.ret, c)) {
+                    coverage::note_skip_function("julia", f, "owned_pointer_return",
+                                                 "returns a new reference (a factory, per the "
+                                                 "holder policy's owned_returns)");
+                    continue;
+                }
                 coverage::note_bound_function("julia", f);
-                body += "    mod.method(\"" + f.name + "\", " + fn_addr(f) + ");\n";
+                probe.name      = f.name;
+                probe.is_static = true;
+                if (jx_touches_string(probe)) {
+                    body += "    mod.method(\"" + f.name + "\", " +
+                            jx_string_lambda(nullptr, probe, fn_call_expr(f), c) + ");\n";
+                    continue;
+                }
+                if (held_pointee(f.ret, c) == nullptr) {
+                    body += "    mod.method(\"" + f.name + "\", " + fn_addr(f) + ");\n";
+                }
+                body += jx_held_method(nullptr, probe, "mod", fn_call_expr(f), c);
                 if (jx_wants_arrayref_overload(f.params)) {
                     const JxAdapterParams ap = jx_arrayref_params(f.params, {});
                     body += "    mod.method(\"" + f.name + "\", [](" + ap.decls +
@@ -583,6 +931,7 @@ using .{{LIB}}
             out += "#include <jlcxx/jlcxx.hpp>\n"
                    "#include <jlcxx/stl.hpp>\n"
                    "#include <stdexcept>\n"
+                   "#include <type_traits>\n"
                    "#include <string>\n"
                    "#include <vector>\n";
             out += regex_include(c);
@@ -600,13 +949,27 @@ using .{{LIB}}
             if (!supers.empty()) {
                 out += "\nnamespace jlcxx {\n" + supers + "} // namespace jlcxx\n";
             }
+            out += jx_box_helpers(c); // boxing for held (reference-counted) classes
+            const std::string pre = out;
+            for (std::size_t k = 0; k < parts.size(); ++k) {
+                out += (k ? "" : "\n") + std::string("void rosetta_jl_part_") +
+                       std::to_string(k) + "(jlcxx::Module &mod);\n";
+            }
             out += "\n// CxxWrap.jl loads this entry point (default symbol "
                    "`define_julia_module`)\n// from Julia via `@wrapmodule(() -> libpath)`.\n";
             out += "JLCXX_MODULE define_julia_module(jlcxx::Module &mod) {\n";
             out += init_block(c);
             out += body;
             out += "}\n";
-            return out;
+            std::vector<std::pair<std::string, std::string>> files{{"auto_jlcxx.cpp", out}};
+            for (std::size_t k = 0; k < parts.size(); ++k) {
+                const std::string id = std::to_string(k);
+                files.emplace_back("auto_jlcxx_part_" + id + ".cpp",
+                                   pre + "\n// Part " + id + " of the member registrations.\n"
+                                         "void rosetta_jl_part_" + id +
+                                         "(jlcxx::Module &mod) {\n" + parts[k] + "}\n");
+            }
+            return files;
         }
 
         inline std::string Julia::render(const GenContext &c) const {
@@ -615,8 +978,17 @@ using .{{LIB}}
 
         inline void Julia::emit(const GenContext &c) const {
             auto dir = c.out_dir / "julia";
-            write_file(dir / "auto_jlcxx.cpp", julia_expanded_source(c));
-            write_file(dir / "CMakeLists.txt", render_meta(JULIAX_CMAKE, c));
+            const auto  files = julia_sources(c);
+            std::string list;
+            for (const auto &[name, text] : files) {
+                write_file(dir / name, text);
+                list += (list.empty() ? "" : " ") + name;
+            }
+            remove_stale_parts(dir, "auto_jlcxx_part_", files.size() - 1);
+            write_file(dir / "CMakeLists.txt",
+                       replace_once(render_meta(JULIAX_CMAKE, c),
+                                    "add_library(" + c.lib + " SHARED auto_jlcxx.cpp)",
+                                    "add_library(" + c.lib + " SHARED " + list + ")"));
             write_file(dir / (c.lib + ".jl"), jx_loader(c));
             write_file(dir / "README.md",
                        readme("julia", c,

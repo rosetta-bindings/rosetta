@@ -40,6 +40,7 @@
 #include <memory>
 #include <optional>
 #include <rosetta/annotations.h>
+#include <rosetta/holder.h>
 #include <rosetta/interop.h>
 #include <rosetta/matrix.h>
 #include <rosetta/sequence.h>
@@ -77,6 +78,30 @@ namespace rosetta {
      *   };
      */
     template <class T> struct binding_info; // primary — must be specialized
+
+    /**
+     * @brief One external library the generated bindings link against
+     * (manifest "user_lib"). Use these when the bound headers only *declare*
+     * the API and the bodies live in separately-compiled libraries — your own
+     * library plus, typically, the third-party ones it depends on.
+     *
+     *   name — the library's base name (e.g. "space" ⇒ -lspace,
+     *          libspace.dylib / .so / .a).
+     *   dir  — directory holding the built library (-L / rpath).
+     *   link — preferred link form: "shared" (default) or "static". The
+     *          generated CMake links that form by full path and falls back to
+     *          whichever is actually present on disk. WebAssembly ignores it
+     *          and always links static (a native shared object cannot enter a
+     *          wasm module).
+     *
+     * Order is preserved on the link line, so list dependents before their
+     * dependencies when linking static archives.
+     */
+    struct UserLib {
+        std::string name;
+        std::string dir;
+        std::string link; // "shared" (default) | "static"; empty ⇒ shared
+    };
 
     /**
      * @brief One output target: a backend language and the module /
@@ -129,30 +154,31 @@ namespace rosetta {
         std::vector<WheelFile>             wheel_files;
         std::vector<std::string>           wheel_dependencies;
         std::map<std::string, std::string> wheel_scripts;
-    };
 
-    /**
-     * @brief One external library the generated bindings link against
-     * (manifest "user_lib"). Use these when the bound headers only *declare*
-     * the API and the bodies live in separately-compiled libraries — your own
-     * library plus, typically, the third-party ones it depends on.
-     *
-     *   name — the library's base name (e.g. "space" ⇒ -lspace,
-     *          libspace.dylib / .so / .a).
-     *   dir  — directory holding the built library (-L / rpath).
-     *   link — preferred link form: "shared" (default) or "static". The
-     *          generated CMake links that form by full path and falls back to
-     *          whichever is actually present on disk. WebAssembly ignores it
-     *          and always links static (a native shared object cannot enter a
-     *          wasm module).
-     *
-     * Order is preserved on the link line, so list dependents before their
-     * dependencies when linking static archives.
-     */
-    struct UserLib {
-        std::string name;
-        std::string dir;
-        std::string link; // "shared" (default) | "static"; empty ⇒ shared
+        // Per-target BUILD overrides (manifest target "compile_options" /
+        // "user_include" / "user_lib" / "exceptions"), for a library whose
+        // builds differ per platform — VTK has a native install tree and an
+        // emscripten one compiled with -fwasm-exceptions, and one top-level
+        // user_lib cannot name both.
+        //
+        //   compile_options — extra compiler flags for this target's binding
+        //                     (target_compile_options), twin of link_options.
+        //   user_include    — include dirs PREPENDED to the top-level ones for
+        //                     this target, so its copy of a header that differs
+        //                     per platform wins the lookup.
+        //   user_libs       — REPLACES the top-level user_libs for this target
+        //                     when non-empty. The generator driver itself keeps
+        //                     the top-level list: it runs on the host.
+        //   exceptions      — wasm only: "" / "js" (emscripten's JS exception
+        //                     model) or "wasm" (-fwasm-exceptions on compile AND
+        //                     link). Every object of a wasm link must agree.
+        //
+        // Last in the struct on purpose: the generated driver spells TargetSpec
+        // with designated initializers, which must follow declaration order.
+        std::vector<std::string>           compile_options;
+        std::vector<std::filesystem::path> user_include;
+        std::vector<UserLib>               user_libs;
+        std::string                        exceptions;
     };
 
     /**
@@ -216,6 +242,17 @@ namespace rosetta {
         // the expanded backends needed no per-backend work for it. `element`
         // stays empty: there is nothing inside a path to describe.
         bool is_path = false;
+
+        // True when the (cvref-stripped) type is a C string — `const char *` or
+        // `char *` — in a method or function SIGNATURE. Like is_sequence, `kind`
+        // stays "unknown" (a backend that does not opt in keeps skipping it), and
+        // it rides the copy adapter with a std::string boundary: a parameter is
+        // passed as the boundary string's `.data()`, a returned pointer becomes
+        // a std::string (empty for nullptr). The callee must not keep the
+        // pointer past the call — the usual C API contract, and VTK's
+        // (vtkSetStringMacro copies). Fields never carry it: their setters are
+        // the container ones, which have no meaning for a C string.
+        bool is_cstring = false;
 
         // True when the (cvref-stripped) type is a trait-registered foreign
         // sequence container (rosetta::is_sequence<T>, e.g. GEO::vector<double>
@@ -334,6 +371,14 @@ namespace rosetta {
         // Every annotation on this member, type-erased. Backends query the ones
         // they care about via find_annotation<A>() — the core names none of them.
         std::vector<std::any> annotations;
+
+        // Qualified spelling of the class that DECLARES this member. The walk
+        // flattens public bases into every derived class, so a field inherited
+        // from `geom::Shape` sits in `geom::Circle`'s list — but its doc comment
+        // was harvested under "geom::Shape::field", which is where
+        // apply_doc_comments looks next when the derived key finds nothing.
+        // Empty for hand-built IR.
+        std::string declaring_class;
     };
 
     struct GenParam {
@@ -480,6 +525,15 @@ namespace rosetta {
         // backends query the ones they care about — e.g. rosetta::button /
         // rosetta::label — via find_annotation<A>(); the core names none of them.
         std::vector<std::any> annotations;
+
+        // Qualified spelling of the class that DECLARES this method — see
+        // GenField::declaring_class. It is what lets an inherited method keep
+        // the doc comment AND the default arguments harvested from its base's
+        // header: a derived class's flattened copy of `point_array_range(name,
+        // component = 0)` would otherwise bind with `component` required.
+        // Empty for hand-built IR and for extension methods (documented where
+        // the free function is declared).
+        std::string declaring_class;
     };
 
     /**
@@ -534,6 +588,38 @@ namespace rosetta {
     };
 
     /**
+     * @brief A class's HOLDER POLICY (manifest "holders", trait
+     * rosetta::holder_policy — see rosetta/holder.h): how a library that
+     * reference-counts its objects intrusively manages their lifetime. Empty
+     * `holder` ⇒ no policy, the class is owned the ordinary way.
+     *
+     * The strings are spliced into emitted C++: `holder` is a class template
+     * (`holder<T>` must take a reference when built from a T* and drop it when
+     * destroyed), `get` its member returning the T*, `retain` / `release`
+     * member calls on a T* that take / drop one reference, and `factory` the
+     * static member creating a new object that already carries one reference.
+     */
+    struct GenHolder {
+        std::string holder;  // class template, e.g. "vtkSmartPointer"; empty ⇒ no policy
+        std::string header;  // its #include, may be empty
+        std::string get = "get";
+        std::string retain;  // e.g. "Register(nullptr)"
+        std::string release; // e.g. "UnRegister(nullptr)"
+        std::string factory; // e.g. "New"; empty ⇒ never constructible from script
+
+        // Method-name globs whose POINTER result already carries a reference
+        // (VTK: New*, NewInstance). Wrapping one would take a second reference
+        // nothing ever drops, so those are skipped — the constructor covers
+        // creation. The factory's own name is always in the list.
+        std::vector<std::string> owned_returns;
+
+        // `T::factory()` exists, returns exactly T*, and T is not abstract —
+        // answered by the compiler at reflection time. A class without a
+        // factory of its own inherits its base's, which returns the base type.
+        bool creatable = false;
+    };
+
+    /**
      * @brief One class, erased to the plain data a backend needs. `generate`
      * fills this up front (the only place reflection runs), so backends are
      * pure text templating. Member type info (`fields` / `methods` / `ctors`)
@@ -571,6 +657,13 @@ namespace rosetta {
         // derived instance is accepted where a base pointer/reference is expected
         // — consults these, filtering to the bases that are themselves bound.
         std::vector<std::string> bases;
+
+        // Every public ancestor, nearest first (breadth-first), qualified. Used
+        // when NONE of the direct bases is bound — a class whose direct base is
+        // an unbound template (vtkFloatArray : vtkAOSDataArrayTemplate<float>
+        // : … : vtkDataArray) still has to bind as a vtkDataArray, so
+        // generate_described() replaces `bases` by the nearest bound ancestor.
+        std::vector<std::string> ancestors;
         std::string doc;    // class_markdown(*this) — per-class Markdown fragment (README body)
 
         // The class's OWN documentation — the comment written above it in the
@@ -610,6 +703,13 @@ namespace rosetta {
         // alternative would be a per-backend non-owning holder
         // (py::nodelete and its equivalents), which is a feature of its own.
         bool is_destructible = true;
+
+        // The class's holder policy (manifest "holders"), when it has one. A
+        // class with a policy is bound even though it is not destructible: the
+        // backends that support policies (python, wasm, julia) never destroy
+        // it, they hand it to the library's own reference counting. Other
+        // backends keep skipping it.
+        GenHolder holder;
 
         // Whether T can be assigned to (copy OR move). The node runtime's
         // parameterized-constructor path assigns the freshly built object into
@@ -870,6 +970,14 @@ namespace rosetta {
         // back to DEFAULT_DIST_VERSION ("0.1.0"), so a manifest that never
         // packages needs no change.
         std::string version;
+
+        // How many source files a compiled backend splits its class
+        // registrations into (manifest "binding_shards"). One huge binding TU
+        // over a large library (pybind11 over hundreds of VTK classes) takes
+        // tens of minutes and gigabytes; parts compile in parallel. 0 = auto
+        // (one file up to 30 classes, else ~25 classes per part). Honoured by
+        // python, wasm and julia; the other backends always emit one file.
+        std::size_t binding_shards = 0;
     };
 
     /**
@@ -943,6 +1051,19 @@ namespace rosetta {
         std::vector<WheelFile>             wheel_files;
         std::vector<std::string>           wheel_dependencies;
         std::map<std::string, std::string> wheel_scripts;
+
+        // Extra compiler flags for THIS target's binding (TargetSpec::
+        // compile_options), emitted as target_compile_options next to the
+        // link_options; and the wasm exception model (TargetSpec::exceptions:
+        // "" / "js" keep emscripten's JS model, "wasm" switches the template to
+        // -fwasm-exceptions on both sides). Appended last so the positional
+        // GenContext{...} initializers that predate them keep compiling.
+        std::vector<std::string> compile_options;
+        std::string              exceptions;
+
+        // GenerateOptions::binding_shards, for the backends that split their
+        // registrations across several source files (see class_slices()).
+        std::size_t binding_shards = 0;
     };
 
     /**
@@ -1014,6 +1135,20 @@ namespace rosetta {
      * added. Per-class headers come from the `rosetta::binding_info<T>` trait.
      */
     template <typename... Ts> void generate(const GenerateOptions &opt);
+
+    /**
+     * @brief The two halves of `generate`, for a SHARDED generator. Reflecting
+     * a large library in one translation unit is slow and memory-hungry (it is
+     * all compile-time work), so rosetta_gen can split the class list into
+     * shards: each shard TU calls `describe_into<its classes...>` to append
+     * their IR, `main` concatenates the shards IN MANIFEST ORDER (bases before
+     * derived) and calls `generate_described` once. The IR never leaves the
+     * process, so nothing — annotations included — needs serializing.
+     */
+    template <typename... Ts>
+    void describe_into(std::vector<GenClass> &classes, std::vector<GenEnum> &enums);
+    void generate_described(std::vector<GenClass> classes, std::vector<GenEnum> enums,
+                            const GenerateOptions &opt);
 
     /**
      * @brief Describe one free function (identified by its reflection `F`) as

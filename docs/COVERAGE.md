@@ -60,6 +60,12 @@ struct Derived : Base { int f(double) const; };
 the C++ API does not offer. Both hidden declarations are recorded as
 `hidden_by_derived` drops rather than vanishing.
 
+A base declaration that the derived class redeclares with the same name and
+parameter list (an override, a static redeclared per class like VTK's
+`IsA` / `IsTypeOf`, or a `New()` whose return type narrows to the derived class)
+is *replaced*, not hidden: the derived one binds and nothing is lost, so no drop
+is recorded.
+
 A diamond-shared base member is still emitted exactly once. Two *different*
 bases declaring the same name both bind — that call is ambiguous in C++ without
 qualification, but the binding has no ambiguity to resolve (each entry is
@@ -131,6 +137,9 @@ one you can diff.
 | `unmarshalable_signature` | no conversion for a type in the signature; `detail` names it |
 | `overload_not_expressible` | the target keys methods by name and this one lost the tie |
 | `sequence_not_adaptable` | a registered sequence with no `std::vector` boundary adapter here |
+| `owned_pointer_return` | returns a pointer that already carries a reference — a factory listed in a holder policy's `owned_returns` (see [holders](MANIFEST.md#reference-counted-classes-holders)) |
+| `static_instance_mix` | python: the name was already bound as the other kind — pybind11 cannot put static and instance overloads under one name |
+| `static_name_collision` | julia: a static becomes a module-level function, and an earlier class already defines one with this name and signature |
 | `static_callback_receiver` | embind cannot give a static member the receiver a callback adapter needs |
 | `extension_has_no_member_pointer` | this backend dispatches through a member pointer |
 

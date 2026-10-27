@@ -46,6 +46,25 @@ struct OvDerived : OvBase {
     int f(double) const { return 4; }
 };
 
+// Redeclarations that REPLACE the base declaration rather than hide it — the
+// vtkObjectBase / vtkTypeMacro shapes: a virtual override, a static redeclared
+// per class, and a factory whose return type narrows to the derived class.
+struct OvReBase {
+    virtual ~OvReBase() = default;
+    virtual void         print(int) const {}
+    static int           is_type_of(const char *) { return 0; }
+    static OvReBase     *make() { return nullptr; }
+    virtual OvReBase    *clone() const { return nullptr; }
+    int                  keep(int) const { return 0; } // genuinely hidden
+};
+struct OvReDerived : OvReBase {
+    void                print(int) const override {}
+    static int          is_type_of(const char *) { return 1; }
+    static OvReDerived *make() { return nullptr; }
+    OvReDerived        *clone() const override { return nullptr; }
+    int                 keep(double) const { return 1; }
+};
+
 // Diamond: OvJoin reaches OvRoot twice; OvRoot::shared() must appear once.
 struct OvRoot {
     int shared() const { return 0; }
@@ -66,6 +85,9 @@ template <> struct rosetta::binding_info<OvBasic> {
     static constexpr const char *header = "ov.h";
 };
 template <> struct rosetta::binding_info<OvDerived> {
+    static constexpr const char *header = "ov.h";
+};
+template <> struct rosetta::binding_info<OvReDerived> {
     static constexpr const char *header = "ov.h";
 };
 template <> struct rosetta::binding_info<OvJoin> {
@@ -136,11 +158,13 @@ TEST(Overload, DerivedDeclarationHidesTheWholeBaseSet) {
     EXPECT_EQ(f[0]->params.size(), 1u);
     EXPECT_EQ(f[0]->params[0].type.spelling, "double") << "the derived f(double) is the survivor";
     EXPECT_EQ(f[0]->overload_count, 1u);
-    // And NOT flagged is_overloaded: that asks whether the declaring class
-    // overloads the name, and OvDerived declares `f` exactly once. Name lookup
-    // for `&OvDerived::f` finds only that one — the hidden base declarations do
-    // not make it ambiguous — so no disambiguating cast is needed either.
-    EXPECT_FALSE(f[0]->is_overloaded);
+    // But it IS flagged is_overloaded — conservatively. Here the base f()s are
+    // hidden and `&OvDerived::f` is unambiguous; with a `using OvBase::f;` in
+    // OvDerived the very same reflection would describe an AMBIGUOUS name
+    // (vtkDataSetAttributes::RemoveArray), because members_of() has no view of
+    // the using-declaration. The two cannot be told apart, and the
+    // disambiguating cast is valid in both, so the flag errs towards the cast.
+    EXPECT_TRUE(f[0]->is_overloaded);
 }
 
 TEST(Overload, HiddenBaseOverloadsAreRecordedNotSilentlyDropped) {
@@ -152,6 +176,19 @@ TEST(Overload, HiddenBaseOverloadsAreRecordedNotSilentlyDropped) {
         hidden += (d.reason == "hidden_by_derived") ? 1 : 0;
     }
     EXPECT_EQ(hidden, 2u) << "both OvBase::f overloads are hidden by OvDerived::f";
+}
+
+TEST(Overload, ARedeclarationWithTheSameCallSignatureIsNotReportedHidden) {
+    const auto k = rosetta::gen_detail::describe<OvReDerived>();
+    for (const char *n : {"print", "is_type_of", "make", "clone"}) {
+        EXPECT_FALSE(has_drop(k, n, "hidden_by_derived"))
+            << n << ": the derived redeclaration replaces the base one, nothing is lost";
+        ASSERT_EQ(named(k, n).size(), 1u) << n;
+    }
+    EXPECT_EQ(named(k, "make")[0]->ret.spelling, "OvReDerived *")
+        << "the derived declaration is the one bound";
+    EXPECT_TRUE(has_drop(k, "keep", "hidden_by_derived"))
+        << "a base overload with different parameters is still hidden";
 }
 
 TEST(Overload, AnUnhiddenBaseMethodStillBinds) {

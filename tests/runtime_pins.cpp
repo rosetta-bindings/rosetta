@@ -39,8 +39,13 @@ namespace {
     // Emit a backend's project into a temp tree; hand back one named file.
     std::string emitted(const char *lang, const std::string &file,
                         const std::function<void(rosetta::GenContext &)> &pin) {
+        // Named after the running test: ctest -j runs every test in its own
+        // process, so a per-process counter alone collides across processes.
         static int     n   = 0;
-        const fs::path dir = fs::temp_directory_path() / ("rosetta_pins_" + std::to_string(++n));
+        const fs::path dir = fs::temp_directory_path() /
+                             ("rosetta_pins_" +
+                              std::string(::testing::UnitTest::GetInstance()->current_test_info()->name()) +
+                              "_" + std::to_string(++n));
         fs::remove_all(dir);
 
         auto c    = rosetta::gen_detail::make_context<rp::Thing>("pintest");
