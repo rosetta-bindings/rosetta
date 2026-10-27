@@ -77,9 +77,44 @@ namespace rosetta {
             std::vector<std::string_view> sig_names;
             std::vector<std::meta::info>  sig_types;
 
+            // Every PUBLIC method declaration already processed, bound or
+            // reported hidden. A base declaration of a hidden name that one of
+            // these redeclares (same name and parameter list) is an override,
+            // not a hidden overload — see same_call_signature.
+            std::vector<std::meta::info>  public_decls;
+
             std::vector<member_drop>      drops;
             std::vector<std::meta::info>  seen_types;
         };
+
+        // True when `a` and `b` are called the same way: same name, same
+        // parameter types, same cv- and ref-qualifiers. The RETURN type is not
+        // compared, so a covariant override (`Derived *clone()`) and a factory
+        // redeclared per class (VTK's `static vtkFoo *New()`) count as the
+        // base declaration's replacement, not as a different overload.
+        consteval bool same_call_signature(std::meta::info a, std::meta::info b) {
+            if (std::meta::identifier_of(a) != std::meta::identifier_of(b) ||
+                std::meta::is_const(a) != std::meta::is_const(b) ||
+                std::meta::is_volatile(a) != std::meta::is_volatile(b) ||
+                std::meta::is_lvalue_reference_qualified(a) !=
+                    std::meta::is_lvalue_reference_qualified(b) ||
+                std::meta::is_rvalue_reference_qualified(a) !=
+                    std::meta::is_rvalue_reference_qualified(b)) {
+                return false;
+            }
+            const auto pa = std::meta::parameters_of(a);
+            const auto pb = std::meta::parameters_of(b);
+            if (pa.size() != pb.size()) {
+                return false;
+            }
+            for (std::size_t i = 0; i < pa.size(); ++i) {
+                if (std::meta::dealias(std::meta::type_of(pa[i])) !=
+                    std::meta::dealias(std::meta::type_of(pb[i]))) {
+                    return false;
+                }
+            }
+            return true;
+        }
 
         // Collect exportable fields and methods across `type` and all its public
         // bases.
@@ -101,6 +136,10 @@ namespace rosetta {
         // Binding the hidden base overloads would hand scripts a call the C++ API
         // does not offer. Each one is recorded in `drops` so the coverage report
         // can name it rather than leaving it to be discovered by its absence.
+        // A base declaration that a more-derived PUBLIC one redeclares with the
+        // same call signature (same_call_signature: an override, VTK's per-class
+        // IsA / IsTypeOf, a `New()` returning the derived type) is not hidden but
+        // replaced — nothing is lost, so it is skipped without a drop.
         //
         // A NON-PUBLIC derived declaration hides just as hard. `class D : public B`
         // that re-declares B's public `f` under `protected:` (a protected override
@@ -194,9 +233,21 @@ namespace rosetta {
                 }
                 auto id = std::meta::identifier_of(m);
                 if (contains(st.hidden_methods, id)) {
-                    st.drops.push_back({m, drop_reason::hidden_by_derived});
+                    // A more-derived public redeclaration with the same call
+                    // signature REPLACES this one rather than hiding it: the
+                    // override (or IsA / New per class) is what gets bound, or
+                    // was already reported if it is hidden itself.
+                    bool replaced = false;
+                    for (auto d : st.public_decls) {
+                        replaced = replaced || same_call_signature(d, m);
+                    }
+                    if (!replaced) {
+                        st.drops.push_back({m, drop_reason::hidden_by_derived});
+                    }
+                    st.public_decls.push_back(m);
                     continue;
                 }
+                st.public_decls.push_back(m);
                 auto ty = std::meta::type_of(m);
                 if (contains_sig(id, ty)) {
                     continue; // diamond duplicate / already-seen override

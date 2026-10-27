@@ -2319,6 +2319,38 @@ endif()
             return out;
         }
 
+        // Every public ancestor of `cls`, nearest first (breadth-first), as
+        // compilable qualified spellings — see GenClass::ancestors.
+        consteval std::vector<const char *> public_ancestors_of(std::meta::info cls) {
+            const auto                   ctx = std::meta::access_context::current();
+            std::vector<const char *>    out;
+            std::vector<std::meta::info> seen;
+            std::vector<std::meta::info> level{cls};
+            while (!level.empty()) {
+                std::vector<std::meta::info> next;
+                for (auto c : level) {
+                    for (auto b : std::meta::bases_of(c, ctx)) {
+                        if (!std::meta::is_public(b)) {
+                            continue;
+                        }
+                        const std::meta::info t = std::meta::dealias(std::meta::type_of(b));
+                        bool                  dup = false;
+                        for (auto s2 : seen) {
+                            dup = dup || s2 == t;
+                        }
+                        if (dup) {
+                            continue;
+                        }
+                        seen.push_back(t);
+                        out.push_back(std::define_static_string(qualified_type_spelling(t)));
+                        next.push_back(t);
+                    }
+                }
+                level = next;
+            }
+            return out;
+        }
+
         // Erase one class to plain data — the only place reflection runs.
         template <typename T> inline GenClass describe() {
             GenClass gc;
@@ -2384,6 +2416,13 @@ endif()
                         gc.bases.push_back(ns.empty() ? class_name<B>()
                                                       : ns + "::" + class_name<B>());
                     }
+                }
+            }
+            {
+                constexpr auto anc =
+                    std::define_static_array(public_ancestors_of(std::meta::dealias(^^T)));
+                for (const char *a : anc) {
+                    gc.ancestors.emplace_back(a);
                 }
             }
             IRVisitor<T> v{gc};
@@ -3536,6 +3575,33 @@ namespace rosetta {
 
     inline void generate_described(std::vector<GenClass> classes, std::vector<GenEnum> enums,
                                    const GenerateOptions &opt) {
+
+        // A class none of whose DIRECT bases is bound inherits from its nearest
+        // BOUND ancestor instead (GenClass::ancestors): VTK's typed arrays derive
+        // from an unbound template chain, and without this vtkFloatArray would
+        // bind as a root class — not accepted where a vtkDataArray is expected,
+        // and without vtkDataArray's extension methods. Done here, once, so
+        // every backend's "bound bases" logic just sees it.
+        {
+            std::vector<std::string> bound;
+            for (const auto &k : classes) {
+                bound.push_back(qualified_of(k));
+            }
+            const auto is_bound = [&](const std::string &q) {
+                return std::find(bound.begin(), bound.end(), q) != bound.end();
+            };
+            for (auto &k : classes) {
+                if (std::any_of(k.bases.begin(), k.bases.end(), is_bound)) {
+                    continue;
+                }
+                for (const auto &a : k.ancestors) {
+                    if (is_bound(a)) {
+                        k.bases = {a};
+                        break;
+                    }
+                }
+            }
+        }
 
         // Mark the manifest's "final" classes: no trampoline even with public
         // virtuals (see GenClass::is_final). Matched like extensions —

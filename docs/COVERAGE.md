@@ -60,6 +60,12 @@ struct Derived : Base { int f(double) const; };
 the C++ API does not offer. Both hidden declarations are recorded as
 `hidden_by_derived` drops rather than vanishing.
 
+A base declaration that the derived class redeclares with the same name and
+parameter list (an override, a static redeclared per class like VTK's
+`IsA` / `IsTypeOf`, or a `New()` whose return type narrows to the derived class)
+is *replaced*, not hidden: the derived one binds and nothing is lost, so no drop
+is recorded.
+
 A diamond-shared base member is still emitted exactly once. Two *different*
 bases declaring the same name both bind — that call is ambiguous in C++ without
 qualification, but the binding has no ambiguity to resolve (each entry is

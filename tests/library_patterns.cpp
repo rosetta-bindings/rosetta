@@ -64,6 +64,17 @@ namespace lpns {
         double range(int component = AllComponents) const { return component; }
     };
 
+    // vtkFloatArray's shape: the bound base is reached only through an
+    // unbound template (vtkAOSDataArrayTemplate<float>).
+    struct ArrayBase {
+        virtual ~ArrayBase() = default;
+        int size() const { return 0; }
+    };
+    template <class T> struct ArrayTemplate : ArrayBase {
+        T at(int) const { return T{}; }
+    };
+    struct FloatArray : ArrayTemplate<float> {};
+
     struct Space {
         enum MemorySpace { Host, Device }; // never bound
         int          where(MemorySpace s) const { return s; }
@@ -84,6 +95,12 @@ template <> struct rosetta::binding_info<lpns::Named> {
     static constexpr const char *header = "lp.h";
 };
 template <> struct rosetta::binding_info<lpns::Ranged> {
+    static constexpr const char *header = "lp.h";
+};
+template <> struct rosetta::binding_info<lpns::ArrayBase> {
+    static constexpr const char *header = "lp.h";
+};
+template <> struct rosetta::binding_info<lpns::FloatArray> {
     static constexpr const char *header = "lp.h";
 };
 template <> struct rosetta::binding_info<lpns::Space> {
@@ -201,4 +218,24 @@ TEST(LibraryPatterns, ANumericDefaultSpelledAsAnEnumeratorIsCastToTheParameterTy
     }
     const std::string s = rosetta::backend_registry().at("python")->render(c);
     EXPECT_TRUE(has(s, "py::arg(\"component\") = static_cast<int>(lpns::AllComponents)")) << s;
+}
+
+// The nearest BOUND ancestor stands in for an unbound direct base, so the class
+// is still accepted where its bound base is expected.
+TEST(LibraryPatterns, AnUnboundTemplateBaseIsBridgedToTheNearestBoundAncestor) {
+    const auto k = rosetta::gen_detail::describe<lpns::FloatArray>();
+    ASSERT_GE(k.ancestors.size(), 2u);
+    EXPECT_EQ(k.ancestors.back(), "lpns::ArrayBase");
+
+    namespace fs       = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "rosetta_lp_bridge";
+    fs::remove_all(dir);
+    rosetta::GenerateOptions opt;
+    opt.out_dir = dir;
+    opt.targets = {rosetta::TargetSpec{.lang = "python", .name = "lp"}};
+    rosetta::generate<lpns::ArrayBase, lpns::FloatArray>(opt);
+    std::ifstream     in(dir / "python" / "auto_pybind.cpp");
+    const std::string s{std::istreambuf_iterator<char>(in), {}};
+    fs::remove_all(dir);
+    EXPECT_TRUE(has(s, "py::class_<lpns::FloatArray, lpns::ArrayBase>")) << s;
 }

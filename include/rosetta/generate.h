@@ -657,6 +657,13 @@ namespace rosetta {
         // derived instance is accepted where a base pointer/reference is expected
         // — consults these, filtering to the bases that are themselves bound.
         std::vector<std::string> bases;
+
+        // Every public ancestor, nearest first (breadth-first), qualified. Used
+        // when NONE of the direct bases is bound — a class whose direct base is
+        // an unbound template (vtkFloatArray : vtkAOSDataArrayTemplate<float>
+        // : … : vtkDataArray) still has to bind as a vtkDataArray, so
+        // generate_described() replaces `bases` by the nearest bound ancestor.
+        std::vector<std::string> ancestors;
         std::string doc;    // class_markdown(*this) — per-class Markdown fragment (README body)
 
         // The class's OWN documentation — the comment written above it in the
