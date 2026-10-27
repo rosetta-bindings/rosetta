@@ -136,11 +136,13 @@ TEST(Overload, DerivedDeclarationHidesTheWholeBaseSet) {
     EXPECT_EQ(f[0]->params.size(), 1u);
     EXPECT_EQ(f[0]->params[0].type.spelling, "double") << "the derived f(double) is the survivor";
     EXPECT_EQ(f[0]->overload_count, 1u);
-    // And NOT flagged is_overloaded: that asks whether the declaring class
-    // overloads the name, and OvDerived declares `f` exactly once. Name lookup
-    // for `&OvDerived::f` finds only that one — the hidden base declarations do
-    // not make it ambiguous — so no disambiguating cast is needed either.
-    EXPECT_FALSE(f[0]->is_overloaded);
+    // But it IS flagged is_overloaded — conservatively. Here the base f()s are
+    // hidden and `&OvDerived::f` is unambiguous; with a `using OvBase::f;` in
+    // OvDerived the very same reflection would describe an AMBIGUOUS name
+    // (vtkDataSetAttributes::RemoveArray), because members_of() has no view of
+    // the using-declaration. The two cannot be told apart, and the
+    // disambiguating cast is valid in both, so the flag errs towards the cast.
+    EXPECT_TRUE(f[0]->is_overloaded);
 }
 
 TEST(Overload, HiddenBaseOverloadsAreRecordedNotSilentlyDropped) {

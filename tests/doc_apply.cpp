@@ -264,4 +264,95 @@ namespace {
         EXPECT_EQ(ks[0].methods[0].params[0].name, "radius");
     }
 
+    // ---- inherited members --------------------------------------------------
+    // The walk flattens a base's members into every derived class, but the
+    // harvest records each member once, under the class whose header declares
+    // it. A derived class's copy has to find it there — or it binds with no
+    // docstring and, worse, with every defaulted parameter required.
+
+    TEST(DocApply, AnInheritedMethodIsDocumentedFromItsDeclaringClass) {
+        GenMethod inherited      = method("range", {param("name"), param("component", true)});
+        inherited.declaring_class = "geom::Shape";
+        GenClass circle          = shape({inherited});
+        circle.name              = "Circle";
+        circle.qualified         = "geom::Circle";
+
+        std::vector<GenClass> ks{circle};
+        Docs docs{{"geom::Shape::range",
+                   {fn_entry("Value range.", "", {{"name", "array", ""},
+                                                  {"component", "which one", "0"}})}}};
+        apply_docs(ks, docs);
+        const GenMethod &m = ks[0].methods[0];
+        EXPECT_EQ(m.doc, "Value range.");
+        EXPECT_EQ(m.params[1].doc, "which one");
+        EXPECT_EQ(m.params[1].default_text, "0"); // what py::arg(...) = 0 is made of
+    }
+
+    TEST(DocApply, TheBareDeclaringKeyAlsoMatches) {
+        GenMethod inherited      = method("area", {});
+        inherited.declaring_class = "geom::Shape";
+        GenClass circle          = shape({inherited});
+        circle.name              = "Circle";
+        circle.qualified         = "geom::Circle";
+
+        std::vector<GenClass> ks{circle};
+        apply_docs(ks, {{"Shape::area", {fn_entry("The area.", "", {})}}});
+        EXPECT_EQ(ks[0].methods[0].doc, "The area.");
+    }
+
+    TEST(DocApply, ARedeclarationInTheDerivedClassWins) {
+        GenMethod m      = method("area", {});
+        m.declaring_class = "geom::Circle"; // Circle redeclares it
+        GenClass circle  = shape({m});
+        circle.name      = "Circle";
+        circle.qualified = "geom::Circle";
+
+        std::vector<GenClass> ks{circle};
+        apply_docs(ks, {{"geom::Circle::area", {fn_entry("Circle's own.", "", {})}},
+                        {"geom::Shape::area", {fn_entry("Shape's.", "", {})}}});
+        EXPECT_EQ(ks[0].methods[0].doc, "Circle's own.");
+    }
+
+    TEST(DocApply, AnInheritedFieldIsDocumentedFromItsDeclaringClass) {
+        GenClass circle  = shape({});
+        circle.name      = "Circle";
+        circle.qualified = "geom::Circle";
+        rosetta::GenField f;
+        f.name            = "radius";
+        f.declaring_class = "geom::Shape";
+        circle.fields.push_back(f);
+
+        DocEntry fld;
+        fld.doc = "The radius.";
+        std::vector<GenClass> ks{circle};
+        apply_docs(ks, {{"geom::Shape::radius", {fld}}});
+        EXPECT_EQ(ks[0].fields[0].doc, "The radius.");
+    }
+
 } // namespace
+
+// ---- the walk records where each member was declared -------------------------
+
+namespace dapns {
+    struct Base {
+        int    tag = 0;
+        double range(int component = 0) const { return component; }
+    };
+    struct Derived : Base {
+        double own() const { return 1.0; }
+    };
+} // namespace dapns
+
+TEST(DocApply, TheWalkRecordsTheDeclaringClass) {
+    const rosetta::GenClass k = rosetta::gen_detail::describe<dapns::Derived>();
+    std::map<std::string, std::string> method_owner, field_owner;
+    for (const auto &m : k.methods) {
+        method_owner[m.name] = m.declaring_class;
+    }
+    for (const auto &f : k.fields) {
+        field_owner[f.name] = f.declaring_class;
+    }
+    EXPECT_EQ(method_owner["range"], "dapns::Base");
+    EXPECT_EQ(method_owner["own"], "dapns::Derived");
+    EXPECT_EQ(field_owner["tag"], "dapns::Base");
+}

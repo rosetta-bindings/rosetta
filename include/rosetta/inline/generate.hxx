@@ -565,7 +565,8 @@ endif()
 
         inline std::string user_lib_block(const GenContext &c) {
             if (c.user_libs.empty() && c.user_sources.empty() &&
-                c.compile_definitions.empty() && c.link_options.empty()) {
+                c.compile_definitions.empty() && c.link_options.empty() &&
+                c.compile_options.empty()) {
                 return {};
             }
             std::string s;
@@ -604,6 +605,17 @@ endif()
                 s += "target_compile_definitions(${ROSETTA_BINDING_TARGET} PRIVATE\n";
                 for (const auto &def : c.compile_definitions) {
                     s += "    " + def + "\n";
+                }
+                s += ")\n";
+            }
+
+            // Extra compiler flags for this target (manifest target
+            // "compile_options") — the compile-side twin of link_options.
+            if (!c.compile_options.empty()) {
+                s += "# Compiler flags (manifest target \"compile_options\") for the binding.\n";
+                s += "target_compile_options(${ROSETTA_BINDING_TARGET} PRIVATE\n";
+                for (const auto &opt : c.compile_options) {
+                    s += "    \"" + opt + "\"\n";
                 }
                 s += ")\n";
             }
@@ -750,6 +762,25 @@ endif()
                     "target_compile_definitions(" + c.lib + " PRIVATE";
                 for (const auto &def : c.compile_definitions) {
                     user_defs_block += "\n    " + def;
+                }
+                user_defs_block += ")";
+            }
+            // Native WebAssembly exception handling (manifest wasm target
+            // "exceptions": "wasm"): every object of the link must be compiled
+            // with it, the binding TU included — a library built that way (VTK's
+            // wasm build forces it) cannot be linked into a JS-EH module. The
+            // link half is the {{WASM_EXCEPTIONS}} placeholder in the template.
+            if (c.exceptions == "wasm") {
+                user_defs_block +=
+                    "\n\n# Native wasm exception handling (manifest target \"exceptions\").\n"
+                    "target_compile_options(" + c.lib + " PRIVATE -fwasm-exceptions)";
+            }
+            if (!c.compile_options.empty()) {
+                user_defs_block +=
+                    "\n\n# Compiler flags (manifest target \"compile_options\") for the binding.\n"
+                    "target_compile_options(" + c.lib + " PRIVATE";
+                for (const auto &opt : c.compile_options) {
+                    user_defs_block += "\n    \"" + opt + "\"";
                 }
                 user_defs_block += ")";
             }
@@ -976,6 +1007,12 @@ endif()
                                 {"USER_SOURCES", user_sources},
                                 {"USER_ENABLE_C", user_enable_c},
                                 {"USER_DEFS_BLOCK", user_defs_block},
+                                // The wasm template's exception model, link side:
+                                // emscripten's JS model by default, native wasm EH
+                                // when the target asks for it (see user_defs_block).
+                                {"WASM_EXCEPTIONS", c.exceptions == "wasm"
+                                                        ? "-fwasm-exceptions"
+                                                        : "-sDISABLE_EXCEPTION_CATCHING=0"},
                                 {"REFLECTION_FLAGS", std::string(REFLECTION_FLAGS)},
                                 {"STDLIB_LINK", std::string(STDLIB_LINK)}});
         }
@@ -1369,6 +1406,11 @@ endif()
                         std::define_static_string(std::meta::identifier_of(e));
                     g.enumerators.push_back(GenEnumerator{en, static_cast<long long>([:e:])});
                 }
+            } else if constexpr (std::is_same_v<U, const char *> || std::is_same_v<U, char *>) {
+                // A C string: kind stays "unknown" (the is_sequence pattern) so
+                // only an adapter-aware backend binds it, through a std::string
+                // boundary — see GenType::is_cstring.
+                g.is_cstring = true;
             } else if constexpr (std::is_pointer_v<U> &&
                                  std::is_class_v<std::remove_cv_t<std::remove_pointer_t<U>>>) {
                 // Raw pointer to a class: keep kind "unknown" (backends that can't
@@ -1477,6 +1519,16 @@ endif()
                 gp.is_ref         = std::is_lvalue_reference_v<P>;
                 gp.is_mutable_ref = std::is_lvalue_reference_v<P> &&
                                     !std::is_const_v<std::remove_reference_t<P>>;
+                // A REFERENCE to a C string (`const char *&`, an output the
+                // callee writes) cannot be fed from the adapter's local string:
+                // leave it unmarshalable rather than adapted.
+                // Likewise a reference to a POINTER (`vtkIdList *&`, an output
+                // handle): no binding can hand the callee an lvalue pointer to
+                // write through, so it is not a pointer parameter at all.
+                if constexpr (std::is_reference_v<P>) {
+                    gp.type.is_cstring = false;
+                    gp.type.is_pointer = false;
+                }
                 constexpr bool has_def = std::meta::has_default_argument(p);
                 gp.has_default         = has_def;
                 out.push_back(std::move(gp));
@@ -1798,28 +1850,94 @@ endif()
                    sig_params_bindable<Fn>(std::make_index_sequence<arity>{});
         }
 
-        // Whether the member function Fn is one of an overload set: more than
-        // one exportable member function of its DECLARING CLASS shares its name.
-        // Baked into GenMethod::is_overloaded, which is what tells an emitter it
-        // must disambiguate `&T::name` with a static_cast (see
-        // px_member_pointer). Deliberately a question about the C++ source and
-        // not about the IR: gating may leave a single entry of the set in the
-        // IR, and the member pointer would still be ambiguous.
-        template <std::meta::info Fn> consteval bool fn_is_overloaded() {
-            constexpr auto parent = std::meta::parent_of(Fn);
-            if constexpr (!std::meta::is_class_type(parent)) {
-                return false; // free function — overloads never reach the IR
-            } else {
-                auto        ctx = std::meta::access_context::current();
-                std::size_t n   = 0;
-                for (auto m : std::meta::members_of(parent, ctx)) {
-                    if (is_exportable_member_function(m) &&
-                        std::meta::identifier_of(m) == std::meta::identifier_of(Fn)) {
-                        ++n;
+        // The names that form an overload SET in the scope of class `start`:
+        // every member function (and member function template) named alike
+        // across the class and all its bases, at any access, deduplicated by
+        // function type so an override does not count twice. Computed ONCE per
+        // class — names sorted, then grouped — because a per-method walk of a
+        // deep hierarchy (vtkPolyData: ~1500 members across its bases, ~400
+        // methods) made the walk quadratic and the generator hours long.
+        consteval std::vector<const char *> overloaded_names_of(std::meta::info start) {
+            const auto ctx = std::meta::access_context::unchecked();
+            // Parallel arrays: std::sort cannot move a std::meta::info (a
+            // consteval-only type) inside a constant expression, so only an
+            // index array is sorted.
+            std::vector<std::string_view> names;
+            std::vector<std::meta::info>  keys;
+            std::vector<std::meta::info>  todo{start};
+            while (!todo.empty()) {
+                const std::meta::info cls = todo.back();
+                todo.pop_back();
+                for (auto m : std::meta::members_of(cls, ctx)) {
+                    if (!std::meta::has_identifier(m)) {
+                        continue;
+                    }
+                    if (std::meta::is_function_template(m)) {
+                        // No single type: the template itself is the key.
+                        names.push_back(std::meta::identifier_of(m));
+                        keys.push_back(m);
+                    } else if (std::meta::is_function(m)) {
+                        names.push_back(std::meta::identifier_of(m));
+                        keys.push_back(std::meta::type_of(m));
                     }
                 }
-                return n > 1;
+                for (auto b : std::meta::bases_of(cls, ctx)) {
+                    todo.push_back(std::meta::type_of(b));
+                }
             }
+            std::vector<std::size_t> order(names.size());
+            for (std::size_t i = 0; i < order.size(); ++i) {
+                order[i] = i;
+            }
+            std::sort(order.begin(), order.end(),
+                      [&](std::size_t a, std::size_t b) { return names[a] < names[b]; });
+            std::vector<const char *> out;
+            for (std::size_t i = 0; i < order.size();) {
+                std::size_t                  j = i;
+                std::vector<std::meta::info> distinct;
+                for (; j < order.size() && names[order[j]] == names[order[i]]; ++j) {
+                    const std::meta::info k = keys[order[j]];
+                    bool                  seen = false;
+                    for (const auto &d : distinct) {
+                        seen = seen || d == k;
+                    }
+                    if (!seen) {
+                        distinct.push_back(k);
+                    }
+                }
+                if (distinct.size() > 1) {
+                    out.push_back(std::define_static_string(names[order[i]]));
+                }
+                i = j;
+            }
+            return out;
+        }
+
+        // Is `&T::name` an overload SET in C++ — does spelling the member
+        // pointer need a disambiguating cast? Lookup for `&T::f` starts at the
+        // BOUND class T and ignores access, so:
+        //
+        //   - a protected sibling still makes the name ambiguous
+        //     (vtkDataSetAlgorithm: public GetInput(), protected GetInput(int));
+        //   - a `using Base::f;` beside a local f() brings the base's into the
+        //     set, and reflection has no view of the using-declaration itself
+        //     (vtkDataSetAttributes::RemoveArray);
+        //   - overloads may arrive from several bases (vtkAffineTypeFloat32Array
+        //     ::Initialize) or include a member template (vtkPixelExtent::SetData);
+        //   - an OVERRIDE has its base's type, so it does not count twice.
+        //
+        // Over-reporting is safe — the cast names the entry's exact signature,
+        // which is valid whether or not it was needed (a base member pointer
+        // converts to the derived one implicitly).
+        template <class T> inline bool name_is_overloaded(const std::string &name) {
+            static constexpr auto names =
+                std::define_static_array(overloaded_names_of(std::meta::dealias(^^T)));
+            for (const char *n : names) {
+                if (name == n) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         inline std::string num_str(double d); // defined below; used by default_value_str
@@ -1853,6 +1971,7 @@ endif()
                 gf.name = name;
                 gf.type =
                     type_descriptor<std::remove_cvref_t<typename[:std::meta::type_of(Fld):]>>();
+                gf.type.is_cstring = false; // signatures only — see GenType::is_cstring
                 gf.is_readonly = ann::has<readonly>(Anns...);
                 gf.doc         = ann::get_or<doc>(doc{""}, Anns...).text;
                 if constexpr (ann::has<range>(Anns...)) {
@@ -1882,6 +2001,7 @@ endif()
                 }
                 // Every annotation, type-erased — backends query what they want.
                 (gf.annotations.emplace_back(Anns), ...);
+                gf.declaring_class = qualified_class_name<typename[:std::meta::parent_of(Fld):]>();
                 out.fields.push_back(std::move(gf));
             }
 
@@ -1937,7 +2057,8 @@ endif()
                 m.sig_bindable = sig_fn_bindable<Fn>();
                 m.ret_is_ref =
                     std::is_lvalue_reference_v<typename[:std::meta::return_type_of(Fn):]>;
-                m.is_overloaded = fn_is_overloaded<Fn>();
+                m.is_overloaded = name_is_overloaded<T>(name);
+                m.declaring_class = qualified_class_name<typename[:std::meta::parent_of(Fn):]>();
                 out.methods.push_back(std::move(m));
             }
         };
@@ -2178,6 +2299,26 @@ endif()
             return out;
         }
 
+        // "New*;NewInstance" -> {"New*", "NewInstance"} (holder_policy::owned).
+        inline std::vector<std::string> split_globs(const char *text) {
+            std::vector<std::string> out;
+            std::string              cur;
+            for (const char *p = text; p && *p; ++p) {
+                if (*p == ';') {
+                    if (!cur.empty()) {
+                        out.push_back(cur);
+                    }
+                    cur.clear();
+                } else {
+                    cur += *p;
+                }
+            }
+            if (!cur.empty()) {
+                out.push_back(cur);
+            }
+            return out;
+        }
+
         // Erase one class to plain data — the only place reflection runs.
         template <typename T> inline GenClass describe() {
             GenClass gc;
@@ -2209,6 +2350,24 @@ endif()
             gc.is_default_constructible = std::is_default_constructible_v<T>;
             gc.is_abstract              = std::is_abstract_v<T>;
             gc.is_destructible          = std::is_destructible_v<T>;
+            // Holder policy (manifest "holders" → rosetta::holder_policy<T>,
+            // see rosetta/holder.h): the library reference-counts T itself.
+            if constexpr (rosetta::holder_policy<T>::enabled) {
+                using P             = rosetta::holder_policy<T>;
+                gc.holder.holder    = P::holder;
+                gc.holder.header    = P::header;
+                gc.holder.get       = P::get;
+                gc.holder.retain    = P::retain;
+                gc.holder.release   = P::release;
+                gc.holder.factory   = P::factory;
+                gc.holder.creatable = P::creatable;
+                gc.holder.owned_returns = split_globs(P::owned);
+                if (!gc.holder.factory.empty() &&
+                    std::find(gc.holder.owned_returns.begin(), gc.holder.owned_returns.end(),
+                              gc.holder.factory) == gc.holder.owned_returns.end()) {
+                    gc.holder.owned_returns.push_back(gc.holder.factory);
+                }
+            }
             gc.copy_or_move_assignable =
                 std::is_copy_assignable_v<T> || std::is_move_assignable_v<T>;
             gc.copy_or_move_constructible =
@@ -2410,18 +2569,32 @@ endif()
         // Everything below this point in the backends asks "does this type go
         // through the copy adapter, and what does its boundary look like?"
         // rather than which trait (or the path branch) put it there.
+        // --- C strings (const char * / char *) --------------------------------
+        // The fourth shape: a std::string boundary, the pointer handed to the
+        // callee as the boundary string's data() (non-const, so a `char *`
+        // parameter binds too), and a returned pointer copied into a
+        // std::string — empty for nullptr, which every host language can hold.
+        inline std::string cstr_decl_stmts(const std::string &an, const std::string &pn,
+                                           const std::string &ind) {
+            return ind + "char *" + pn + " = " + an + ".data();\n";
+        }
+        inline std::string cstr_from_expr(const std::string &expr) {
+            return "[&]() -> std::string { const char *s = " + expr +
+                   "; return s ? std::string(s) : std::string(); }()";
+        }
+
         inline bool is_adapted(const GenType &t) {
-            return t.is_sequence || t.is_matrix || t.is_path;
+            return t.is_sequence || t.is_matrix || t.is_path || t.is_cstring;
         }
         inline bool adapt_ok(const GenType &t) {
-            if (t.is_path) {
+            if (t.is_path || t.is_cstring) {
                 return true; // nothing inside a path can make it unmarshalable
             }
             return t.is_sequence ? seq_ok(t) : mat_ok(t);
         }
         inline std::string adapt_boundary_cpp(const GenType &t) {
-            if (t.is_path) {
-                return path_boundary_cpp();
+            if (t.is_path || t.is_cstring) {
+                return path_boundary_cpp(); // std::string
             }
             return t.is_sequence ? seq_boundary_cpp(t) : mat_boundary_cpp(t);
         }
@@ -2430,18 +2603,25 @@ endif()
             if (t.is_path) {
                 return path_decl_stmts(an, sn, ind);
             }
+            if (t.is_cstring) {
+                return cstr_decl_stmts(an, sn, ind);
+            }
             return t.is_sequence ? seq_decl_stmts(t, an, sn, ind) : mat_decl_stmts(t, an, sn, ind);
         }
         inline std::string adapt_from_expr(const GenType &t, const std::string &expr) {
             if (t.is_path) {
                 return path_from_expr(expr);
             }
+            if (t.is_cstring) {
+                return cstr_from_expr(expr);
+            }
             return t.is_sequence ? seq_from_expr(t, expr) : mat_from_expr(t, expr);
         }
         // The adapter's local for parameter `j` — `seq0` / `mat0` / `pth0`, so
         // the generated code says which shape it is converting.
         inline std::string adapt_local(const GenType &t, std::size_t j) {
-            const char *stem = t.is_path ? "pth" : (t.is_sequence ? "seq" : "mat");
+            const char *stem =
+                t.is_path ? "pth" : t.is_cstring ? "str" : (t.is_sequence ? "seq" : "mat");
             return stem + std::to_string(j);
         }
 
@@ -2533,6 +2713,174 @@ endif()
                 }
             }
             return need;
+        }
+
+        // First occurrence of `from` replaced (a CMake template line the split
+        // sources extend); unchanged when absent.
+        inline std::string replace_once(std::string s, const std::string &from,
+                                        const std::string &to) {
+            const auto at = s.find(from);
+            if (at != std::string::npos) {
+                s.replace(at, from.size(), to);
+            }
+            return s;
+        }
+
+        // Remove `<prefix><K>.cpp` for K >= keep — parts left from an earlier,
+        // more finely split generation would otherwise linger beside the new.
+        inline void remove_stale_parts(const std::filesystem::path &dir, const std::string &prefix,
+                                       std::size_t keep) {
+            for (std::size_t k = keep;; ++k) {
+                std::error_code ec;
+                if (!std::filesystem::remove(dir / (prefix + std::to_string(k) + ".cpp"), ec)) {
+                    break;
+                }
+            }
+        }
+
+        // --- Split binding sources (GenContext::binding_shards) ----------------
+        // The class list cut into contiguous [begin, end) slices of near-equal
+        // size — one per emitted source part. Contiguous, so registering the
+        // parts in order keeps the manifest's base-before-derived order. A
+        // single slice means "emit one file, as always".
+        inline std::vector<std::pair<std::size_t, std::size_t>> class_slices(const GenContext &c) {
+            const std::size_t n      = c.classes.size();
+            std::size_t       shards = c.binding_shards;
+            if (shards == 0) {
+                shards = n <= 30 ? 1 : (n + 24) / 25;
+            }
+            shards = std::max<std::size_t>(1, std::min(shards, std::max<std::size_t>(n, 1)));
+            std::vector<std::pair<std::size_t, std::size_t>> out;
+            for (std::size_t k = 0; k < shards; ++k) {
+                out.emplace_back(n * k / shards, n * (k + 1) / shards);
+            }
+            return out;
+        }
+
+        // --- Holder policies (manifest "holders", rosetta/holder.h) -----------
+        // Shared by the three backends that bind reference-counted classes
+        // (python, wasm, julia); everything else keeps skipping them as
+        // non-destructible.
+
+        inline bool has_holder(const GenClass &k) { return !k.holder.holder.empty(); }
+
+        // The bound class an IR type names, by qualified spelling when known.
+        inline const GenClass *bound_class_of(const GenType &t, const GenContext &c) {
+            for (const auto &k : c.classes) {
+                if (t.object_qualified.empty() ? k.name == t.object
+                                               : qualified_of(k) == t.object_qualified) {
+                    return &k;
+                }
+            }
+            return nullptr;
+        }
+
+        // The bound class a RAW POINTER points at, when that class has a holder
+        // policy — nullptr for anything else (a value, an unbound pointee, an
+        // ordinarily-owned class).
+        inline const GenClass *held_pointee(const GenType &t, const GenContext &c) {
+            if (!t.is_pointer) {
+                return nullptr;
+            }
+            const GenClass *k = bound_class_of(t, c);
+            return k != nullptr && has_holder(*k) ? k : nullptr;
+        }
+
+        // Shell-style match of a method name against an owned_returns glob
+        // ('*' any run, '?' one character).
+        inline bool name_glob_match(const std::string &pat, const std::string &s,
+                                    std::size_t pi = 0, std::size_t si = 0) {
+            while (pi < pat.size()) {
+                if (pat[pi] == '*') {
+                    for (std::size_t k = si; k <= s.size(); ++k) {
+                        if (name_glob_match(pat, s, pi + 1, k)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                if (si >= s.size() || (pat[pi] != '?' && pat[pi] != s[si])) {
+                    return false;
+                }
+                ++pi;
+                ++si;
+            }
+            return si == s.size();
+        }
+
+        // Does `name` return a pointer that ALREADY carries a reference (a
+        // factory: New, NewInstance)? Every binding of a held pointer takes a
+        // reference of its own, so wrapping such a result would leak the
+        // factory's — these are skipped, with the constructor covering creation.
+        // The pointee's policy decides: it is the one that knows its factories.
+        inline bool owned_pointer_return(const std::string &name, const GenType &ret,
+                                         const GenContext &c) {
+            const GenClass *p = held_pointee(ret, c);
+            if (p == nullptr) {
+                return false;
+            }
+            for (const auto &g : p->holder.owned_returns) {
+                if (name_glob_match(g, name)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // `vtkSmartPointer<vtkPolyData>` — the holder spelled for one class.
+        inline std::string holder_spelling(const GenClass &k) {
+            return k.holder.holder + "<" + qualified_of(k) + ">";
+        }
+
+        // The statements of a factory lambda: create through the policy's
+        // factory, adopt that reference into a holder, return the holder. The
+        // holder takes a reference of its own when built from the raw pointer,
+        // so the factory's is dropped right after — net: one reference, owned
+        // by the returned holder.
+        inline std::string holder_create_stmts(const GenClass &k, const std::string &indent) {
+            const std::string kq = qualified_of(k);
+            return indent + kq + " *raw = " + kq + "::" + k.holder.factory + "();\n" + indent +
+                   holder_spelling(k) + " held(raw);\n" + indent + "raw->" + k.holder.release +
+                   ";\n" + indent + "return held;\n";
+        }
+
+        // One bound class per distinct holder TEMPLATE — what a backend needs
+        // to emit the per-template glue (pybind's holder declaration, embind's
+        // smart_ptr_trait, the header) exactly once.
+        inline std::vector<const GenClass *> distinct_holders(const GenContext &c) {
+            std::vector<const GenClass *> out;
+            for (const auto &k : c.classes) {
+                if (!has_holder(k)) {
+                    continue;
+                }
+                bool seen = false;
+                for (const GenClass *o : out) {
+                    seen = seen || o->holder.holder == k.holder.holder;
+                }
+                if (!seen) {
+                    out.push_back(&k);
+                }
+            }
+            return out;
+        }
+
+        // Number of bound ancestors of `k` (0 for a root) — sorting the held
+        // classes deepest-first lets a downcast chain test the most-derived
+        // candidate before its bases.
+        inline std::size_t bound_depth(const GenClass &k, const GenContext &c,
+                                       std::size_t guard = 0) {
+            std::size_t best = 0;
+            if (guard > 64) {
+                return best;
+            }
+            for (const auto &b : k.bases) {
+                for (const auto &g : c.classes) {
+                    if (qualified_of(g) == b) {
+                        best = std::max(best, 1 + bound_depth(g, c, guard + 1));
+                    }
+                }
+            }
+            return best;
         }
 
         // Join with a separator — the adapters build their declaration and
@@ -2697,6 +3045,27 @@ endif()
             }
         }
 
+        // Append the "Owner::member" keys of the class that DECLARES an
+        // inherited member (qualified, then bare), after the bound class's own.
+        // The walk flattens bases into every derived class, but the harvest
+        // records a member once, under the class whose header declares it — so
+        // without these a derived class's copy of a base method lost both its
+        // doc comment and its default arguments. Most-derived keys stay first:
+        // a redeclaration in the derived class is the one that binds, and its
+        // own comment is the one that describes it.
+        inline void append_declaring_keys(std::vector<std::string> &keys,
+                                          const std::string        &declaring,
+                                          const std::string        &member) {
+            if (declaring.empty()) {
+                return;
+            }
+            keys.push_back(declaring + "::" + member);
+            const auto pos = declaring.rfind("::");
+            if (pos != std::string::npos) {
+                keys.push_back(declaring.substr(pos + 2) + "::" + member);
+            }
+        }
+
         // Apply the whole harvest. Called by generate() after the walk and after
         // extensions are attached, so every method that will exist is present.
         inline void apply_doc_comments(std::vector<GenClass>                              &classes,
@@ -2719,8 +3088,9 @@ endif()
                     if (!f.doc.empty()) {
                         continue;
                     }
-                    const std::vector<DocEntry> *e =
-                        find_docs(docs, {kq + "::" + f.name, k.name + "::" + f.name});
+                    std::vector<std::string> fkeys{kq + "::" + f.name, k.name + "::" + f.name};
+                    append_declaring_keys(fkeys, f.declaring_class, f.name);
+                    const std::vector<DocEntry> *e = find_docs(docs, fkeys);
                     if (e == nullptr) {
                         continue;
                     }
@@ -2740,6 +3110,7 @@ endif()
                     } else {
                         keys.push_back(kq + "::" + m.name);
                         keys.push_back(k.name + "::" + m.name);
+                        append_declaring_keys(keys, m.declaring_class, m.name);
                     }
                     const std::vector<DocEntry> *e = find_docs(docs, keys);
                     if (e == nullptr) {
@@ -3141,11 +3512,10 @@ namespace rosetta {
         return gf;
     }
 
-    template <typename... Ts> inline void generate(const GenerateOptions &opt) {
-        // Erase the type pack into plain data once; backends do no reflection.
+    template <typename... Ts>
+    inline void describe_into(std::vector<GenClass> &classes, std::vector<GenEnum> &enums) {
+        // Erase the type pack into plain data; backends do no reflection.
         // Enum pack elements go to `enums`, everything else to `classes`.
-        std::vector<GenClass> classes;
-        std::vector<GenEnum>  enums;
         (
             [&] {
                 if constexpr (std::is_enum_v<Ts>)
@@ -3155,6 +3525,17 @@ namespace rosetta {
                 }
             }(),
             ...);
+    }
+
+    template <typename... Ts> inline void generate(const GenerateOptions &opt) {
+        std::vector<GenClass> classes;
+        std::vector<GenEnum>  enums;
+        describe_into<Ts...>(classes, enums);
+        generate_described(std::move(classes), std::move(enums), opt);
+    }
+
+    inline void generate_described(std::vector<GenClass> classes, std::vector<GenEnum> enums,
+                                   const GenerateOptions &opt) {
 
         // Mark the manifest's "final" classes: no trampoline even with public
         // virtuals (see GenClass::is_final). Matched like extensions —
@@ -3360,10 +3741,23 @@ namespace rosetta {
                              t.lang.c_str());
                 continue;
             }
+            // Per-target overrides (TargetSpec::user_include / user_libs): this
+            // target's include dirs go FIRST so its copy of a per-platform
+            // header wins, and its library list replaces the shared one.
+            std::string target_include = user_include;
+            if (!t.user_include.empty()) {
+                std::string own;
+                for (const auto &d : t.user_include) {
+                    own += (own.empty() ? "" : "\n    ") + d.string();
+                }
+                target_include = own + (user_include.empty() ? "" : "\n    " + user_include);
+            }
+            const std::vector<UserLib> &target_libs =
+                t.user_libs.empty() ? user_libs : t.user_libs;
             it->second->emit(GenContext{opt.out_dir, t.name, classes, enums, functions,
-                                        user_include, opt.rosetta_include.string(),
+                                        target_include, opt.rosetta_include.string(),
                                         opt.cpp26_root, opt.cpp26_cxx, opt.cpp26_cc,
-                                        opt.cpp26_lib, opt.qt_dir, user_libs, user_sources,
+                                        opt.cpp26_lib, opt.qt_dir, target_libs, user_sources,
                                         opt.compile_definitions, t.link_options,
                                         opt.build_type, opt.optimization,
                                         opt.cxx_standard, opt.version,
@@ -3372,7 +3766,8 @@ namespace rosetta {
                                         t.napi_version, t.node_engine,
                                         opt.init_headers, opt.init_statements,
                                         t.wheel_files, t.wheel_dependencies,
-                                        t.wheel_scripts});
+                                        t.wheel_scripts, t.compile_options, t.exceptions,
+                                        opt.binding_shards});
         }
 
         // The coverage report, once every target has emitted and had its say.

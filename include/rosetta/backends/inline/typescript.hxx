@@ -70,6 +70,9 @@ namespace rosetta {
                 return (inner.find('|') != std::string::npos ? "(" + inner + ")" : inner) +
                        " | undefined";
             }
+            if (t.is_cstring) {
+                return "string"; // a C string crosses as a std::string
+            }
             if (is_adapted(t) && !t.element.empty()) {
                 // A trait-registered foreign container marshals as an array of
                 // its element in the opted-in runtime backends — and a matrix

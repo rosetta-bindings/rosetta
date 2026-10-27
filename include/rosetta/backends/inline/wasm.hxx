@@ -36,7 +36,7 @@ target_include_directories({{LIB}} PRIVATE
 
 target_link_options({{LIB}} PRIVATE
     --bind -sMODULARIZE=1 -sEXPORT_NAME=createModule
-    -sENVIRONMENT=node,web -sALLOW_MEMORY_GROWTH=1 -sDISABLE_EXCEPTION_CATCHING=0
+    -sENVIRONMENT=node,web -sALLOW_MEMORY_GROWTH=1 {{WASM_EXCEPTIONS}}
     # A generated demo may mount a real directory via NODEFS and drive libc fopen()
     # through it. An embind-only module strips the JS filesystem as unused, so force
     # it in and export the FS/NODEFS runtime objects (M.FS, M.NODEFS).
@@ -553,7 +553,8 @@ namespace rosetta_wx {
 
         // The lambda body: conversions, the call, the (possibly flattened) return.
         inline std::string wx_seq_body(const GenMethod &m, const WxSeqSig &sig,
-                                       const std::string &call) {
+                                       const std::string &call,
+                                       const GenContext  *c = nullptr) {
             std::string body = sig.pre;
             if (!sig.outs.empty()) {
                 // embind marshals no tuple, so the out-parameters come back as
@@ -566,6 +567,10 @@ namespace rosetta_wx {
                 body += "            return " + adapt_from_expr(m.ret, "r") + ";\n";
             } else if (m.ret.kind == "void") {
                 body += "            " + call + ";\n";
+            } else if (const GenClass *h = c ? held_pointee(m.ret, *c) : nullptr) {
+                // A held-pointer result, handed out inside its holder (see
+                // wx_held_return_lambda) — `GetArray(const char *name)`.
+                body += "            return " + holder_spelling(*h) + "(" + call + ");\n";
             } else {
                 body += "            return " + call + ";\n";
             }
@@ -688,7 +693,7 @@ namespace rosetta_wx {
                 }
                 return;
             }
-            if (t.is_path) {
+            if (t.is_path || t.is_cstring) {
                 return; // the boundary is a std::string — nothing to register
             }
             if (is_adapted(t) && adapt_ok(t)) {
@@ -880,14 +885,101 @@ namespace rosetta_wx {
             return ".property(\"" + f.name + "\", &" + self + "::" + f.name + ")";
         }
 
+        // `+[](decls) { return Holder<P>(call); }` — a method (or free
+        // function, `k` == nullptr) whose result is a raw pointer to a held
+        // class, re-typed to return the holder. Embind turns that into a JS
+        // handle owning one reference, downcast to the object's dynamic type.
+        // The call is spelled by NAME with exactly-typed arguments, so an
+        // overloaded C++ name resolves to the same declaration the IR describes.
+        inline std::string wx_held_return_lambda(const GenClass *k, const GenMethod &m,
+                                                 const std::string &callee,
+                                                 const GenContext &c) {
+            const GenClass *p = held_pointee(m.ret, c);
+            std::vector<std::string> decls, args;
+            const bool receiver = k != nullptr && !m.is_static;
+            if (receiver) {
+                decls.push_back(qualified_of(*k) + " &self");
+            }
+            const bool exact = m.param_cpp.size() == m.params.size();
+            for (std::size_t j = 0; j < m.params.size(); ++j) {
+                const std::string an = "arg" + std::to_string(j);
+                decls.push_back((exact ? qualify_objects(qualify_std(m.param_cpp[j]),
+                                                         m.params[j].type)
+                                       : wx_cpp_type(m.params[j].type)) +
+                                " " + an);
+                args.push_back(an);
+            }
+            std::string call;
+            if (m.is_extension) {
+                call = m.ext_qualified + "(self" + (args.empty() ? "" : ", " + join(args, ", ")) + ")";
+            } else if (receiver) {
+                call = "self." + m.name + "(" + join(args, ", ") + ")";
+            } else {
+                call = callee + "(" + join(args, ", ") + ")";
+            }
+            return "+[](" + join(decls, ", ") + ") { return " + holder_spelling(*p) + "(" +
+                   call + "); }";
+        }
+
+        inline std::string wx_held_return_seg(const GenClass &k, const GenMethod &m,
+                                              const GenContext &c) {
+            const std::string fn =
+                wx_held_return_lambda(&k, m, qualified_of(k) + "::" + m.name, c);
+            return std::string(m.is_static ? ".class_function(\"" : ".function(\"") + m.name +
+                   "\", " + fn + ", emscripten::allow_raw_pointers())";
+        }
+
+        // The embind glue a holder policy needs, at namespace scope before
+        // EMSCRIPTEN_BINDINGS:
+        //
+        //   smart_ptr_trait<Holder<T>> — once per holder template. INTRUSIVE
+        //   sharing: when JS hands a raw handle back where a holder is wanted,
+        //   embind builds Holder<T>(p), which takes a reference.
+        //
+        //   raw_destructor<T> — once per held class. class_<T> takes its address
+        //   whatever happens, and the default `delete ptr` does not compile
+        //   against a protected destructor. Every JS handle of a held class is a
+        //   smart-pointer handle, so this only runs if user code builds a raw
+        //   one; it then drops the reference that handle stands for.
+        inline std::string wx_holder_decls(const GenContext &c) {
+            std::string s;
+            for (const GenClass *k : distinct_holders(c)) {
+                const std::string &h = k->holder.holder;
+                s += "\nnamespace emscripten {\n"
+                     "template <typename T> struct smart_ptr_trait<" + h + "<T>> {\n"
+                     "    typedef " + h + "<T> pointer_type;\n"
+                     "    typedef T element_type;\n"
+                     "    static T *get(const pointer_type &p) { return p." + k->holder.get + "(); }\n"
+                     "    static sharing_policy get_sharing_policy() { return sharing_policy::INTRUSIVE; }\n"
+                     "    static pointer_type *share(T *p, EM_VAL) { return new pointer_type(p); }\n"
+                     "    static pointer_type *construct_null() { return new pointer_type; }\n"
+                     "};\n"
+                     "} // namespace emscripten\n";
+            }
+            std::string dtors;
+            for (const auto &k : c.classes) {
+                if (has_holder(k)) {
+                    // `inline`: a full specialization is an ordinary function, and
+                    // a split binding repeats this preamble in every part.
+                    dtors += "template <> inline void raw_destructor<" + qualified_of(k) + ">(" +
+                             qualified_of(k) + " *p) { p->" + k.holder.release + "; }\n";
+                }
+            }
+            if (!dtors.empty()) {
+                s += "namespace emscripten { namespace internal {\n" + dtors +
+                     "}} // namespace emscripten::internal\n";
+            }
+            return s;
+        }
+
         inline std::string wx_class(const GenClass &k, const GenContext &c) {
             // A class whose destructor is not public cannot be wrapped: every
             // runtime backend destroys what it holds. Skip it with a note —
             // the alternative is a compile error inside the framework headers.
-            if (!k.is_destructible) {
+            if (!k.is_destructible && !has_holder(k)) {
                 std::fprintf(stderr,
                              "rosetta::%s: class '%s' has a non-public destructor "
-                             "(ref-counted?) — skipped\n",
+                             "(ref-counted? declare a \"holders\" policy) — skipped\n",
                              "wasm", k.name.c_str());
                 return {};
             }
@@ -922,7 +1014,22 @@ namespace rosetta_wx {
             // abstract class cannot be constructed, so emit no constructors for it.
             bool                     saw_default = false;
             std::vector<std::size_t> seen_arities; // embind dispatches ctors by arity
-            for (std::size_t i = 0; !k.is_abstract && i < k.ctor_param_cpp.size(); ++i) {
+            // A held class is created by its library (protected constructors):
+            // registered with its holder as the smart pointer, plus the
+            // factory as the JS constructor when it has one — every JS handle
+            // then owns one reference, released by .delete().
+            if (has_holder(k)) {
+                const std::string hs = holder_spelling(k);
+                if (k.holder.creatable) {
+                    segs.push_back(".smart_ptr_constructor(\"" + exposed_of(k) + "_ptr\", +[]() -> " +
+                                   hs + " {\n" + holder_create_stmts(k, "            ") +
+                                   "        })");
+                } else {
+                    segs.push_back(".smart_ptr<" + hs + ">(\"" + exposed_of(k) + "_ptr\")");
+                }
+                saw_default = true; // nothing below applies
+            }
+            for (std::size_t i = 0; !has_holder(k) && !k.is_abstract && i < k.ctor_param_cpp.size(); ++i) {
                 const auto &ir      = k.ctors[i];
                 bool        ok      = true;
                 bool        raw_ptr = false;
@@ -974,7 +1081,7 @@ namespace rosetta_wx {
                 const std::string policy = raw_ptr ? "emscripten::allow_raw_pointers()" : "";
                 segs.push_back(".constructor<" + args + ">(" + policy + ")");
             }
-            if (!saw_default && k.is_default_constructible) {
+            if (!saw_default && k.is_default_constructible && !has_holder(k)) {
                 segs.push_back(".constructor<>()");
             }
 
@@ -1033,6 +1140,13 @@ namespace rosetta_wx {
                                              m)) {
                     continue;
                 }
+                if (owned_pointer_return(m.name, m.ret, c)) {
+                    coverage::note_skip("wasm", k, m, "owned_pointer_return",
+                                        "returns a new reference (a factory, per the holder "
+                                        "policy's owned_returns); the constructor creates "
+                                        "objects instead");
+                    continue;
+                }
                 if (seq_touches(m)) {
                     // Foreign sequence in the signature: adapter or nothing
                     // (embind has no type for the foreign container).
@@ -1057,10 +1171,13 @@ namespace rosetta_wx {
                                 (sig.decls.empty() ? "" : ", " + sig.decls);
                         call = "self." + m.name + "(" + sig.args + ")";
                     }
-                    const std::string body = wx_seq_body(m, sig, call);
+                    const std::string body = wx_seq_body(m, sig, call, &c);
                     segs.push_back((m.is_static ? ".class_function(\"" : ".function(\"") +
                                    m.name + "\", +[](" + decls + ") {\n" + body +
-                                   "        })");
+                                   "        }" +
+                                   (wx_method_has_raw_ptr(m) ? ", emscripten::allow_raw_pointers()"
+                                                              : "") +
+                                   ")");
                     coverage::note_bound("wasm", k, m);
                     continue;
                 }
@@ -1070,6 +1187,20 @@ namespace rosetta_wx {
                                         "(e.g. a std::function parameter, or a pointer to an "
                                         "unbound class)");
                     continue; // unmarshalable signature (e.g. std::function param)
+                }
+                // A pointer to a HELD class: hand it out inside its holder, so
+                // the JS handle owns a reference of its own (and .delete() drops
+                // exactly that one). allow_raw_pointers for the raw arguments.
+                if (held_pointee(m.ret, c) != nullptr) {
+                    if (wx_params_have_callback(m.params)) {
+                        coverage::note_skip("wasm", k, m, "unmarshalable_signature",
+                                            "a held-pointer return with a callback parameter "
+                                            "has no adapter");
+                        continue;
+                    }
+                    segs.push_back(wx_held_return_seg(k, m, c));
+                    coverage::note_bound("wasm", k, m);
+                    continue;
                 }
                 // A reference to a bound class: hand out the ADDRESS under
                 // allow_raw_pointers — a borrowed handle to the real object,
@@ -1170,7 +1301,24 @@ namespace rosetta_wx {
             return s;
         }
 
+        inline std::vector<std::pair<std::string, std::string>>
+        wasm_sources(const GenContext &c); // defined below
+
         inline std::string wasm_expanded_source(const GenContext &c) {
+            return wasm_sources(c).front().second;
+        }
+
+        // The wasm binding as (file name, contents) pairs: auto_emscripten.cpp,
+        // then one auto_emscripten_part_K.cpp per extra class slice. embind
+        // accepts any number of EMSCRIPTEN_BINDINGS blocks and resolves a
+        // class's base lazily, so each part simply registers its slice in a
+        // block of its own; the shared vector / map / optional registrations
+        // stay in the main file, registered once.
+        inline std::vector<std::pair<std::string, std::string>>
+        wasm_sources(const GenContext &c) {
+            const auto               slices = class_slices(c);
+            const bool               split  = slices.size() > 1;
+            std::vector<std::string> parts;
             std::string body;
             for (const auto &e : c.enums) {
                 body += wx_enum(e);
@@ -1194,8 +1342,16 @@ namespace rosetta_wx {
                             qualify_std(w.element.front().spelling) + ">();\n";
                 }
             }
-            for (const auto &k : c.classes) {
-                body += wx_class(k, c);
+            for (const auto &[lo, hi] : slices) {
+                std::string part;
+                for (std::size_t i = lo; i < hi; ++i) {
+                    part += wx_class(c.classes[i], c);
+                }
+                if (split) {
+                    parts.push_back(std::move(part));
+                } else {
+                    body += part;
+                }
             }
             for (const auto &f : c.functions) {
                 GenMethod probe;
@@ -1208,13 +1364,44 @@ namespace rosetta_wx {
                         const WxSeqSig    sig  = wx_seq_sig(f.params, {});
                         const std::string call = fn_call_expr(f) + "(" + sig.args + ")";
                         body += "    emscripten::function(\"" + f.name + "\", +[](" +
-                                sig.decls + ") {\n" + wx_seq_body(probe, sig, call) +
-                                "        });\n";
+                                sig.decls + ") {\n" + wx_seq_body(probe, sig, call, &c) +
+                                "        }" +
+                                (wx_method_has_raw_ptr(probe) ? ", emscripten::allow_raw_pointers()"
+                                                              : "") +
+                                ");\n";
                         coverage::note_bound_function("wasm", f);
                     } else {
                         coverage::note_skip_function("wasm", f, "sequence_not_adaptable",
                                                      "a registered sequence in the signature has "
                                                      "no std::vector boundary adapter");
+                    }
+                    continue;
+                }
+                if (owned_pointer_return(f.name, f.ret, c)) {
+                    coverage::note_skip_function("wasm", f, "owned_pointer_return",
+                                                 "returns a new reference (a factory, per the "
+                                                 "holder policy's owned_returns)");
+                    continue;
+                }
+                if (held_pointee(f.ret, c) != nullptr) {
+                    bool params_ok = true;
+                    for (const auto &p : f.params) {
+                        params_ok = params_ok && wx_marshalable(p.type, c) &&
+                                    (p.type.kind != "object" || p.is_ref ||
+                                     p.type.copy_constructible) &&
+                                    (p.type.kind == "object" || !p.is_mutable_ref);
+                    }
+                    if (params_ok) {
+                        GenMethod as_static = probe;
+                        as_static.is_static = true;
+                        body += "    emscripten::function(\"" + f.name + "\", " +
+                                wx_held_return_lambda(nullptr, as_static, fn_call_expr(f), c) +
+                                ", emscripten::allow_raw_pointers());\n";
+                        coverage::note_bound_function("wasm", f);
+                    } else {
+                        coverage::note_skip_function("wasm", f, "unmarshalable_signature",
+                                                     "no embind conversion for a type in this "
+                                                     "signature");
                     }
                     continue;
                 }
@@ -1260,6 +1447,12 @@ namespace rosetta_wx {
             // pybind-free: just the user's (stock) headers below.
             auto add = [&](const std::string &h) { append_include(out, h); };
             out += init_includes(c);
+            // The holder templates of the held classes (manifest "holders").
+            for (const GenClass *k : distinct_holders(c)) {
+                if (!k->holder.header.empty()) {
+                    add(k->holder.header);
+                }
+            }
             for (const auto &k : c.classes) {
                 add(k.header);
                 for (const auto &m : k.methods) {
@@ -1278,11 +1471,21 @@ namespace rosetta_wx {
             out += WASMX_VECTOR_HELPER;    // std::vector<T> <-> JS Array on the emval wire
             out += WASMX_MAP_HELPER;       // std::map / unordered_map <-> plain JS object
             out += WASMX_CALLBACK_HELPER;  // rosetta_wx::make_fn / to_val / from_val
+            out += wx_holder_decls(c);     // smart_ptr_trait / raw_destructor for held classes
+            const std::string pre = out;
             out += "\nEMSCRIPTEN_BINDINGS(" + c.lib + ") {\n";
             out += init_block(c);
             out += body;
             out += "}\n";
-            return out;
+            std::vector<std::pair<std::string, std::string>> files{{"auto_emscripten.cpp", out}};
+            for (std::size_t k = 0; k < parts.size(); ++k) {
+                const std::string id = std::to_string(k);
+                files.emplace_back("auto_emscripten_part_" + id + ".cpp",
+                                   pre + "\n// Part " + id + " of the class registrations.\n"
+                                         "EMSCRIPTEN_BINDINGS(" + c.lib + "_part_" + id +
+                                         ") {\n" + parts[k] + "}\n");
+            }
+            return files;
         }
 
         inline std::string Wasm::render(const GenContext &c) const {
@@ -1291,8 +1494,17 @@ namespace rosetta_wx {
 
         inline void Wasm::emit(const GenContext &c) const {
             auto dir = c.out_dir / "wasm";
-            write_file(dir / "auto_emscripten.cpp", wasm_expanded_source(c));
-            write_file(dir / "CMakeLists.txt", render_meta(WASMX_CMAKE, c));
+            const auto  files = wasm_sources(c);
+            std::string list;
+            for (const auto &[name, text] : files) {
+                write_file(dir / name, text);
+                list += (list.empty() ? "" : " ") + name;
+            }
+            remove_stale_parts(dir, "auto_emscripten_part_", files.size() - 1);
+            write_file(dir / "CMakeLists.txt",
+                       replace_once(render_meta(WASMX_CMAKE, c),
+                                    "add_executable(" + c.lib + " auto_emscripten.cpp",
+                                    "add_executable(" + c.lib + " " + list));
             write_file(dir / "README.md",
                        readme("wasm", c,
                               subst(WASMX_README_BUILD, {{"LIB", c.lib}})));

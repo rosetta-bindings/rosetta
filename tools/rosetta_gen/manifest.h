@@ -226,6 +226,34 @@ struct FunctionEntry {
     std::string signature;
 };
 
+// One entry of the manifest's "holders": a HOLDER POLICY for a library that
+// reference-counts its objects intrusively (see rosetta/holder.h). Every bound
+// class deriving from `base` (or `base` itself) is bound through `holder<T>`
+// by the backends that support policies (python, wasm, julia).
+//
+//   "holders": [{
+//     "base":    "vtkObjectBase",        // required — the root class
+//     "holder":  "vtkSmartPointer",      // required — class template; holder<T>(T*)
+//                                        //   takes a reference, ~holder drops it
+//     "header":  "vtkSmartPointer.h",    // optional — its #include
+//     "get":     "GetPointer",           // optional — holder member returning T* (default "get")
+//     "retain":  "Register(nullptr)",    // required — member call taking a reference
+//     "release": "UnRegister(nullptr)",  // required — member call dropping one
+//     "factory": "New",                  // optional — static T *T::New(), one reference;
+//                                        //   becomes the script-side constructor
+//     "owned_returns": ["New*"]          // optional — method-name globs whose pointer
+//   }]                                   //   result already carries a reference (skipped)
+struct HolderEntry {
+    std::string              base;
+    std::string              holder;
+    std::string              header;
+    std::string              get = "get";
+    std::string              retain;
+    std::string              release;
+    std::string              factory;
+    std::vector<std::string> owned_returns;
+};
+
 // One entry of the manifest's "sequences" / "matrices": a foreign container
 // that marshals like a std::vector of its element (or, for a matrix, like a
 // vector of row vectors). Two forms, because two shapes of container exist:
@@ -393,6 +421,30 @@ struct TargetEntry {
     std::vector<WheelFileEntry>        wheel_files;
     std::vector<std::string>           wheel_dependencies;
     std::map<std::string, std::string> wheel_scripts;
+
+    // Optional per-target BUILD overrides, for a library whose native and wasm
+    // builds genuinely differ (VTK: a native install tree and an emscripten
+    // one, the latter compiled with -fwasm-exceptions):
+    //
+    //   "compile_options" — extra compiler flags for THIS target's binding
+    //                       (target_compile_options), the compile-side twin of
+    //                       "link_options".
+    //   "user_include"    — include dirs PREPENDED to the top-level ones for this
+    //                       target only, absolute; so a header that differs per
+    //                       platform (a configured vtkOptions.h) resolves to this
+    //                       target's copy first.
+    //   "user_lib"        — same schema as the top-level key; REPLACES it for
+    //                       this target. The generator driver keeps linking the
+    //                       top-level list (it runs on the host).
+    //   "exceptions"      — wasm only: "js" (emscripten's JS exception model,
+    //                       the default) or "wasm" (native -fwasm-exceptions on
+    //                       both compile and link). Every object of a wasm link
+    //                       must agree, and a library built one way cannot be
+    //                       linked into a module built the other.
+    std::vector<std::string>  compile_options;
+    std::vector<std::string>  user_include;
+    std::vector<UserLibEntry> user_libs;
+    std::string               exceptions;
 };
 
 struct Manifest {
@@ -439,12 +491,32 @@ struct Manifest {
     // array of row arrays — see rosetta/matrix.h for the requirements.
     std::vector<ContainerEntry> matrices;
 
+    // Optional holder policies ("holders") for intrusively reference-counted
+    // libraries — see HolderEntry. Emitted into bindings.h as
+    // rosetta::holder_policy specializations selected by derivation from
+    // `base`, which is how the reflection walk learns about them.
+    std::vector<HolderEntry> holders;
+
     // Optional default for every target's "out_dir" (see TargetEntry::out_dir),
     // absolute. A target's own entry overrides it.
     std::string out_dir;
 
     // NOTE: `wheel` / `wheel_dir` are per-TARGET — see TargetEntry.
     std::vector<std::string>   plugins;   // extra .cpp sources (absolute) for the driver
+
+    // "generator_shards": how many translation units the generator's reflection
+    // walk is split into. Reflection is compile-time work, all of it in the TU
+    // that names the class, so one TU over a large library (hundreds of VTK
+    // classes) is slow and memory-hungry; shards compile in parallel and are
+    // linked into the same generator, which concatenates their IR in manifest
+    // order. 0 = "auto" (one TU up to 24 classes, else ~16 classes per shard);
+    // 1 = the single-TU driver of before.
+    int generator_shards = 0;
+
+    // "binding_shards": how many source files each compiled python / wasm /
+    // julia binding splits its class registrations into (GenerateOptions::
+    // binding_shards). 0 = "auto".
+    int binding_shards = 0;
     std::vector<std::string>   user_sources; // user .cpp/.c sources (absolute) compiled into the bindings
     std::vector<std::string>   compile_definitions; // "NAME"/"NAME=VALUE" defs for driver + bindings
     std::string                cpp26_root; // optional C++26/P2996 toolchain root (verbatim)
@@ -471,6 +543,15 @@ struct Manifest {
 
     // CMake target / binary basename.
     std::string target() const { return generator_name; }
+
+    // The resolved shard count (see generator_shards).
+    std::size_t shard_count() const {
+        if (generator_shards > 0) {
+            return std::min<std::size_t>(static_cast<std::size_t>(generator_shards),
+                                         std::max<std::size_t>(classes.size(), 1));
+        }
+        return classes.size() <= 24 ? 1 : (classes.size() + 15) / 16;
+    }
 };
 
 // Parse and validate manifest.json (// and /* */ comments tolerated).

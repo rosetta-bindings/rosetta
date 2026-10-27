@@ -408,3 +408,45 @@ if(LUA_LIBRARIES)
 else()
     message(STATUS "Lua 5.3+ not found — skipping the mcp_scripting tests")
 endif()
+
+# Per-target build overrides (manifest target "compile_options" / "user_include" /
+# "user_lib" / "exceptions"): the loader's parsing and refusals, and what each
+# backend's emitted CMake ends up with — including generate()'s per-target
+# replacement of the shared include and library lists. Links the loader like the
+# manifest suites, and reflects a class like the emitter suites.
+add_executable(target_build target_build.cpp
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/manifest.cpp
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/doccomments.cpp)
+target_include_directories(target_build PRIVATE
+    ${CMAKE_SOURCE_DIR}/../include
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen)
+target_compile_options(target_build PRIVATE -fannotation-attributes)
+target_link_libraries(target_build PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
+gtest_discover_tests(target_build)
+
+# Holder policies (manifest "holders", rosetta/holder.h): intrusively
+# reference-counted classes — protected destructor, factory, library smart
+# pointer — bound through that holder by python / wasm / julia. Verifies the IR
+# (creatability, owned returns) and the rendered sources of the three backends.
+add_executable(holder holder.cpp)
+target_include_directories(holder PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(holder PRIVATE -fannotation-attributes)
+target_link_libraries(holder PRIVATE GTest::gtest_main)
+gtest_discover_tests(holder)
+
+# Library shapes a large real code base (VTK) brought out: overload sets hidden
+# behind a using-declaration or a protected sibling, a static and an instance
+# overload under one name (pybind11), and an unbound enum in a signature (jlcxx).
+add_executable(library_patterns library_patterns.cpp)
+target_include_directories(library_patterns PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(library_patterns PRIVATE -fannotation-attributes)
+target_link_libraries(library_patterns PRIVATE GTest::gtest_main)
+gtest_discover_tests(library_patterns)
+
+# Split binding sources (GenerateOptions::binding_shards): python / wasm / julia
+# cut their class registrations into part files listed in the emitted CMake.
+add_executable(sharding sharding.cpp)
+target_include_directories(sharding PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(sharding PRIVATE -fannotation-attributes)
+target_link_libraries(sharding PRIVATE GTest::gtest_main)
+gtest_discover_tests(sharding)

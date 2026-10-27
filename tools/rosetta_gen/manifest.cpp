@@ -357,6 +357,61 @@ static Vars read_variables(const json &j) {
     return vars;
 }
 
+// A "user_lib" value — ONE object {name, dir, link} or an ARRAY of them —
+// parsed into entries in link order. Shared by the top-level key and the
+// per-target override, so both accept exactly the same schema. `where` names
+// the key in error messages ("\"user_lib\"", "a target's \"user_lib\"").
+static std::vector<UserLibEntry> parse_user_libs(const json &ul, const fs::path &base,
+                                                 const std::string &where) {
+    if (!ul.is_object() && !ul.is_array()) {
+        throw std::runtime_error(where +
+                                 " must be an object {name, dir, link} or an array of them");
+    }
+    if (ul.is_array() && ul.empty()) {
+        throw std::runtime_error(where + " array must not be empty");
+    }
+    std::vector<UserLibEntry> out;
+    const auto parse_one = [&](const json &e) {
+        if (!e.is_object()) {
+            throw std::runtime_error("each " + where +
+                                     " entry must be an object {name, dir, link}");
+        }
+        if (!e.contains("name") || !e.contains("dir")) {
+            throw std::runtime_error("each " + where + " entry needs a \"name\" and a \"dir\"");
+        }
+        UserLibEntry u;
+        u.name = e.at("name").get<std::string>();
+        if (u.name.empty()) {
+            throw std::runtime_error(where + " entry has an empty \"name\"");
+        }
+        u.dir = fs::weakly_canonical(base / fs::path(e.at("dir").get<std::string>())).string();
+        // Optional "link": prefer linking the shared or the static form of the
+        // library. "dynamic" is accepted as an alias for "shared". Default shared.
+        // (WebAssembly always links static regardless — see the wasm backend.)
+        if (e.contains("link")) {
+            std::string link = e.at("link").get<std::string>();
+            if (link == "dynamic") {
+                link = "shared";
+            }
+            if (link != "shared" && link != "static") {
+                throw std::runtime_error(
+                    "user_lib.link must be \"shared\", \"dynamic\", or \"static\" (got \"" +
+                    link + "\")");
+            }
+            u.link = link;
+        }
+        out.push_back(std::move(u));
+    };
+    if (ul.is_object()) {
+        parse_one(ul);
+    } else {
+        for (const auto &e : ul) {
+            parse_one(e);
+        }
+    }
+    return out;
+}
+
 Manifest load(const fs::path &manifest_path) {
     std::ifstream in(manifest_path);
     if (!in) {
@@ -510,6 +565,60 @@ Manifest load(const fs::path &manifest_path) {
                             "\"link_options\" entries must not be empty");
                     }
                     e.link_options.push_back(std::move(flag));
+                }
+            }
+            // Per-target BUILD overrides (see TargetEntry::compile_options). The
+            // native and wasm flavours of one library are two different builds —
+            // its own -fwasm-exceptions, its own install tree, its own headers —
+            // which a single top-level user_lib / user_include cannot describe.
+            if (t.contains("compile_options")) {
+                if (!t.at("compile_options").is_array()) {
+                    throw std::runtime_error("a target's \"compile_options\" must be an array");
+                }
+                for (const auto &o : t.at("compile_options")) {
+                    std::string flag = o.get<std::string>();
+                    if (flag.empty()) {
+                        throw std::runtime_error("\"compile_options\" entries must not be empty");
+                    }
+                    e.compile_options.push_back(std::move(flag));
+                }
+            }
+            if (t.contains("user_include")) {
+                const auto &ui = t.at("user_include");
+                if (!ui.is_string() && !ui.is_array()) {
+                    throw std::runtime_error(
+                        "a target's \"user_include\" must be a path or an array of paths");
+                }
+                const auto add = [&](const std::string &d) {
+                    if (d.empty()) {
+                        throw std::runtime_error(
+                            "a target's \"user_include\" entries must not be empty");
+                    }
+                    e.user_include.push_back(fs::weakly_canonical(base / fs::path(d)).string());
+                };
+                if (ui.is_string()) {
+                    add(ui.get<std::string>());
+                } else {
+                    for (const auto &d : ui) {
+                        add(d.get<std::string>());
+                    }
+                }
+            }
+            if (t.contains("user_lib")) {
+                e.user_libs = parse_user_libs(t.at("user_lib"), base, "a target's \"user_lib\"");
+            }
+            if (t.contains("exceptions")) {
+                e.exceptions = t.at("exceptions").get<std::string>();
+                if (e.lang != "wasm") {
+                    throw std::runtime_error(
+                        "\"exceptions\" selects the WebAssembly exception model and only a "
+                        "\"wasm\" target takes it (got it on \"" + e.lang + "\")");
+                }
+                if (e.exceptions != "js" && e.exceptions != "wasm") {
+                    throw std::runtime_error(
+                        "a wasm target's \"exceptions\" must be \"js\" (emscripten's JS-based "
+                        "model, the default) or \"wasm\" (native -fwasm-exceptions), got \"" +
+                        e.exceptions + "\"");
                 }
             }
             // Optional runtime pins (see TargetEntry::python and friends). A
@@ -1122,6 +1231,72 @@ Manifest load(const fs::path &manifest_path) {
         m.matrices = read_containers(j.at("matrices"), "matrices");
     }
 
+    // `holders` is optional: holder policies for libraries that reference-
+    // count their objects intrusively (VTK). Validated here, where a missing
+    // key can be named; the strings themselves are C++ the driver compiles,
+    // so a misspelt member surfaces as a compile error against the manifest.
+    if (j.contains("holders")) {
+        if (!j.at("holders").is_array()) {
+            throw std::runtime_error("\"holders\" must be an array of holder policies");
+        }
+        for (const auto &h : j.at("holders")) {
+            if (!h.is_object()) {
+                throw std::runtime_error("each \"holders\" entry must be an object");
+            }
+            HolderEntry e;
+            const auto str = [&](const char *key, bool required) {
+                if (!h.contains(key)) {
+                    if (required) {
+                        throw std::runtime_error(std::string("a \"holders\" entry needs \"") +
+                                                 key + "\"");
+                    }
+                    return std::string();
+                }
+                std::string v = h.at(key).get<std::string>();
+                if (v.empty()) {
+                    throw std::runtime_error(std::string("a \"holders\" entry's \"") + key +
+                                             "\" must not be empty");
+                }
+                return v;
+            };
+            e.base    = str("base", true);
+            e.holder  = str("holder", true);
+            e.header  = str("header", false);
+            e.retain  = str("retain", true);
+            e.release = str("release", true);
+            e.factory = str("factory", false);
+            if (h.contains("get")) {
+                e.get = str("get", true);
+            }
+            if (h.contains("owned_returns")) {
+                const auto &o = h.at("owned_returns");
+                if (o.is_string()) {
+                    e.owned_returns.push_back(o.get<std::string>());
+                } else if (o.is_array()) {
+                    for (const auto &g : o) {
+                        e.owned_returns.push_back(g.get<std::string>());
+                    }
+                } else {
+                    throw std::runtime_error(
+                        "a \"holders\" entry's \"owned_returns\" must be a glob or an array of them");
+                }
+                for (const auto &g : e.owned_returns) {
+                    if (g.empty() || g.find(';') != std::string::npos) {
+                        throw std::runtime_error("\"owned_returns\" globs must be non-empty and "
+                                                 "contain no ';' (got \"" + g + "\")");
+                    }
+                }
+            }
+            for (const auto &prev : m.holders) {
+                if (prev.base == e.base) {
+                    throw std::runtime_error("two \"holders\" entries name the same base \"" +
+                                             e.base + "\"");
+                }
+            }
+            m.holders.push_back(std::move(e));
+        }
+    }
+
     // `module_init` is optional: C++ statements the generated module runs when
     // it LOADS, plus the headers that declare them. Two forms — a bare array of
     // statements, or an object with "headers" + "statements" — because the
@@ -1258,6 +1433,22 @@ Manifest load(const fs::path &manifest_path) {
 
     // `plugins` is optional: extra .cpp sources (e.g. a custom Backend +
     // BackendRegistrar) compiled into the driver. Resolved to absolute paths.
+    for (const char *key : {"generator_shards", "binding_shards"}) {
+        if (!j.contains(key)) {
+            continue;
+        }
+        const auto &g = j.at(key);
+        int         n = 0;
+        if (g.is_string() && g.get<std::string>() == "auto") {
+            n = 0;
+        } else if (g.is_number_integer() && g.get<int>() >= 1) {
+            n = g.get<int>();
+        } else {
+            throw std::runtime_error(std::string("\"") + key +
+                                     "\" must be a positive integer or \"auto\"");
+        }
+        (std::string(key) == "generator_shards" ? m.generator_shards : m.binding_shards) = n;
+    }
     if (j.contains("plugins")) {
         for (const auto &p : j.at("plugins")) {
             m.plugins.push_back(
@@ -1474,52 +1665,7 @@ Manifest load(const fs::path &manifest_path) {
     // pre-built libraries it depends on. Array order is the link order, so list
     // dependents before their dependencies when linking static archives.
     if (j.contains("user_lib")) {
-        const auto &ul = j.at("user_lib");
-        if (!ul.is_object() && !ul.is_array()) {
-            throw std::runtime_error(
-                "\"user_lib\" must be an object {name, dir, link} or an array of them");
-        }
-        if (ul.is_array() && ul.empty()) {
-            throw std::runtime_error("\"user_lib\" array must not be empty");
-        }
-        const auto parse_one = [&](const nlohmann::json &e) {
-            if (!e.is_object()) {
-                throw std::runtime_error("each \"user_lib\" entry must be an object {name, dir, link}");
-            }
-            if (!e.contains("name") || !e.contains("dir")) {
-                throw std::runtime_error(
-                    "each \"user_lib\" entry needs a \"name\" and a \"dir\"");
-            }
-            UserLibEntry u;
-            u.name = e.at("name").get<std::string>();
-            if (u.name.empty()) {
-                throw std::runtime_error("\"user_lib\" entry has an empty \"name\"");
-            }
-            u.dir = fs::weakly_canonical(base / fs::path(e.at("dir").get<std::string>())).string();
-            // Optional "link": prefer linking the shared or the static form of the
-            // library. "dynamic" is accepted as an alias for "shared". Default shared.
-            // (WebAssembly always links static regardless — see the wasm backend.)
-            if (e.contains("link")) {
-                std::string link = e.at("link").get<std::string>();
-                if (link == "dynamic") {
-                    link = "shared";
-                }
-                if (link != "shared" && link != "static") {
-                    throw std::runtime_error(
-                        "user_lib.link must be \"shared\", \"dynamic\", or \"static\" (got \"" +
-                        link + "\")");
-                }
-                u.link = link;
-            }
-            m.user_libs.push_back(std::move(u));
-        };
-        if (ul.is_object()) {
-            parse_one(ul);
-        } else {
-            for (const auto &e : ul) {
-                parse_one(e);
-            }
-        }
+        m.user_libs = parse_user_libs(j.at("user_lib"), base, "\"user_lib\"");
     }
 
     if (m.generator_name.empty()) {

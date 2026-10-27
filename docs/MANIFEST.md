@@ -36,6 +36,8 @@ Every field is listed in [Top-level fields](#top-level-fields); the sections bel
 - [Foreign sequence containers (`sequences`)](#foreign-sequence-containers-sequences)
   - [Registering a concrete type](#registering-a-concrete-type)
 - [Foreign matrices (`matrices`)](#foreign-matrices-matrices)
+- [Reference-counted classes (`holders`)](#reference-counted-classes-holders)
+- [Large libraries (`generator_shards`, `binding_shards`)](#large-libraries-generator_shards-binding_shards)
 - [Foreign-library interop (`interop`)](#foreign-library-interop-interop)
   - [Reaching the caster-less backends: register the type as a sequence too](#reaching-the-caster-less-backends-register-the-type-as-a-sequence-too)
 - [Standard types that need no declaration: `std::filesystem::path`, `std::shared_ptr<T>`](#standard-types-that-need-no-declaration-stdfilesystempath-stdshared_ptrt)
@@ -47,6 +49,7 @@ Every field is listed in [Top-level fields](#top-level-fields); the sections bel
 - [Functions](#functions)
   - [Binding one overload (`signature`)](#binding-one-overload-signature)
 - [Targets](#targets)
+  - [Per-target build overrides (`compile_options`, `user_include`, `user_lib`, `exceptions`)](#per-target-build-overrides-compile_options-user_include-user_lib-exceptions)
   - [Available `lang` values](#available-lang-values)
 - [Linking external libraries (`user_lib`)](#linking-external-libraries-user_lib)
   - [Several libraries: your library and its dependencies](#several-libraries-your-library-and-its-dependencies)
@@ -142,6 +145,9 @@ cmake -B build && cmake --build build
 | `wheel_files` / `wheel_dependencies` / `wheel_scripts` | — | — | **Per-target** (`python` / `nanobind` only): what else the wheel holds — files and directories bundled next to the module (a pure-Python package, data files), its `dependencies`, and console entry points. See [Bundling files in the wheel](#bundling-files-in-the-wheel-wheel_files-wheel_dependencies-wheel_scripts). |
 | `out_dir` | — | — | Where every target's **built artifact** is copied after each build (the `.so` / `.pyd` / `.node` / `.js`+`.wasm`). Per-target `out_dir` overrides it. See [Artifact output directory](#artifact-output-directory-out_dir). |
 | `matrices` | — | `[]` | Foreign 2-D matrices (same two entry forms as `sequences`) that marshal as an array of row arrays. See [Foreign matrices](#foreign-matrices-matrices). |
+| `generator_shards` | — | `"auto"` | How many translation units the generator's reflection walk is split into — they compile in parallel and link into one generator. `"auto"`: one up to 24 classes, else ~16 classes per shard. See [Large libraries](#large-libraries-generator_shards-binding_shards). |
+| `binding_shards` | — | `"auto"` | How many source files the compiled `python`, `wasm` and `julia` bindings split their class registrations into. `"auto"`: one up to 30 classes, else ~25 per part. See [Large libraries](#large-libraries-generator_shards-binding_shards). |
+| `holders` | — | `[]` | Holder policies for libraries that reference-count their objects intrusively (VTK: protected destructors, `T::New()`, `vtkSmartPointer`). Bound classes deriving from a policy's `base` are bound through the library's own holder by `python`, `wasm` and `julia`. See [Reference-counted classes](#reference-counted-classes-holders). |
 | `interop` | — | `[]` | Foreign libraries whose types the target's binding framework marshals itself (`["eigen"]`). `python` / `nanobind` bind them natively (numpy); backends with no caster skip those members. See [Foreign-library interop](#foreign-library-interop-interop). |
 | `user_lib` | — | — | Link the generated bindings against pre-built external libraries — one object, or an array of them when your library has dependencies of its own. See [Linking external libraries](#linking-external-libraries-user_lib). |
 | `user_sources` | — | `[]` | List of user `.cpp` (or `.c`) files compiled directly into every generated binding target. See [Compiling user sources](#compiling-user-sources-user_sources). |
@@ -628,6 +634,93 @@ Where an `interop` library owns the type, the same split applies: registering `E
 
 ---
 
+## Reference-counted classes (`holders`)
+
+Some libraries never let a caller destroy an object. Every VTK class derives
+from `vtkObjectBase`, whose destructor is **protected**: an object is made by
+`T::New()` (one reference), shared with `Register()`, released with
+`UnRegister()`, and freed when the count reaches zero. The pipeline hands out
+**borrowed** raw pointers (`vtkAlgorithm::GetOutput()`). Every runtime backend
+destroys what it wraps, so such a class used to be skipped outright — a whole
+library at once.
+
+A holder policy says how the library manages lifetime instead:
+
+```json
+"holders": [{
+  "base":    "vtkObjectBase",
+  "holder":  "vtkSmartPointer",
+  "header":  "vtkSmartPointer.h",
+  "get":     "GetPointer",
+  "retain":  "Register(nullptr)",
+  "release": "UnRegister(nullptr)",
+  "factory": "New",
+  "owned_returns": ["New*", "CreateDataArray", "CreateArray"]
+}]
+```
+
+| Field | Required | Meaning |
+|---|:---:|---|
+| `base` | ✅ | The root class. Every bound class deriving from it (or it itself) gets the policy. |
+| `holder` | ✅ | The library's intrusive smart pointer, a class template: `holder<T>(T*)` takes a reference, its destructor drops one. |
+| `header` | — | Its `#include`. |
+| `get` | — | The holder's member returning the `T*` (default `get`). |
+| `retain` / `release` | ✅ | Member calls on a `T*` that take / drop one reference. |
+| `factory` | — | Static member creating a new object that already carries one reference. It becomes the script-side **constructor** of every class where `T::factory()` returns exactly `T*` and `T` is not abstract — the compiler decides (a class with no `New()` of its own inherits its base's, which returns the base type, so it is not constructible). |
+| `owned_returns` | — | Method-name globs (`*`, `?`) whose **pointer result already carries a reference** — factories. Every pointer a binding hands out takes a reference of its own, so wrapping one of these would leak the factory's; they are skipped (`owned_pointer_return` in the coverage report). The `factory` is always included. |
+
+`rosetta_gen` turns each entry into a `rosetta::holder_policy<T>` specialization
+in `bindings.h` ([`rosetta/holder.h`](../include/rosetta/holder.h) documents
+the trait — write it yourself for programmatic use). What each backend does:
+
+| Backend | Behaviour |
+|---|---|
+| `python` | `PYBIND11_DECLARE_HOLDER_TYPE(T, holder<T>, true)` — an *intrusive* holder, so **every** `T*` pybind wraps (a borrowed `GetOutput()`, a parameter round trip) takes a reference and the Python object's death drops it. `py::class_<T, Base, holder<T>>`; the factory is `py::init`; no trampoline (script-side subclassing needs a public constructor). Held pointers take the default return policy and no `keep_alive` — the holder already owns the lifetime question. |
+| `wasm` | `smart_ptr_trait<holder<T>>` with `INTRUSIVE` sharing, `.smart_ptr<holder<T>>` (or `.smart_ptr_constructor` with the factory) and a `raw_destructor<T>` specialization (embind takes its address, and the default `delete` does not compile against a protected destructor). A pointer return is handed out **inside the holder**, so every JS handle owns one reference and `.delete()` drops exactly that one; embind downcasts it to the object's dynamic type. |
+| `julia` | jlcxx's own ownership model: a pointer crossing into Julia is retained and boxed as its **most-derived bound class** (`GetOutputDataObject()` arrives as a `vtkPolyData`), with a finalizer that releases it. The factory is the constructor. A held-pointer parameter also gets a by-reference overload, since a Julia box dispatches as `T`, never as the `CxxPtr{T}` a `T*` maps to. |
+| others | Keep skipping the classes as non-destructible, as before. |
+
+Worked example: VTK's own classes bound directly — a 30-class pipeline subset
+for python, julia and wasm — in the `direct/` folder of the vtk-rosetta project.
+
+---
+
+## Large libraries (`generator_shards`, `binding_shards`)
+
+Everything rosetta knows about a class it learns by reflection, which is
+compile-time work done in the translation unit that names the class. Over a
+few dozen classes that is nothing; over VTK it is not — one generator TU
+reflecting 100 VTK classes took 20 minutes, and 1500 would not have finished.
+So the work is split twice:
+
+- **The generator** — `rosetta_gen` writes `shard_K.cpp` files next to the
+  driver, each reflecting a contiguous slice of `classes`
+  (`rosetta::describe_into<...>`). They compile in parallel and link into the
+  same `generator`, whose `main()` concatenates their IR in manifest order and
+  runs the backends once (`rosetta::generate_described`). Nothing is
+  serialized: the IR never leaves the process.
+- **The bindings** — the `python`, `wasm` and `julia` backends write
+  `auto_<backend>_part_K.cpp` files, each registering a slice of the classes,
+  and list them in the emitted CMake. pybind11 parts are functions the module
+  entry calls in order; embind parts are `EMSCRIPTEN_BINDINGS` blocks of their
+  own; jlcxx parts receive the module after every `add_type` has run.
+
+```json
+"generator_shards": "auto",
+"binding_shards": "auto"
+```
+
+Both default to `"auto"`; a positive integer fixes the count. Small manifests
+are unaffected — one slice reproduces the single file of before, byte for byte.
+
+Measured on VTK (12 cores): 106 classes, generator 20 min → 2.6 min; 1542
+classes, generator 33 min over 97 shards. One rule to keep in mind: every shard
+includes every bound header, so a header that leaks a macro (VTK's
+`vtkTemporalPathLineFilter.h` leaves `vtkPolyDataAlgorithm` defined) affects all
+the classes after it in every shard — leave such a header out.
+
+---
+
 ## Foreign-library interop (`interop`)
 
 A method taking or returning `Eigen::VectorXd` is, to the reflection walk, a method taking an ordinary class. Every backend used to bind it happily — and the call then **threw at run time**, because no caster for that class was ever registered. The workaround was a hand-written extension file per class flattening every Eigen type to `std::vector<double>`.
@@ -859,8 +952,10 @@ disagree, so a mis-read declaration loses its documentation rather than
 attaching it to the wrong member. When two overloads of a name are
 indistinguishable, **neither** is documented. Private members are never read;
 neither are constructors, destructors or operators, none of which have a doc
-slot in the IR. Members inherited from a base declared in a header no class
-entry names are not covered — list that base as a class to reach it.
+slot in the IR. An inherited member is documented — doc comment AND default
+arguments — from the class that declares it, so a derived class's flattened copy
+binds exactly like the base's; the base's header must be read, though, so list
+the base as a class when no entry names its header.
 
 ---
 
@@ -1138,6 +1233,33 @@ The object form also accepts **`link_options`** — extra linker flags applied t
 ```
 
 The flags are emitted **after** the template's own `target_link_options`, so on the wasm targets — where emcc honors the *last* occurrence of a repeated `-s` setting — they can also **override** a template default, e.g. `"-sALLOW_MEMORY_GROWTH=0"` for a fixed-size heap.
+
+### Per-target build overrides (`compile_options`, `user_include`, `user_lib`, `exceptions`)
+
+A library's native and WebAssembly flavours are often two different builds —
+two install trees, different configured headers, and for VTK a wasm build that
+forces `-fwasm-exceptions` on every object. One top-level `user_lib` /
+`user_include` cannot name both, so a target can override them:
+
+```json
+"user_include": "$VTK_NATIVE/include/vtk-9.7",
+"user_lib": { "name": "vtkall", "dir": "$VTK_NATIVE/lib", "link": "static" },
+"targets": [
+  { "lang": "python" },
+  { "lang": "wasm",
+    "user_include": "$VTK_WASM/include/vtk-9.7",
+    "user_lib": { "name": "vtkall", "dir": "$VTK_WASM/lib", "link": "static" },
+    "compile_options": ["-DVTK_WASM"],
+    "exceptions": "wasm" }
+]
+```
+
+| Field | Meaning |
+|---|---|
+| `compile_options` | Extra compiler flags for this target's binding (`target_compile_options`) — the compile-side twin of `link_options`. |
+| `user_include` | Include dirs **prepended** to the top-level ones for this target, so its copy of a per-platform header wins the lookup. |
+| `user_lib` | Same schema as the top-level key; **replaces** it for this target. The generator driver keeps linking the top-level list — it runs on the host. |
+| `exceptions` | `wasm` targets only: `"js"` (emscripten's JS exception model, the default) or `"wasm"` (native `-fwasm-exceptions` on compile **and** link, and `-sDISABLE_EXCEPTION_CATCHING=0` removed — emcc rejects the two together). Every object of a wasm link must agree, so a library built one way cannot be linked into a module built the other. |
 
 ### Available `lang` values
 

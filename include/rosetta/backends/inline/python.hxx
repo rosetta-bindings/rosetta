@@ -106,7 +106,7 @@ cmake.build-type = "Release"
 # so is anything the manifest's "wheel_files" bundles next to it — nothing is
 # copied by scikit-build-core itself.
 wheel.packages = []
-sdist.include = ["auto_pybind.cpp", "CMakeLists.txt"]
+sdist.include = ["auto_pybind*.cpp", "CMakeLists.txt"]
 )TOML";
 
         // Build/Use section for the generated README — kept next to PYX_CMAKE
@@ -569,6 +569,26 @@ script once per interpreter.)MD";
             return false;
         }
 
+        // The default as emitted. A NUMBER parameter whose default is not a
+        // literal — an enumerator, a constant (`int comp =
+        // vtkArrayComponents::AllComponents`) — is converted to the parameter's
+        // own type: pybind11 / nanobind turn an `arg` default into a Python
+        // object when the module IMPORTS, using the default's C++ type, and an
+        // enumerator of an unbound enum has no caster — the whole import fails.
+        inline std::string px_default_expr(const GenParam &p) {
+            const std::string &d = p.default_text;
+            if (p.type.kind != "number" || p.type.spelling.empty()) {
+                return d;
+            }
+            const bool literal =
+                std::all_of(d.begin(), d.end(), [](unsigned char ch) {
+                    return std::isdigit(ch) || ch == '.' || ch == '-' || ch == '+' ||
+                           ch == 'e' || ch == 'E' || ch == 'f' || ch == 'F' || ch == 'u' ||
+                           ch == 'U' || ch == 'l' || ch == 'L' || ch == 'x' || ch == 'X';
+                });
+            return literal ? d : "static_cast<" + p.type.spelling + ">(" + d + ")";
+        }
+
         inline std::string px_arg_list(const std::vector<GenParam> &params, const char *ns,
                                        const GenContext &c) {
             std::vector<const GenParam *> kept;
@@ -604,7 +624,7 @@ script once per interpreter.)MD";
                 if (none_default(*kept[i])) {
                     defaults[i] = std::string(ns) + "::none()";
                 } else if (px_default_ok(kept[i]->type, c)) {
-                    defaults[i] = kept[i]->default_text;
+                    defaults[i] = px_default_expr(*kept[i]);
                 } else {
                     break;
                 }
@@ -673,7 +693,9 @@ script once per interpreter.)MD";
         // bind as ordinary methods only.
         inline std::vector<const GenMethod *> virtual_methods(const GenClass &k) {
             std::vector<const GenMethod *> out;
-            if (k.is_final) {
+            // A held (reference-counted) class is never subclassed from script:
+            // its constructors are protected and the library creates it.
+            if (k.is_final || has_holder(k)) {
                 return out;
             }
             for (const auto &m : k.methods) {
@@ -816,6 +838,12 @@ script once per interpreter.)MD";
             s += px_interop_includes(c.interop);
             auto add = [&](const std::string &h) { append_include(s, h); };
             s += init_includes(c);
+            // The holder templates of the held classes (manifest "holders").
+            for (const GenClass *k : distinct_holders(c)) {
+                if (!k->holder.header.empty()) {
+                    add(k->holder.header);
+                }
+            }
             for (const auto &k : c.classes) {
                 add(k.header);
                 for (const auto &m : k.methods) {
@@ -913,6 +941,17 @@ script once per interpreter.)MD";
             if (t.kind == "object") {
                 const GenType    &q  = shared_pointee(t);
                 const std::string sp = q.object_qualified.empty() ? q.spelling : q.object_qualified;
+                // A C++ stream (PrintSelf(ostream &), Write(ostream &)): no caster
+                // exists, so the binding could never be called — and its exact
+                // spelling (basic_ostream<char, ...>) would not even compile in
+                // the disambiguating cast.
+                for (const char *io : {"std::basic_ostream", "std::basic_istream",
+                                       "std::basic_iostream", "std::basic_ios", "basic_ostream",
+                                       "basic_istream", "basic_iostream"}) {
+                    if (sp.rfind(io, 0) == 0) {
+                        return false;
+                    }
+                }
                 return px_is_bound_class(q, c) || sp.rfind("std::", 0) == 0;
             }
             return true;
@@ -1445,6 +1484,15 @@ script once per interpreter.)MD";
         // use-after-free.
         inline bool px_borrowed_pointer(const GenType &t, const GenContext &c) {
             if (t.is_pointer) {
+                // A pointer to a HELD class is not borrowed at all: its intrusive
+                // holder (PYBIND11_DECLARE_HOLDER_TYPE(..., true)) takes a
+                // reference of its own for every wrapper pybind builds, so the
+                // default policy is exactly right — and neither keep_alive (the
+                // callee references what it keeps) nor reference_internal (which
+                // would pin the parent for nothing) applies.
+                if (held_pointee(t, c) != nullptr) {
+                    return false;
+                }
                 return px_is_bound_class(t, c);
             }
             if (t.kind == "vector" && !t.element.empty()) {
@@ -1738,10 +1786,10 @@ script once per interpreter.)MD";
             // A class whose destructor is not public cannot be wrapped: every
             // runtime backend destroys what it holds. Skip it with a note —
             // the alternative is a compile error inside the framework headers.
-            if (!k.is_destructible) {
+            if (!k.is_destructible && !has_holder(k)) {
                 std::fprintf(stderr,
                              "rosetta::%s: class '%s' has a non-public destructor "
-                             "(ref-counted?) — skipped\n",
+                             "(ref-counted? declare a \"holders\" policy) — skipped\n",
                              "python", k.name.c_str());
                 return {};
             }
@@ -1750,9 +1798,12 @@ script once per interpreter.)MD";
             const std::string kq        = qualified_of(k);
             std::string       extra;
             // Holder first — py::class_ detects its options by type, so the
-            // order among trampoline / holder / bases is free.
+            // order among trampoline / holder / bases is free. A held class
+            // uses its library's own intrusive holder (see px_holder_decls).
             const auto shared = px_shared_holders(c);
-            if (std::find(shared.begin(), shared.end(), kq) != shared.end()) {
+            if (has_holder(k)) {
+                extra += ", " + holder_spelling(k);
+            } else if (std::find(shared.begin(), shared.end(), kq) != shared.end()) {
                 extra += ", std::shared_ptr<" + kq + ">";
             }
             if (has_tramp) {
@@ -1786,7 +1837,16 @@ script once per interpreter.)MD";
                 }
                 return out;
             };
-            s += indent(expanded_ctors(k, c, has_tramp));
+            if (has_holder(k)) {
+                // The library creates the object (its constructors are not
+                // public); the factory's reference is adopted by the holder.
+                if (k.holder.creatable) {
+                    s += "        c.def(py::init([]() {\n" +
+                         holder_create_stmts(k, "            ") + "        }));\n";
+                }
+            } else {
+                s += indent(expanded_ctors(k, c, has_tramp));
+            }
             for (const auto &f : k.fields) {
                 if (is_adapted(f.type)) {
                     if (adapt_ok(f.type)) {
@@ -1810,7 +1870,31 @@ script once per interpreter.)MD";
                 }
                 s += indent(expanded_field(k, f));
             }
+            // pybind11 refuses ONE Python name carrying both static and instance
+            // overloads ("overloading a method with both static and instance
+            // methods is not supported") — at IMPORT time, failing the whole
+            // module. vtkAbstractArray has both a virtual GetDataTypeSize() and
+            // a static GetDataTypeSize(int). The first kind bound under a name
+            // wins; the other is recorded as skipped.
+            std::map<std::string, bool> bound_kind; // name -> is_static
+            const auto kind_clash = [&](const GenMethod &m) {
+                const auto it = bound_kind.find(m.name);
+                return it != bound_kind.end() && it->second != m.is_static;
+            };
             for (const auto &m : k.methods) {
+                if (kind_clash(m)) {
+                    coverage::note_skip("python", k, m, "static_instance_mix",
+                                        "pybind11 cannot bind static and instance methods under "
+                                        "one name, and the other kind was bound first");
+                    continue;
+                }
+                if (owned_pointer_return(m.name, m.ret, c)) {
+                    coverage::note_skip("python", k, m, "owned_pointer_return",
+                                        "returns a new reference (a factory, per the holder "
+                                        "policy's owned_returns); the constructor creates "
+                                        "objects instead");
+                    continue;
+                }
                 if (px_touches(m)) {
                     // Foreign sequence in the signature: adapter or nothing —
                     // the member-pointer path would hand pybind the casterless
@@ -1818,6 +1902,7 @@ script once per interpreter.)MD";
                     // px_seq_method).
                     if (seq_adaptable(m) && px_seq_rest_ok(m, c)) {
                         s += indent(px_seq_method(k, m, c));
+                        bound_kind.emplace(m.name, m.is_static);
                         coverage::note_bound("python", k, m);
                     } else {
                         coverage::note_skip("python", k, m, "sequence_not_adaptable",
@@ -1832,11 +1917,44 @@ script once per interpreter.)MD";
                     continue; // signature the emitted pybind line could not compile
                 }
                 s += indent(expanded_method(k, m, c));
+                bound_kind.emplace(m.name, m.is_static);
                 coverage::note_bound("python", k, m);
             }
             s += "    }\n";
             return s;
         }
+
+        // The glue a holder policy needs before any py::class_ names it, once
+        // per holder template:
+        //
+        //   PYBIND11_DECLARE_HOLDER_TYPE(T, Holder<T>, true) — `true` marks the
+        //   holder INTRUSIVE ("always construct"): pybind builds Holder<T>(p)
+        //   for every T* it wraps, whatever the return policy, and building one
+        //   from a raw pointer takes a reference. That single fact is what makes
+        //   a borrowed GetOutput() safe to return as it stands.
+        //
+        //   holder_helper<Holder<T>> — how pybind reads the raw pointer back out,
+        //   when the holder does not spell it `get()` (vtkSmartPointer:
+        //   GetPointer()).
+        inline std::string px_holder_decls(const GenContext &c) {
+            std::string s;
+            for (const GenClass *k : distinct_holders(c)) {
+                const std::string &h = k->holder.holder;
+                s += "\nPYBIND11_DECLARE_HOLDER_TYPE(T, " + h + "<T>, true)\n";
+                if (k->holder.get != "get") {
+                    s += "namespace pybind11 { namespace detail {\n"
+                         "template <typename T> struct holder_helper<" + h + "<T>> {\n"
+                         "    static const T *get(const " + h + "<T> &p) { return p." +
+                         k->holder.get + "(); }\n"
+                         "};\n"
+                         "}} // namespace pybind11::detail\n";
+                }
+            }
+            return s;
+        }
+
+        inline std::vector<std::pair<std::string, std::string>>
+        python_sources(const GenContext &c0); // defined below
 
         inline std::string python_expanded_source(const GenContext &c0) {
             // A type marked BOTH ways — a registered sequence that an opted-in
@@ -1845,13 +1963,38 @@ script once per interpreter.)MD";
             // directions, against a copied Python list from the adapter. Dropping
             // the sequence marks once, on this local copy, is what says that; the
             // gates below then read it as the plain interop type it is.
+            return python_sources(c0).front().second;
+        }
+
+        // The python binding as (file name, contents) pairs: auto_pybind.cpp,
+        // then one auto_pybind_part_K.cpp per extra class slice
+        // (class_slices). A part holds `void rosetta_py_part_K(py::module_ &m)`
+        // registering its slice; the module entry calls the parts in order —
+        // bases before derived — between the enums and the free functions.
+        // Every part repeats the preamble (includes, holder declarations,
+        // trampolines): those are definitions every TU naming the classes must
+        // see, and identical ones are fine across TUs.
+        inline std::vector<std::pair<std::string, std::string>>
+        python_sources(const GenContext &c0) {
             const GenContext c = interop_wins(c0, px_interop_caster);
-            std::string      body;
+            const auto slices = class_slices(c);
+            const bool split  = slices.size() > 1;
+            std::string body;
             for (const auto &e : c.enums) {
                 body += expanded_enum(e);
             }
-            for (const auto &k : c.classes) {
-                body += expanded_class(k, c);
+            std::vector<std::string> parts;
+            for (const auto &[lo, hi] : slices) {
+                std::string part;
+                for (std::size_t i = lo; i < hi; ++i) {
+                    part += expanded_class(c.classes[i], c);
+                }
+                if (split) {
+                    parts.push_back(std::move(part));
+                    body += "    rosetta_py_part_" + std::to_string(parts.size() - 1) + "(m);\n";
+                } else {
+                    body += part;
+                }
             }
             for (const auto &f : c.functions) {
                 GenMethod probe; // free functions go through the same gates
@@ -1885,6 +2028,12 @@ script once per interpreter.)MD";
                     }
                     continue;
                 }
+                if (owned_pointer_return(f.name, f.ret, c)) {
+                    coverage::note_skip_function("python", f, "owned_pointer_return",
+                                                 "returns a new reference (a factory, per the "
+                                                 "holder policy's owned_returns)");
+                    continue;
+                }
                 if (!px_method_ok(probe, c)) {
                     coverage::note_skip_function("python", f, "unmarshalable_signature",
                                                  "no pybind11 type-caster for a type in this "
@@ -1901,18 +2050,33 @@ script once per interpreter.)MD";
                 coverage::note_bound_function("python", f);
             }
 
-            std::string out = "// Generated by rosetta::generate (expanded, reflection-free) — "
+            std::string pre = "// Generated by rosetta::generate (expanded, reflection-free) — "
                               "do not edit by hand.\n";
-            out += expanded_includes(c);
-            out += using_namespaces_of(c); // `using namespace` for namespaced user types
-            out += "\nnamespace py = pybind11;\n";
-            out += trampolines_of(c); // reflection-free; empty when no virtuals
+            pre += expanded_includes(c);
+            pre += using_namespaces_of(c); // `using namespace` for namespaced user types
+            pre += "\nnamespace py = pybind11;\n";
+            pre += px_holder_decls(c); // intrusive holders of the held classes
+            pre += trampolines_of(c); // reflection-free; empty when no virtuals
+
+            std::string out = pre;
+            for (std::size_t k = 0; k < parts.size(); ++k) {
+                out += (k ? "" : "\n") + std::string("void rosetta_py_part_") +
+                       std::to_string(k) + "(py::module_ &m);\n";
+            }
             out += "\nPYBIND11_MODULE(" + c.lib + ", m) {\n";
             out += init_block(c);
             out += "    m.doc() = \"Auto-generated (expanded) bindings for " + c.lib + ".\";\n";
             out += body;
             out += "}\n";
-            return out;
+            std::vector<std::pair<std::string, std::string>> files{{"auto_pybind.cpp", out}};
+            for (std::size_t k = 0; k < parts.size(); ++k) {
+                const std::string id = std::to_string(k);
+                files.emplace_back("auto_pybind_part_" + id + ".cpp",
+                                   pre + "\n// Part " + id + " of the class registrations.\n"
+                                         "void rosetta_py_part_" + id +
+                                         "(py::module_ &m) {\n" + parts[k] + "}\n");
+            }
+            return files;
         }
 
         inline std::string Python::render(const GenContext &c) const {
@@ -1921,8 +2085,16 @@ script once per interpreter.)MD";
 
         inline void Python::emit(const GenContext &c) const {
             auto dir = c.out_dir / "python";
-            write_file(dir / "auto_pybind.cpp", python_expanded_source(c));
-            write_file(dir / "CMakeLists.txt", render_meta(PYX_CMAKE, c));
+            const auto  files = python_sources(c);
+            std::string list;
+            for (const auto &[name, text] : files) {
+                write_file(dir / name, text);
+                list += (list.empty() ? "" : " ") + name;
+            }
+            remove_stale_parts(dir, "auto_pybind_part_", files.size() - 1);
+            std::string cm = render_meta(PYX_CMAKE, c);
+            cm = replace_once(cm, "NO_EXTRAS auto_pybind.cpp)", "NO_EXTRAS " + list + ")");
+            write_file(dir / "CMakeLists.txt", cm);
             // Wheel packaging: pyproject.toml (scikit-build-core, driving the
             // CMakeLists above) plus the builder script. render_meta supplies
             // {{VERSION}} from the manifest's "version".
