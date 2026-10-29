@@ -46,13 +46,26 @@ Every top-level field, alphabetically. \req\ marks a required field.
   into the generated tree and put first on the include path.
   \S\ref{sec:generatedheaders} \\
 \addlinespace
+\field{binding\_shards} & & \code{"auto"} &
+  How many source files the \lang{python}, \lang{wasm} and \lang{julia}
+  bindings split their class registrations into; a positive integer fixes it.
+  \S\ref{sec:sharding} \\
+\addlinespace
 \field{generator\_name} & & manifest's directory name &
   Basename of the emitted reflection driver; last-resort default for
   \field{module\_name}. \\
 \addlinespace
+\field{generator\_shards} & & \code{"auto"} &
+  How many translation units the generator's reflection walk is split into.
+  \S\ref{sec:sharding} \\
+\addlinespace
 \field{header\_dir} & & --- &
   Directory fragment prepended to every entry header.
   \S\ref{sec:shared-defaults} \\
+\addlinespace
+\field{holders} & & \code{[]} &
+  Holder policies for libraries that reference-count their objects
+  intrusively (VTK). \S\ref{sec:holders} \\
 \addlinespace
 \field{interop} & & \code{[]} &
   Foreign libraries whose types the target's binding framework marshals itself
@@ -181,6 +194,14 @@ including inside groups and entries.
 \field{lang} & \req & The backend. See Appendix~\ref{app:targets}. \\
 \field{name} & & Module / library name; defaults to \field{module\_name}. \\
 \field{link\_options} & & Extra linker flags for this target only. \\
+\field{compile\_options} & & Extra compiler flags for this target only.
+  \S\ref{sec:targetbuild} \\
+\field{user\_include} & & Include directories prepended to the top-level ones
+  for this target. \\
+\field{user\_lib} & & Replaces the top-level \field{user\_lib} for this
+  target. \\
+\field{exceptions} & & \lang{wasm} only: \code{"js"} (default) or
+  \code{"wasm"} (\code{-fwasm-exceptions}). \\
 \field{out\_dir} & & Where this target's artifact is copied. \\
 \field{python} & & Interpreter the binding is built for. \\
 \field{requires\_python} & & Minimum Python version; feeds both CMake and

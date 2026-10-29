@@ -449,7 +449,11 @@ using .{{LIB}}
         inline std::string jx_holder_finalizers(const GenContext &c) {
             std::string s;
             for (const auto &k : c.classes) {
-                if (!has_holder(k)) {
+                // A held class with a PUBLIC destructor (vtkCurvatures) gets
+                // jlcxx's own __delete — see jx_holder_finalizer_specs, which
+                // makes that one release instead of delete. Registering ours too
+                // fails the module load ("Double registration for method").
+                if (!has_holder(k) || k.is_destructible) {
                     continue;
                 }
                 s += "    mod.method(\"__delete\", [](" + qualified_of(k) + " *p) { p->" +
@@ -460,6 +464,25 @@ using .{{LIB}}
             }
             return "    mod.set_override_module(jlcxx::get_cxxwrap_module());\n" + s +
                    "    mod.unset_override_module();\n";
+        }
+
+        // jlcxx registers a `delete`-based finalizer for every DESTRUCTIBLE
+        // type it wraps. A reference-counted class may still have a public
+        // destructor (vtkCurvatures), and deleting it from a Julia finalizer
+        // would free an object VTK may still reference — so specialize jlcxx's
+        // Finalizer for those to drop the box's one reference instead.
+        inline std::string jx_holder_finalizer_specs(const GenContext &c) {
+            std::string s;
+            for (const auto &k : c.classes) {
+                if (has_holder(k) && k.is_destructible) {
+                    s += "    template <> struct Finalizer<" + qualified_of(k) +
+                         ", SpecializedFinalizer> {\n"
+                         "        static void finalize(" + qualified_of(k) + " *p) { p->" +
+                         k.holder.release + "; }\n"
+                         "    };\n";
+                }
+            }
+            return s.empty() ? s : "\nnamespace jlcxx {\n" + s + "} // namespace jlcxx\n";
         }
 
         inline bool jx_has_held_pointer_param(const std::vector<GenParam> &params,
@@ -642,10 +665,15 @@ using .{{LIB}}
             }
             s += jx_held_method(&k, m, owner, qualified_of(k) + "::" + m.name, c);
             // Numeric-vector parameters: add the plain-Julia-Vector overload.
-            if (jx_wants_arrayref_overload(m.params) && !m.is_extension) {
+            if (jx_wants_arrayref_overload(m.params)) {
                 const JxAdapterParams ap = jx_arrayref_params(m.params, m.param_cpp);
                 std::string           decls, call;
-                if (m.is_static) {
+                if (m.is_extension) {
+                    // A free function wearing a method's name — the overload
+                    // a plain Julia Vector needs as much as a member does.
+                    decls = qualified_of(k) + " &self" + (ap.decls.empty() ? "" : ", " + ap.decls);
+                    call  = m.ext_qualified + "(self" + (ap.args.empty() ? "" : ", " + ap.args) + ")";
+                } else if (m.is_static) {
                     decls = ap.decls;
                     call  = qualified_of(k) + "::" + m.name + "(" + ap.args + ")";
                 } else {
@@ -949,6 +977,7 @@ using .{{LIB}}
             if (!supers.empty()) {
                 out += "\nnamespace jlcxx {\n" + supers + "} // namespace jlcxx\n";
             }
+            out += jx_holder_finalizer_specs(c); // release, not delete, for held classes
             out += jx_box_helpers(c); // boxing for held (reference-counted) classes
             const std::string pre = out;
             for (std::size_t k = 0; k < parts.size(); ++k) {

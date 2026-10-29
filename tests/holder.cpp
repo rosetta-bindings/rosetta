@@ -107,6 +107,15 @@ namespace rcns {
     protected:
         ~UnitCircle() override = default;
     };
+    // Reference-counted, yet its destructor is PUBLIC (vtkCurvatures).
+    class OpenCircle : public Circle {
+    public:
+        static OpenCircle *New() { return new OpenCircle; }
+        ~OpenCircle() override = default;
+
+    protected:
+        OpenCircle() = default;
+    };
 } // namespace rcns
 
 // What rosetta_gen emits for:
@@ -142,6 +151,9 @@ template <> struct rosetta::binding_info<rcns::Circle> {
     static constexpr const char *header = "shapes.h";
 };
 template <> struct rosetta::binding_info<rcns::UnitCircle> {
+    static constexpr const char *header = "shapes.h";
+};
+template <> struct rosetta::binding_info<rcns::OpenCircle> {
     static constexpr const char *header = "shapes.h";
 };
 
@@ -341,4 +353,18 @@ TEST(Holder, JuliaKeepsTheFirstOfTwoIdenticalStatics) {
 TEST(Holder, BackendsWithoutPolicySupportStillSkipHeldClasses) {
     const std::string s = render("node");
     EXPECT_FALSE(has(s, "rcns::Circle::New()"));
+}
+
+// jlcxx finalizes a destructible type itself, with `delete`: for a held class
+// that must become a release (and rosetta must not register a second
+// __delete, which fails the module load).
+TEST(Holder, JuliaReleasesAHeldClassWithAPublicDestructor) {
+    const auto c = rosetta::gen_detail::make_context<rcns::RefBase, rcns::Shape, rcns::Circle,
+                                                     rcns::OpenCircle>("shapes");
+    const std::string s = rosetta::backend_registry().at("julia")->render(c);
+    EXPECT_TRUE(has(s, "template <> struct Finalizer<rcns::OpenCircle, SpecializedFinalizer> {"))
+        << s;
+    EXPECT_TRUE(has(s, "static void finalize(rcns::OpenCircle *p) { p->Unref(); }"));
+    EXPECT_FALSE(has(s, "mod.method(\"__delete\", [](rcns::OpenCircle *p)"));
+    EXPECT_TRUE(has(s, "mod.method(\"__delete\", [](rcns::Circle *p)"));
 }

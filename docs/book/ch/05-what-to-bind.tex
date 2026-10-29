@@ -49,7 +49,9 @@ a \code{class}, a \code{struct}, or an \code{enum}.
 Inheritance, multiple constructors, enums, nested user types and
 \code{std::vector} members are discovered automatically. You do not list base
 classes --- list the most-derived type you want bound and the bases are
-flattened into it.
+flattened into it. List a base too when scripts should see it as a type of its
+own (to pass a derived object where the base is expected); a class whose direct
+base is not bound is then bound as a subclass of its nearest ancestor that is.
 
 \subsection{\field{final}: turning off trampolines}
 

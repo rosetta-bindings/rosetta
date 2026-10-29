@@ -81,6 +81,22 @@ sees without a \code{using Base::f}, so binding the hidden base overloads would
 hand scripts a call the C++ API does not offer. Both hidden declarations are
 recorded as \code{hidden\_by\_derived} drops rather than vanishing.
 
+A base declaration that the derived class redeclares with the same name and
+parameter list is \emph{replaced}, not hidden: an override, a static redeclared
+in every class (VTK's \code{IsA} and \code{IsTypeOf}, which \code{vtkTypeMacro}
+writes into each one), or a \code{New()} whose return type narrows to the
+derived class. The derived declaration binds and nothing is lost, so no drop is
+recorded. The return type is deliberately not compared, which is what lets a
+covariant \code{clone()} count as a replacement.
+
+Hiding is about \emph{members}; \emph{bases} have a rule of their own. A class
+whose direct bases are all unbound --- typically because the direct base is a
+template, as in VTK's
+\code{vtkFloatArray : vtkAOSDataArrayTemplate<float> : \ldots{} : vtkDataArray}
+--- is bound as a subclass of its \textbf{nearest bound ancestor}, so a
+\code{vtkFloatArray} is still accepted wherever a \code{vtkDataArray} is
+expected.
+
 A diamond-shared base member is still emitted exactly once. Two \emph{different}
 bases declaring the same name both bind --- that call is ambiguous in C++
 without qualification, but the binding has no ambiguity to resolve (each entry is
@@ -132,8 +148,8 @@ These are backend-independent:
   to \\
 \code{function\_template} & a member template: no fixed parameter pack to
   splice \\
-\code{hidden\_by\_derived} & a base overload hidden by a derived declaration of
-  the name \\
+\code{hidden\_by\_derived} & a base overload with different parameters,
+  hidden by a derived declaration of the name \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -152,6 +168,15 @@ These are backend-independent:
   lost the tie \\
 \code{sequence\_not\_adaptable} & a registered sequence with no
   \code{std::vector} boundary adapter here \\
+\code{owned\_pointer\_return} & returns a pointer that already carries a
+  reference --- a factory listed in a holder policy's \field{owned\_returns}
+  (Section~\ref{sec:holders}) \\
+\code{static\_instance\_mix} & \lang{python}: the name is already bound as the
+  other kind --- pybind11 cannot put static and instance overloads under one
+  name, so the first kind bound wins \\
+\code{static\_name\_collision} & \lang{julia}: a static becomes a module-level
+  function, and an earlier class already defines one with this name and
+  signature \\
 \code{static\_callback\_receiver} & embind cannot give a static member the
   receiver a callback adapter needs \\
 \code{extension\_has\_no\_member\_pointer} & this backend dispatches through a

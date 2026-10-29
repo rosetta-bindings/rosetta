@@ -118,6 +118,58 @@ The flags are emitted \emph{after} the template's own
 override a template default, e.g. \code{"-sALLOW\_MEMORY\_GROWTH=0"} for a
 fixed-size heap.
 
+\section{Per-target build overrides}
+\label{sec:targetbuild}
+
+A library's native and WebAssembly flavours are often two different builds:
+two install trees, different configured headers, and for VTK a wasm build that
+forces \code{-fwasm-exceptions} on every object. One top-level
+\field{user\_lib} / \field{user\_include} cannot name both, so a target can
+override them:
+
+\begin{lstlisting}[style=json]
+"user_include": "$VTK_NATIVE/include/vtk-9.7",
+"user_lib": { "name": "vtkall", "dir": "$VTK_NATIVE/lib", "link": "static" },
+"targets": [
+  { "lang": "python" },
+  { "lang": "wasm",
+    "user_include": "$VTK_WASM/include/vtk-9.7",
+    "user_lib": { "name": "vtkall", "dir": "$VTK_WASM/lib", "link": "static" },
+    "compile_options": ["-DVTK_WASM"],
+    "exceptions": "wasm" }
+]
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{10.2cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Meaning} \\
+\midrule
+\field{compile\_options} & Extra compiler flags for this target's binding
+  (\code{target\_compile\_options}) --- the compile-side twin of
+  \field{link\_options}. \\
+\field{user\_include} & Include directories \textbf{prepended} to the top-level
+  ones for this target, so its copy of a per-platform header wins the
+  lookup. \\
+\field{user\_lib} & Same schema as the top-level key; \textbf{replaces} it for
+  this target. The generator keeps linking the top-level list --- it runs on
+  the host. \\
+\field{exceptions} & \lang{wasm} only: \code{"js"} (emscripten's JS exception
+  model, the default) or \code{"wasm"} (\code{-fwasm-exceptions} on compile
+  \textbf{and} link, with \code{-sDISABLE\_EXCEPTION\_CATCHING=0} removed ---
+  emcc rejects the two together). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{warn}
+Every object in a wasm link must use the same exception model. A library built
+with \code{-fwasm-exceptions} cannot be linked into a module built with the JS
+model, so set \field{exceptions} to match the way the library itself was
+built.
+\end{warn}
+
 \section{Where the built artifact lands}
 \label{sec:outdir}
 

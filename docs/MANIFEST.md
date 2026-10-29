@@ -713,8 +713,9 @@ So the work is split twice:
 Both default to `"auto"`; a positive integer fixes the count. Small manifests
 are unaffected — one slice reproduces the single file of before, byte for byte.
 
-Measured on VTK (12 cores): 106 classes, generator 20 min → 2.6 min; 1542
-classes, generator 33 min over 97 shards. One rule to keep in mind: every shard
+Measured on VTK (12 cores): 106 classes, generator 20 min → 2.6 min; 1541
+classes, generator 26 min over 97 shards, and a python module of 1541 classes
+(≈210 000 members) built from 62 parts in 42 min. One rule to keep in mind: every shard
 includes every bound header, so a header that leaks a macro (VTK's
 `vtkTemporalPathLineFilter.h` leaves `vtkPolyDataAlgorithm` defined) affects all
 the classes after it in every shard — leave such a header out.

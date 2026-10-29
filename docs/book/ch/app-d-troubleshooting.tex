@@ -33,8 +33,24 @@ The likely entries:
   non-template wrapper. \\
 \addlinespace
 \code{hidden\_by\_derived} &
-  C++ name hiding, honoured deliberately. Add \code{using Base::f;} to the
-  derived class if you want the base overloads visible. \\
+  C++ name hiding, honoured deliberately: a base overload whose parameters differ
+  from every derived declaration of the name. Add \code{using Base::f;} to the
+  derived class if you want the base overloads visible. (An override or a
+  same-signature redeclaration is not reported --- the derived one binds.) \\
+\addlinespace
+\code{owned\_pointer\_return} &
+  A factory under a holder policy: its result already carries a reference.
+  Create the object through the class's constructor instead.
+  \S\ref{sec:holders} \\
+\addlinespace
+\code{static\_instance\_mix} &
+  \lang{python}: a static and an instance method share a name, which pybind11
+  refuses at import. The first kind bound wins; expose the other through an
+  \field{extensions} entry under a distinct name. \\
+\addlinespace
+\code{static\_name\_collision} &
+  \lang{julia}: two classes' statics with the same name and signature would
+  become one module-level function. The first one wins. \\
 \addlinespace
 \code{sequence\_not\_adaptable} &
   A registered sequence with no \code{std::vector} boundary adapter on this
@@ -49,6 +65,13 @@ The likely entries:
 
 If the member is not in \code{coverage.json} at all, it was not public, or its
 class is not in \field{classes}.
+
+\subsection*{A whole class is missing}
+
+A class with a protected destructor is skipped by every backend that destroys
+what it wraps. If the library reference-counts its objects (VTK, ITK), declare a
+\field{holders} policy; \lang{python}, \lang{wasm} and \lang{julia} then bind
+it through the library's own smart pointer. \S\ref{sec:holders}
 
 \section{The generated driver does not compile}
 
@@ -75,6 +98,21 @@ A configuration macro is missing from \field{compile\_definitions}. Those are
 emitted for the \emph{generator driver} as well as the binding targets precisely
 so the two cannot disagree --- if you passed the macro some other way, move it
 into the manifest.
+
+\subsection*{\code{constexpr evaluation hit maximum step limit}}
+
+A class with hundreds of members across a deep hierarchy exhausted clang's
+constexpr budget while it was flattened. The emitted generator project already
+raises \code{-fconstexpr-steps}; if you build the driver yourself, raise it
+there too.
+
+\section{Generation is slow}
+
+Reflection is compile-time work in the translation unit that names a class, so
+one generator TU over hundreds of classes takes tens of minutes. Leave
+\field{generator\_shards} at \code{"auto"} (or set a count) and build with
+parallel jobs: the shards compile side by side. The same goes for a huge
+binding source --- \field{binding\_shards} splits it. \S\ref{sec:sharding}
 
 \section{A side-car annotation had no effect}
 
@@ -116,6 +154,13 @@ into the manifest.
   \item \textbf{A wasm target linking a native library.} Every \field{user\_lib}
     entry is taken as \code{lib<name>.a} built with the \emph{same} emsdk. A
     native \code{.so} cannot enter a wasm module.
+  \item \textbf{A wasm link fails on exception symbols.} The library and the
+    module were built with different exception models. Set the target's
+    \field{exceptions} to \code{"wasm"} for a library built with
+    \code{-fwasm-exceptions}. \S\ref{sec:targetbuild}
+  \item \textbf{A native and a wasm build need different libraries.} Give
+    the wasm target its own \field{user\_lib} / \field{user\_include}.
+    \S\ref{sec:targetbuild}
   \item \textbf{Something the library needs was never initialised.} That is what
     \field{module\_init} is for. \S\ref{sec:moduleinit}
 \end{itemize}

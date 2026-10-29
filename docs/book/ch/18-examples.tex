@@ -216,6 +216,9 @@ hand-written wrappers:
 \addlinespace
 \code{triax-rosetta} & Triax --- discrete-element triaxial compression &
   Python, Node.js, WebAssembly \\
+\addlinespace
+\code{vtk-rosetta} & VTK --- visualisation and data processing, its own
+  classes bound directly & Python, Julia, WebAssembly \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -227,6 +230,17 @@ geometry behind raw-pointer accessors, \field{signature} to pick one overload of
 \field{generated\_headers} for the configured \code{version.h}, and
 \field{link\_options} for the wasm NODEFS mount --- in other words, nearly every
 field in Part~II, each for a reason you can see.
+
+The VTK manifest (the \code{direct/} folder of \code{vtk-rosetta}) is the
+reference for a \emph{large} library. Every class has a protected destructor
+and lives by reference counting, so it rests on a \field{holders} policy
+(\S\ref{sec:holders}); names and file paths are \code{const char~*}
+(\S\ref{sec:cstrings}); the native and wasm builds link different VTK
+installs through per-target \field{user\_lib} and \field{exceptions}
+(\S\ref{sec:targetbuild}); and past a hundred classes the generator and the
+bindings are sharded (\S\ref{sec:sharding}). Its 30-class pipeline subset runs
+the same sphere $\to$ decimate $\to$ normals $\to$ mass-properties pipeline
+from Python, Julia and wasm under Node.
 
 \section{Extending a generated binding by hand}
 

@@ -245,6 +245,12 @@ booleans, strings, and \textbf{enums bound in the same module}. Bind the enum
 (list it in \field{classes}) and \code{Winding::CCW} becomes a working Python
 default; leave it out and the default is silently withheld rather than breaking
 the import.
+
+One case needs no enum binding: a \emph{numeric} parameter whose default is
+spelled as an enumerator, as in
+\code{int comp = vtkArrayComponents::AllComponents}. The default is emitted cast
+to the parameter's type (\code{static\_cast<int>(\ldots)}), so pybind converts
+an \code{int}, not the unregistered enum.
 \end{warn}
 
 \section{Precedence}
@@ -288,9 +294,11 @@ stating plainly:
   \item \textbf{Constructors, destructors and operators carry no documentation}
     --- the IR has no slot for it. Constructor parameter \emph{names} do reach
     \code{py::init} and the TypeScript \code{constructor(\ldots)}.
-  \item \textbf{Inherited members need their base bound.} A member flattened in
-    from a base declared in a header no \field{classes} entry names is not
-    covered; list that base as a class to reach it.
+  \item \textbf{Inherited members need their base's header read.} A member
+    flattened in from a base is documented --- doc comment \emph{and} default
+    arguments --- from the class that declares it, so a derived class's copy
+    binds exactly like the base's. That takes the base's header, though: when
+    no \field{classes} entry names it, list the base as a class.
   \item \textbf{Template classes are not matched.} The IR names a
     specialisation (\code{SpatialFieldND<2>}); the header declares a template.
 \end{itemize}

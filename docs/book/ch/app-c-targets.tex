@@ -180,6 +180,7 @@ every other & skips the member --- register the concrete type under
 \lang{lua} & string, via a copy adapter & native (sol2) \\
 \lang{node} & string, via a copy adapter & the JS object adopts the pointer;
   untrampolined pointees only \\
+\lang{julia} & string, via a copy adapter & --- \\
 \lang{typescript} & \code{string} & the pointee type \\
 \bottomrule
 \end{tabular}
@@ -187,6 +188,30 @@ every other & skips the member --- register the concrete type under
 
 A \code{shared\_ptr<T>} \emph{parameter} is skipped everywhere --- take
 \code{const T\&}.
+
+C strings (\code{const char~*}, \code{char~*}) and the large-library features:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{\code{lang}} & \textbf{\code{const char *}} & \field{holders} &
+  \field{binding\_shards} \\
+\midrule
+\lang{python}     & \yes & \yes & \yes \\
+\lang{nanobind}   & \yes &      &      \\
+\lang{node}       & \yes &      &      \\
+\lang{wasm}       & \yes & \yes & \yes \\
+\lang{lua}        & \yes &      &      \\
+\lang{julia}      & \yes & \yes & \yes \\
+\lang{typescript} & \code{string} &  &      \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A backend without holder support keeps skipping reference-counted classes as
+non-destructible (\S\ref{sec:holders}); one without binding shards writes a
+single source file whatever the setting (\S\ref{sec:sharding}).
 
 \section{Build shapes for \code{--build}}
 

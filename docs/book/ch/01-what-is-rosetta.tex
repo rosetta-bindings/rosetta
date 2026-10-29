@@ -124,8 +124,10 @@ The manifest above names one class. Reflection supplies the rest of it:
   \item \textbf{Constructors} --- every overload, not just the default one.
   \item \textbf{Inheritance}. Public base fields and methods are flattened into
     the derived binding; a derived declaration shadows the base one, and a
-    virtual diamond collapses to a single member. Virtual methods are flagged,
-    so backends that can generate trampolines do.
+    virtual diamond collapses to a single member. A class whose direct base is
+    not bound (a template, say) binds as a subclass of its nearest bound
+    ancestor. Virtual methods are flagged, so backends that can generate
+    trampolines do.
   \item \textbf{Overload sets}. The whole set reaches the IR; what each target
     does with it depends on whether its runtime can dispatch on argument types
     (Chapter~\ref{ch:coverage}).

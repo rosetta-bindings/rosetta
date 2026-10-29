@@ -414,6 +414,58 @@ fails the load rather than producing a wheel that is quietly missing a
 package. Like \field{wheel}, the three fields are per-target and
 \lang{python} / \lang{nanobind} only.
 
+\section{Large libraries: sharding}
+\label{sec:sharding}
+
+Everything rosetta knows about a class it learns by reflection, which is
+compile-time work done in the translation unit that names the class. Over a few
+dozen classes that costs nothing noticeable; over VTK it does --- one generator
+TU reflecting 100 VTK classes took 20 minutes, and one \code{auto\_pybind.cpp}
+for the whole library would be 80\,MB. So the work is split twice:
+
+\begin{itemize}
+  \item \textbf{The generator.} \code{rosetta\_gen} writes \code{shard\_K.cpp}
+    files next to the driver, each reflecting a contiguous slice of
+    \field{classes} (\code{rosetta::describe\_into<\ldots>}). They compile in
+    parallel and link into the same \code{generator}, whose \code{main()}
+    concatenates their IR in manifest order and runs the backends once
+    (\code{rosetta::generate\_described}). Nothing is serialized: the IR never
+    leaves the process.
+  \item \textbf{The bindings.} The \lang{python}, \lang{wasm} and \lang{julia}
+    backends write \code{auto\_<backend>\_part\_K.cpp} files, each registering
+    a slice of the classes, and list them in the emitted CMake. pybind11 parts
+    are functions the module entry calls in order; embind parts are
+    \code{EMSCRIPTEN\_BINDINGS} blocks of their own; jlcxx parts receive the
+    module after every \code{add\_type} has run.
+\end{itemize}
+
+\begin{lstlisting}[style=json]
+"generator_shards": "auto",
+"binding_shards": "auto"
+\end{lstlisting}
+
+Both default to \code{"auto"}; a positive integer fixes the count.
+\code{"auto"} keeps one generator shard up to 24 classes (then about 16 classes
+per shard) and one binding part up to 30 classes (then about 25 per part), so a
+small manifest's output is byte-for-byte what it was before sharding existed.
+
+Measured on VTK: 106 classes, generator 20 minutes $\to$
+2.6 minutes; all 1541 exported classes of 23 modules, 26 minutes over 97
+shards, and a Python module of 1541 classes (about 210\,000 members) built from
+62 parts in 42 minutes.
+
+\begin{warn}
+Every shard includes every bound header. A header that leaks a macro --- VTK's
+\code{vtkTemporalPathLineFilter.h} leaves \code{vtkPolyDataAlgorithm} defined
+--- therefore affects all the classes after it in \emph{every} shard. Leave such
+a header out.
+\end{warn}
+
+A class with hundreds of members across a deep hierarchy can also exhaust
+clang's default constexpr budget while it is flattened (``constexpr evaluation
+hit maximum step limit''); the emitted generator project raises
+\code{-fconstexpr-steps} for that reason, and you should not need to.
+
 \section{A realistic manifest}
 
 Putting the last four chapters together --- this is roughly the shape a real

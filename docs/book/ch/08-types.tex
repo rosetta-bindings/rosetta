@@ -240,9 +240,10 @@ It is described as \code{kind: "string"} with an \code{is\_path} flag.
   \code{<pybind11/stl/filesystem.h>} / \code{<nanobind/stl/filesystem.h>} ---
   callers pass a \code{str} \emph{or} any \code{os.PathLike}, and a returned
   path comes back as \code{pathlib.Path}. \\
-\lang{node} / \lang{wasm} / \lang{lua} & Through the same copy adapter the
-  foreign containers use: the boundary declares \code{std::string}, the emitted
-  code builds a path from it and calls \code{.string()} on the way back. \\
+\lang{node} / \lang{wasm} / \lang{lua} / \lang{julia} & Through the same copy
+  adapter the foreign containers use: the boundary declares \code{std::string},
+  the emitted code builds a path from it and calls \code{.string()} on the way
+  back. \\
 \lang{typescript} & Declares \code{string}. \\
 \bottomrule
 \end{tabular}
@@ -289,6 +290,155 @@ Two limits:
 Both work with a non-copyable \code{T} --- which is the point, since a class
 handed out by a factory usually is one.
 
+\section{C strings}
+\label{sec:cstrings}
+
+Every C API spells names and paths as \code{const char~*}:
+\code{SetFileName(const char *)}, \code{const char *GetName()},
+\code{GetArray(const char *name)}. To the walk that is a pointer to \code{char},
+and until recently every such member was skipped --- on a library like VTK, the
+difference between a pipeline and a pipeline that can read and write files.
+
+A \code{const char~*} or \code{char~*} in a signature now crosses as a
+\textbf{string}. It is a fourth adapted shape, beside sequences, matrices and
+paths, and it goes through the same copy adapter:
+
+\begin{itemize}
+  \item \textbf{In}, the boundary declares \code{std::string}, and the callee
+    receives the string's \code{data()} --- valid for the duration of the call,
+    which is all a C API taking a name may assume.
+  \item \textbf{Out}, the returned pointer is copied into a \code{std::string};
+    a \code{nullptr} comes back as the empty string.
+\end{itemize}
+
+Supported by \lang{python}, \lang{nanobind}, \lang{node}, \lang{wasm},
+\lang{lua} and \lang{julia}; \lang{typescript} declares \code{string}. The IR
+describes the type as \code{kind: "unknown"} with an \code{is\_cstring} flag, so
+a backend without the adapter keeps skipping the member with a reason, exactly
+as before. Public \code{char~*} \emph{fields} are left out: a setter would have
+to decide who owns the buffer, and nothing in the declaration says.
+
+Two neighbouring shapes are deliberately \textbf{not} bound, each recorded as
+a skip rather than a compile error:
+
+\begin{itemize}
+  \item \textbf{References to pointers}, \code{T *\&} and
+    \code{const char *\&}: output handles that no binding can write back
+    through.
+  \item \textbf{C++ streams} (\lang{python}): \code{PrintSelf(std::ostream \&,
+    \ldots)} or \code{Write(std::ostream \&)} have no caster, so the binding
+    could never be called.
+\end{itemize}
+
+\section{Reference-counted classes}
+\label{sec:holders}
+
+Some libraries never let a caller destroy an object. Every VTK class derives
+from \code{vtkObjectBase}, whose destructor is \textbf{protected}: an object is
+made by \code{T::New()} (one reference), shared with \code{Register()},
+released with \code{UnRegister()}, and freed when the count reaches zero. The
+pipeline hands out \textbf{borrowed} raw pointers
+(\code{vtkAlgorithm::GetOutput()}) that the caller must reference before
+keeping. Every runtime backend destroys what it wraps, so such a class used to be
+skipped outright --- a whole library at once.
+
+A \emph{holder policy} tells rosetta how the library manages lifetime instead:
+
+\begin{lstlisting}[style=json]
+"holders": [{
+  "base":    "vtkObjectBase",
+  "holder":  "vtkSmartPointer",
+  "header":  "vtkSmartPointer.h",
+  "get":     "GetPointer",
+  "retain":  "Register(nullptr)",
+  "release": "UnRegister(nullptr)",
+  "factory": "New",
+  "owned_returns": ["New*", "CreateDataArray", "CreateArray"]
+}]
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcL{8.8cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Req.} & \textbf{Meaning} \\
+\midrule
+\field{base} & yes & The root class. Every bound class deriving from it (and it
+  itself) gets the policy. \\
+\field{holder} & yes & The library's intrusive smart pointer, a class template:
+  \code{holder<T>(T*)} takes a reference, its destructor drops one. \\
+\field{header} & --- & Its \code{\#include}. \\
+\field{get} & --- & The holder's member returning the \code{T*} (default
+  \code{get}). \\
+\field{retain} / \field{release} & yes & Member calls on a \code{T*} that take /
+  drop one reference. \\
+\field{factory} & --- & A static member creating an object that already carries
+  one reference. It becomes the script-side \textbf{constructor} of every class
+  where \code{T::factory()} returns exactly \code{T*} and \code{T} is not
+  abstract. \\
+\field{owned\_returns} & --- & Method-name globs (\code{*}, \code{?}) whose
+  pointer result \textbf{already carries a reference}. The \field{factory} is
+  always included. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{rosetta\_gen} turns each entry into a specialisation of
+\code{rosetta::holder\_policy<T>} in \code{bindings.h}, selected by derivation
+from \field{base}; \code{<rosetta/holder.h>} documents the trait, and you can
+write the specialisation yourself for programmatic use. The one part only the
+compiler can answer is which classes are \emph{constructible}: a class that
+declares no \code{New()} of its own inherits its base's, which returns the
+\emph{base} type --- so the check is that \code{T::New()} returns exactly
+\code{T*}.
+
+What each backend does with it:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{10.2cm}@{}}
+\toprule
+\textbf{Backend} & \textbf{Behaviour} \\
+\midrule
+\lang{python} & \code{PYBIND11\_DECLARE\_HOLDER\_TYPE(T, holder<T>, true)} ---
+  an \emph{intrusive} holder, so \textbf{every} \code{T*} pybind11 wraps, a
+  borrowed \code{GetOutput()} included, takes a reference, and the Python
+  object's death drops it. The factory is \code{py::init}; no trampoline, since
+  script-side subclassing needs a public constructor. \\
+\addlinespace
+\lang{wasm} & \code{smart\_ptr\_trait<holder<T>>} with \code{INTRUSIVE}
+  sharing, and a \code{raw\_destructor<T>} specialisation (the default
+  \code{delete} does not compile against a protected destructor). A pointer
+  return is handed out \textbf{inside the holder}, so every JS handle owns one
+  reference and \code{.delete()} drops exactly that one; embind downcasts it to
+  the object's dynamic type. \\
+\addlinespace
+\lang{julia} & jlcxx's own ownership model: a pointer crossing into Julia is
+  retained and boxed as its \textbf{most-derived bound class}
+  (\code{GetOutputDataObject()} arrives as a \code{vtkPolyData}), with a
+  finalizer that releases it. A held-pointer parameter also gets a by-reference
+  overload, since a Julia box dispatches as \code{T}, never as the
+  \code{CxxPtr\{T\}} a \code{T*} maps to. \\
+\addlinespace
+every other backend & Keeps skipping the classes as non-destructible. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+\textbf{Why factories are skipped.} Every pointer a binding hands out takes a
+reference of its own. A method listed in \field{owned\_returns} returns a
+pointer that \emph{already} carries one --- wrapping it would take a second and
+leak the first. Such methods are skipped with the reason
+\code{owned\_pointer\_return}; scripts create objects through the constructor
+instead.
+\end{note}
+
+Run end to end on 30 of VTK's own classes from Python, Julia and wasm under
+Node: a sphere $\to$ decimate $\to$ normals $\to$ mass-properties pipeline,
+polymorphic returns, and 20\,000 create/drop cycles leaving the pipeline
+output's reference count unchanged.
+
 \section{Deciding what you need}
 
 \begin{center}
@@ -306,6 +456,9 @@ your own \code{Vec<T>} template & \code{"sequences": ["my::Vec"]} \\
 a 2-D grid of your own & \code{"matrices": ["my::Grid"]} \\
 \code{std::filesystem::path} & nothing \\
 \code{std::shared\_ptr<Bound>} returned & nothing \\
+\code{const char *} & nothing \\
+classes with a protected destructor and a reference count &
+  a \field{holders} policy (Section~\ref{sec:holders}) \\
 a \code{std::function} parameter & nothing will help --- the member is skipped,
   with a reason. Add an \field{extensions} wrapper if you need it. \\
 \bottomrule
