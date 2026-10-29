@@ -31,11 +31,16 @@
                      "confirm": "Reset the origin, size and spin of this mesh?" },
   "subdivide":     { "doc": "Split every triangle into four", "button": "Subdivide",
                      "expensive": true },
+  "decimate":      { "doc": "Simplify to half the triangles (a Decimator with its defaults); returns its report",
+                     "button": "Decimate", "expensive": true },
+  "relax":         { "doc": "Run 10 relaxation passes toward equilateral triangles (a Relaxer with its defaults); returns its report",
+                     "button": "Relax", "expensive": true },
   "cube":          { "doc": "Build a unit cube" },
   "plane":         { "doc": "Build a unit plane in XZ" },
   "sphere":        { "doc": "Build a UV sphere with rings x segments",
                      "default": { "rings": 16, "segments": 24 } },
   "bunny":         { "doc": "The Stanford bunny, recentred into a unit box" },
   "onProgress":    { "doc": "Register a progress callback" },
-  "setPositions":  { "doc": "Replace the vertex positions; ignored unless the count matches" }
+  "setPositions":  { "doc": "Replace the vertex positions; ignored unless the count matches" },
+  "setGeometry":   { "doc": "Replace positions and triangles; ignored unless every index names a vertex" }
 }

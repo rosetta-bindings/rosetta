@@ -1,0 +1,18 @@
+{
+  "azimuth":         { "doc": "Direction of the plane's normal around the vertical axis, from +X", "range": [0, 360], "unit": "deg",
+                       "label": "Azimuth", "widget": "slider" },
+  "elevation":       { "doc": "Tilt of the plane's normal above the horizontal; 90 points straight up, so the plane is horizontal", "range": [-90, 90], "unit": "deg",
+                       "label": "Elevation", "widget": "slider" },
+  "offset":          { "doc": "Distance of the plane from the centre of the mesh's bounding box, along its normal, in object units",
+                       "range": [-1, 1], "label": "Offset", "widget": "slider" },
+  "keep":            { "doc": "Which side stays: above is the side the normal points to",
+                       "combobox": ["above", "below"], "label": "Keep", "widget": "radio" },
+
+  "trianglesBefore": { "doc": "Triangles before the last cut", "readonly": true, "label": "Triangles before" },
+  "trianglesAfter":  { "doc": "Triangles after the last cut", "readonly": true, "label": "Triangles after" },
+  "newVertices":     { "doc": "Vertices created along the cut", "readonly": true, "label": "New vertices" },
+
+  "run":             { "doc": "Cut the mesh in place and keep one side; leaves it untouched when nothing would remain",
+                       "button": "Cut", "expensive": true },
+  "report":          { "doc": "One line describing the last cut", "button": "Report" }
+}

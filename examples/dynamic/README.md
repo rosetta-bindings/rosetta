@@ -52,6 +52,45 @@ it is reachable from the console as `static b scene::Mesh bunny`; it gets a
 property panel; and it draws. That is the claim the whole example exists to
 make, and it is the cheapest possible test of it.
 
+The same goes for an algorithm. `Decimator` (quadric-error edge collapse,
+Garland & Heckbert) was added as one class in `scene.h`, one annotation file and
+one manifest line. Its tuning parameters are public fields, so it arrives with a
+property panel (*Keep ratio*, *Max error*, *Preserve boundary*, and a
+**Decimate** button), a console command and MCP tools:
+
+```text
+> new dec scene::Decimator
+> set dec ratio 0.05
+> call dec run $bunny
+> call dec report
+  => "decimated 69451 -> 3473 triangles in ... collapses: worst error ..., mean q=..."
+```
+
+It simplifies the 69 451-triangle bunny to 10% in about 0.1 s and keeps the mesh
+manifold. Every mesh's **Actions** row also has **Decimate** and **Relax**
+buttons. They come from two no-argument methods on `Mesh`, `decimate()` and
+`relax()`, which run the solvers with their default settings (keep half the
+triangles; 10 passes) and return the report the panel shows. For other settings,
+use a `Decimator` or `Relaxer` object as above.
+
+`Cutter` is the third solver. It cuts a mesh with a plane and keeps one side.
+The plane is set by `azimuth` and `elevation` (the direction of its normal, in
+degrees; the default 90° elevation is a horizontal plane) and `offset` (its
+distance from the mesh's bounding-box centre). `keep` chooses `above` or
+`below`. Triangles crossing the plane are clipped exactly, and each new vertex on
+the cut is shared by the triangles on both sides, so the cut edge has no cracks.
+The cut is left open.
+
+```text
+> new cut scene::Cutter
+> set cut elevation 40
+> set cut offset 0.05
+> call cut run $bunny
+``` Decimation lowers triangle quality (mean 0.834 → 0.76 at 10%), and
+`Relaxer` brings it back, which makes *"decimate the bunny to 10%, then relax it
+until the worst triangle is above 0.1"* a good two-solver request for the Claude
+panel.
+
 ### What it costs, measured
 
 The bunny is also where the dynamic path stops being free. Pulling a mesh across
@@ -208,16 +247,58 @@ sandboxed, so it is off by default. The model defaults to `claude-opus-5`;
 override it with `ROSETTA_CLAUDE_MODEL`. Details are in the
 [design note](../../docs/MCP.md#in-app-chat-the-qt-viewers-claude-panel).
 
+### Talking to the scene (voice input)
+
+The Claude tab can take speech instead of typing. Click 🎤 (or press F8), say
+*"relax the bunny until its worst triangle is above 0.1, then make it glossy"*,
+and click again. The recording is transcribed **on this machine** by
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp), so no audio is sent
+anywhere. The text lands in the prompt box so you can check it before pressing
+Enter, or goes straight to Claude if **send when done** is ticked. To stop and send
+in one step, press **Enter** (or Send) while speaking: the recording stops and the
+transcript goes to Claude as soon as it is ready, wherever the keyboard focus is. Everything
+after the prompt box is unchanged: the same panel, the same MCP tools, the same
+live scene.
+
+```bash
+cmake -S . -B build -DROSETTA_VOICE=ON   # fetches and builds whisper.cpp (once)
+cmake -P fetch_whisper_model.cmake       # downloads models/ggml-base.en.bin (148 MB)
+./run.sh viewer
+```
+
+Without `-DROSETTA_VOICE=ON`, voice is enabled only when an installed
+whisper.cpp is found (`brew install whisper-cpp`, vcpkg, or `-Dwhisper_DIR=…`).
+`-DROSETTA_VOICE=OFF` leaves it out. Audio capture uses
+[miniaudio](https://miniaud.io), a single header that covers CoreAudio, WASAPI and
+ALSA/PulseAudio, so it builds the same on macOS, Windows and Linux and needs no
+Qt Multimedia.
+
+whisper's initial prompt is filled with what the registry knows: the objects in
+the list, the bound class names, and their method and field names. With it,
+whisper writes *Relaxer* and *min_quality* rather than *relaxer* and *min
+quality*.
+
+| Variable | |
+|---|---|
+| `ROSETTA_WHISPER_MODEL` | another model file, e.g. `cmake -DMODEL=small.en -P fetch_whisper_model.cmake` for better accuracy, or `-DMODEL=base` for languages other than English |
+| `ROSETTA_WHISPER_LANG` | spoken language (`en`, `fr`, …, `auto`); defaults to `en` for an English-only `.en` model, `auto` otherwise |
+| `ROSETTA_WHISPER_GPU=0` | transcribe on the CPU (the default uses Metal / CUDA / Vulkan when whisper.cpp was built with them) |
+
+On macOS the first recording asks for microphone access for the app that
+launched the viewer (your terminal). After the first transcription, which can
+take a few seconds while Metal compiles and caches its shaders, a sentence takes
+well under a second on Apple silicon.
+
 ## Layout
 
 | File | |
 |---|---|
 | [`scene.h`](scene.h) | the "existing library" — plain C++, never modified |
-| [`Mesh.ann.json`](Mesh.ann.json), [`Vec3.ann.json`](Vec3.ann.json) | annotations, out of line, so the header stays plain ([details](../../docs/OUT_OF_LINE_ANNOTATIONS.md)) |
+| [`Mesh.ann.json`](Mesh.ann.json), [`Vec3.ann.json`](Vec3.ann.json), [`Relaxer.ann.json`](Relaxer.ann.json), [`Decimator.ann.json`](Decimator.ann.json), [`Cutter.ann.json`](Cutter.ann.json) | annotations, out of line, so the header stays plain ([details](../../docs/OUT_OF_LINE_ANNOTATIONS.md)) |
 | [`manifest.json`](manifest.json) | targets `dynamic`, `mcp` (and `markdown`, for contrast) |
 | [`interp.h`](interp.h) | the interpreter + the metadata queries a UI needs — **shared verbatim** by both front-ends |
 | [`demo.cpp`](demo.cpp) | terminal front-end |
-| [`qt/`](qt) | Qt front-end: `sceneview.h` (3D), `propertypanel.h` (widgets), `console.h`, `claudepanel.h` (chat with Claude), `scenesync.h` (scene ⇄ MCP handle table), `mainwindow.h`, `viewer.cpp` |
+| [`qt/`](qt) | Qt front-end: `sceneview.h` (3D), `propertypanel.h` (widgets), `console.h`, `claudepanel.h` (chat with Claude), `voice.{h,cpp}` (speech input: miniaudio + whisper.cpp), `scenesync.h` (scene ⇄ MCP handle table), `mainwindow.h`, `viewer.cpp` |
 | [`CMakeLists.txt`](CMakeLists.txt) | builds the consumers **next to** the generated TU; the Qt target is optional |
 | `bindings/dynamic/` | generated: `auto_dynamic.{h,cpp}`, `inspect.cpp`, `CMakeLists.txt` |
 | `bindings/mcp/` | generated: the same tables + `mcp_server.cpp`, a standalone CMake project |

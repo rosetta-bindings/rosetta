@@ -2,3 +2,7 @@ generator
 bindings
 gen
 build
+
+# the voice-input model downloader (the root .gitignore drops *.cmake)
+!fetch_whisper_model.cmake
+models/

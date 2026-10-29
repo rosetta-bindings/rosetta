@@ -135,3 +135,73 @@ if(ROSETTA_MCP_PYTHON)
     target_compile_definitions(viewer PRIVATE ROSETTA_MCP_PYTHON=1)
     message(STATUS "Claude panel: run_python enabled (${Python_EXECUTABLE}, not sandboxed)")
 endif()
+
+# ---- voice input (whisper.cpp) ---------------------------------------------
+# A microphone button in the Claude panel: speech is transcribed LOCALLY by
+# whisper.cpp and lands in the prompt box. Audio capture is miniaudio (one
+# header: CoreAudio / WASAPI / ALSA+PulseAudio), so no Qt Multimedia is needed.
+#   AUTO (default): enabled when an installed whisper.cpp is found
+#                   (brew install whisper-cpp, vcpkg, or -Dwhisper_DIR=...)
+#   ON:             also fetch and build whisper.cpp when none is installed
+#   OFF:            no voice input
+# The model is a separate download:  cmake -P fetch_whisper_model.cmake
+set(ROSETTA_VOICE "AUTO" CACHE STRING "Claude panel voice input: AUTO, ON or OFF")
+set_property(CACHE ROSETTA_VOICE PROPERTY STRINGS AUTO ON OFF)
+
+if(NOT ROSETTA_VOICE STREQUAL "OFF")
+    find_package(whisper CONFIG QUIET)
+    if(NOT whisper_FOUND AND ROSETTA_VOICE STREQUAL "ON")
+        include(FetchContent)
+        # Plain variables, not cache entries: they shadow whisper's options
+        # (CMP0077) without leaking into the rest of the build.
+        set(WHISPER_BUILD_EXAMPLES OFF)
+        set(WHISPER_BUILD_TESTS    OFF)
+        set(WHISPER_BUILD_SERVER   OFF)
+        set(BUILD_SHARED_LIBS      OFF) # one self-contained viewer binary
+        set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+        FetchContent_Declare(whisper
+            GIT_REPOSITORY https://github.com/ggml-org/whisper.cpp.git
+            GIT_TAG        v1.8.7
+            GIT_SHALLOW    TRUE)
+        FetchContent_MakeAvailable(whisper)
+        set(whisper_FOUND TRUE)
+    endif()
+
+    if(whisper_FOUND)
+        include(FetchContent)
+        # Header only: SOURCE_SUBDIR points at a directory with no
+        # CMakeLists.txt, so MakeAvailable downloads without building anything.
+        FetchContent_Declare(miniaudio
+            GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+            GIT_TAG        0.11.25
+            GIT_SHALLOW    TRUE
+            SOURCE_SUBDIR  no-build)
+        FetchContent_MakeAvailable(miniaudio)
+
+        target_sources(viewer PRIVATE qt/voice.h qt/voice.cpp)
+        target_include_directories(viewer PRIVATE ${miniaudio_SOURCE_DIR})
+        target_link_libraries(viewer PRIVATE whisper)
+        target_compile_definitions(viewer PRIVATE
+            ROSETTA_VOICE=1
+            ROSETTA_VOICE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        # miniaudio's platform backends. Windows (WASAPI) needs nothing extra;
+        # on Linux it dlopens ALSA / PulseAudio / JACK at run time.
+        if(APPLE)
+            target_link_libraries(viewer PRIVATE
+                "-framework CoreFoundation" "-framework CoreAudio" "-framework AudioToolbox")
+        elseif(UNIX)
+            find_package(Threads REQUIRED)
+            target_link_libraries(viewer PRIVATE ${CMAKE_DL_LIBS} Threads::Threads m)
+        endif()
+
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/models/ggml-base.en.bin")
+            message(STATUS "Claude panel: voice input enabled — download a model with "
+                           "`cmake -P fetch_whisper_model.cmake` (or set ROSETTA_WHISPER_MODEL)")
+        else()
+            message(STATUS "Claude panel: voice input enabled (whisper.cpp)")
+        endif()
+    else()
+        message(STATUS "Claude panel: no voice input (whisper.cpp not found; "
+                       "-DROSETTA_VOICE=ON fetches and builds it)")
+    endif()
+endif()

@@ -18,9 +18,12 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <map>
+#include <queue>
 #include <string>
 #include <vector>
 
@@ -124,6 +127,13 @@ namespace scene {
             v_ = std::move(nv);
             t_ = std::move(nt);
         }
+
+        // One-click versions of the two solvers below, with their default
+        // settings — what an Actions button can call, since a button passes
+        // no arguments. Each returns the solver's report. For other settings,
+        // create a Decimator / Relaxer and call its run() on this mesh.
+        std::string decimate(); // keep half the triangles
+        std::string relax();    // 10 passes, step 0.5, shape preserved
 
         // ---- factories ---------------------------------------------------
         static Mesh cube() {
@@ -247,6 +257,24 @@ namespace scene {
             if (p.size() == v_.size()) {
                 v_ = p;
             }
+        }
+
+        // Replace the geometry outright — what a solver that changes the
+        // TOPOLOGY (Decimator) needs, where setPositions() only moves vertices.
+        // Ignored unless the positions are xyz triples and every index names
+        // one of them.
+        void setGeometry(const std::vector<double> &p, const std::vector<int> &t) {
+            const int n = static_cast<int>(p.size() / 3);
+            if (p.size() % 3 != 0 || t.size() % 3 != 0) {
+                return;
+            }
+            for (int i : t) {
+                if (i < 0 || i >= n) {
+                    return;
+                }
+            }
+            v_ = p;
+            t_ = t;
         }
 
     private:
@@ -487,5 +515,670 @@ namespace scene {
             return {sum / static_cast<double>(count), worst};
         }
     };
+
+    /**
+     * @brief Simplifies a triangle mesh by quadric-error edge collapse.
+     *
+     * The second solver, and the one that changes TOPOLOGY: Relaxer moves
+     * vertices, Decimator removes them. Same shape as Relaxer otherwise —
+     * tuning parameters as public fields, one run(Mesh &) that works in place,
+     * outcome fields a UI shows read-only — so it gets a property panel, a
+     * console command and MCP tools without one line of UI code.
+     *
+     * The scheme is Garland & Heckbert's (SIGGRAPH 1997). Every vertex carries
+     * a quadric: the sum of the squared-distance forms of the planes of its
+     * triangles. Collapsing an edge merges its two vertices into one, placed
+     * where the summed quadric is smallest, and its cost is the quadric's value
+     * there — the squared distance to the planes the original surface had, so
+     * flat regions go first and creases and tips last. Edges are collapsed
+     * cheapest first until `ratio` of the triangles remain, or the next one
+     * would move the surface by more than `maxError`.
+     *
+     * A collapse is refused when it would break the mesh rather than coarsen
+     * it: when the edge's endpoints share neighbours other than the ones
+     * across its own triangles (the link condition — the result would not be a
+     * manifold), or when any triangle around it would turn by more than ~80°
+     * (a fold-over). With `preserveBoundary`, open rims are held by
+     * heavily weighted planes perpendicular to them, so a hole does not grow.
+     */
+    class Decimator {
+    public:
+        Decimator() = default;
+
+        // ---- tuning: what a property sheet edits ------------------------
+        double ratio            = 0.5;  // slider [0.01, 1], fraction of triangles to keep
+        double maxError         = 0.0;  // [0, 0.1], object units; 0 = no limit
+        bool   preserveBoundary = true; // hold open rims in place
+
+        // ---- outcome: filled by run(), read-only to a UI ----------------
+        int    trianglesBefore = 0;
+        int    trianglesAfter  = 0;
+        int    collapses       = 0;
+        double worstError      = 0.0; // largest surface deviation a collapse introduced
+        double meanQuality     = 0.0;
+
+        /**
+         * @brief Decimate `m` in place.
+         *
+         * Like Relaxer::run, takes the mesh by mutable reference — the
+         * dynamic model passes it without a copy, so the view redraws the
+         * very object that was simplified.
+         */
+        void run(Mesh &m) {
+            std::vector<double>    p   = m.positions();
+            const std::vector<int> tin = m.triangles();
+            const int              n   = static_cast<int>(p.size() / 3);
+
+            // Coincident vertices are one vertex as far as the surface goes:
+            // subdivide() and the sphere's seam both leave copies, and
+            // unwelded, every edge between them reads as an open rim.
+            const std::vector<int> weld = welded(p);
+
+            std::vector<std::array<int, 3>> F;
+            F.reserve(tin.size() / 3);
+            for (std::size_t i = 0; i + 2 < tin.size(); i += 3) {
+                if (tin[i] < 0 || tin[i + 1] < 0 || tin[i + 2] < 0 || tin[i] >= n ||
+                    tin[i + 1] >= n || tin[i + 2] >= n) {
+                    continue;
+                }
+                const int a = weld[tin[i]], b = weld[tin[i + 1]], c = weld[tin[i + 2]];
+                if (a < 0 || b < 0 || c < 0 || a >= n || b >= n || c >= n || a == b ||
+                    b == c || a == c) {
+                    continue; // out of range or degenerate: dropped
+                }
+                F.push_back({a, b, c});
+            }
+            trianglesBefore = static_cast<int>(F.size());
+            collapses       = 0;
+            worstError      = 0.0;
+            if (F.empty()) {
+                trianglesAfter = 0;
+                meanQuality    = 0.0;
+                return;
+            }
+
+            const double keep   = ratio < 0.001 ? 0.001 : (ratio > 1.0 ? 1.0 : ratio);
+            const int    target = std::max(1, static_cast<int>(std::ceil(keep * F.size())));
+
+            std::vector<char>             faceAlive(F.size(), 1);
+            std::vector<std::vector<int>> vf(n); // vertex -> incident faces
+            for (int f = 0; f < static_cast<int>(F.size()); ++f) {
+                for (int v : F[f]) {
+                    vf[v].push_back(f);
+                }
+            }
+
+            // ---- quadrics ----------------------------------------------------
+            std::vector<Quadric> Q(n);
+            for (const auto &f : F) {
+                double nrm[3];
+                cross(p, f[0], f[1], f[2], nrm);
+                const double len = std::sqrt(dot3(nrm, nrm));
+                if (len < 1e-30) {
+                    continue;
+                }
+                for (double &c : nrm) {
+                    c /= len;
+                }
+                const double d = -(nrm[0] * p[3 * f[0]] + nrm[1] * p[3 * f[0] + 1] +
+                                   nrm[2] * p[3 * f[0] + 2]);
+                for (int v : f) {
+                    Q[v].addPlane(nrm[0], nrm[1], nrm[2], d, 1.0);
+                }
+            }
+
+            // Edges, each with how many faces use it (1 = boundary).
+            std::vector<std::pair<std::pair<int, int>, int>> tally; // (edge, face)
+            tally.reserve(F.size() * 3);
+            for (int f = 0; f < static_cast<int>(F.size()); ++f) {
+                for (int e = 0; e < 3; ++e) {
+                    const int a = F[f][e], b = F[f][(e + 1) % 3];
+                    tally.push_back({{std::min(a, b), std::max(a, b)}, f});
+                }
+            }
+            std::sort(tally.begin(), tally.end());
+            std::vector<char>                onBoundary(n, 0);
+            std::vector<std::pair<int, int>> edges;
+            for (std::size_t i = 0; i < tally.size();) {
+                std::size_t j = i;
+                while (j < tally.size() && tally[j].first == tally[i].first) {
+                    ++j;
+                }
+                const auto [a, b] = tally[i].first;
+                edges.push_back({a, b});
+                if (j - i == 1) {
+                    onBoundary[a] = onBoundary[b] = 1;
+                    if (preserveBoundary) {
+                        // A plane through the rim edge, perpendicular to its
+                        // face: moving off the rim costs, so the rim stays.
+                        double fn[3];
+                        const auto &f = F[tally[i].second];
+                        cross(p, f[0], f[1], f[2], fn);
+                        const double e[3] = {p[3 * b] - p[3 * a], p[3 * b + 1] - p[3 * a + 1],
+                                             p[3 * b + 2] - p[3 * a + 2]};
+                        double pn[3] = {e[1] * fn[2] - e[2] * fn[1], e[2] * fn[0] - e[0] * fn[2],
+                                        e[0] * fn[1] - e[1] * fn[0]};
+                        const double len = std::sqrt(dot3(pn, pn));
+                        if (len > 1e-30) {
+                            for (double &c : pn) {
+                                c /= len;
+                            }
+                            const double d = -(pn[0] * p[3 * a] + pn[1] * p[3 * a + 1] +
+                                               pn[2] * p[3 * a + 2]);
+                            Q[a].addPlane(pn[0], pn[1], pn[2], d, k_boundaryWeight);
+                            Q[b].addPlane(pn[0], pn[1], pn[2], d, k_boundaryWeight);
+                        }
+                    }
+                }
+                i = j;
+            }
+
+            // ---- the queue -----------------------------------------------------
+            // Lazy deletion: an entry records both endpoints' versions, and is
+            // stale once either vertex has been collapsed into or away.
+            std::vector<unsigned> ver(n, 0);
+            std::vector<char>     vAlive(n, 1);
+            std::priority_queue<Candidate, std::vector<Candidate>, std::greater<Candidate>> heap;
+            const auto push = [&](int a, int b) {
+                Candidate c{0.0, a, b, ver[a], ver[b], {0, 0, 0}};
+                place(Q[a] + Q[b], p, a, b, c);
+                heap.push(c);
+            };
+            for (const auto &[a, b] : edges) {
+                push(a, b);
+            }
+
+            std::vector<int> ra, rb;
+            const auto ring = [&](int v, std::vector<int> &out) {
+                out.clear();
+                for (int f : vf[v]) {
+                    if (faceAlive[f]) {
+                        for (int w : F[f]) {
+                            if (w != v) {
+                                out.push_back(w);
+                            }
+                        }
+                    }
+                }
+                std::sort(out.begin(), out.end());
+                out.erase(std::unique(out.begin(), out.end()), out.end());
+            };
+
+            int alive = static_cast<int>(F.size());
+            while (alive > target && !heap.empty()) {
+                const Candidate c = heap.top();
+                heap.pop();
+                const int a = c.a, b = c.b;
+                if (!vAlive[a] || !vAlive[b] || ver[a] != c.va || ver[b] != c.vb) {
+                    continue; // stale
+                }
+                const double err = std::sqrt(c.cost);
+                if (maxError > 0.0 && err > maxError) {
+                    break; // everything left costs more
+                }
+
+                int shared = 0;
+                for (int f : vf[a]) {
+                    shared += faceAlive[f] && (F[f][0] == b || F[f][1] == b || F[f][2] == b);
+                }
+                if (shared == 0 || shared > 2) {
+                    continue; // gone, or non-manifold
+                }
+                if (onBoundary[a] && onBoundary[b] && shared == 2) {
+                    continue; // an interior edge spanning a rim: would pinch it shut
+                }
+                // Link condition: the only common neighbours are the
+                // vertices opposite the edge, one per shared face.
+                ring(a, ra);
+                ring(b, rb);
+                int common = 0;
+                for (std::size_t i = 0, j = 0; i < ra.size() && j < rb.size();) {
+                    if (ra[i] < rb[j]) {
+                        ++i;
+                    } else if (rb[j] < ra[i]) {
+                        ++j;
+                    } else {
+                        ++common, ++i, ++j;
+                    }
+                }
+                if (common != shared) {
+                    continue;
+                }
+                if (folds(F, faceAlive, vf, p, a, b, c.x) || duplicates(F, faceAlive, vf, a, b)) {
+                    continue;
+                }
+
+                // Collapse b into a.
+                for (int k = 0; k < 3; ++k) {
+                    p[3 * a + k] = c.x[k];
+                }
+                Q[a]          = Q[a] + Q[b];
+                onBoundary[a] = onBoundary[a] || onBoundary[b];
+                vAlive[b]     = 0;
+                ++ver[a];
+                ++ver[b];
+                for (int f : vf[b]) {
+                    if (!faceAlive[f]) {
+                        continue;
+                    }
+                    auto &tri = F[f];
+                    if (tri[0] == a || tri[1] == a || tri[2] == a) {
+                        faceAlive[f] = 0; // the edge's own triangles vanish
+                        --alive;
+                    } else {
+                        for (int &v : tri) {
+                            v = v == b ? a : v;
+                        }
+                        vf[a].push_back(f);
+                    }
+                }
+                vf[b].clear();
+                auto &fa = vf[a];
+                fa.erase(std::remove_if(fa.begin(), fa.end(), [&](int f) { return !faceAlive[f]; }),
+                         fa.end());
+
+                worstError = std::max(worstError, err);
+                ++collapses;
+                ring(a, ra);
+                for (int w : ra) {
+                    push(a, w);
+                }
+            }
+
+            // ---- compact: drop dead faces and unused vertices ------------------
+            std::vector<int>    remap(n, -1);
+            std::vector<double> np;
+            std::vector<int>    nt;
+            nt.reserve(static_cast<std::size_t>(alive) * 3);
+            for (std::size_t f = 0; f < F.size(); ++f) {
+                if (!faceAlive[f]) {
+                    continue;
+                }
+                for (int v : F[f]) {
+                    if (remap[v] < 0) {
+                        remap[v] = static_cast<int>(np.size() / 3);
+                        np.insert(np.end(), {p[3 * v], p[3 * v + 1], p[3 * v + 2]});
+                    }
+                    nt.push_back(remap[v]);
+                }
+            }
+            m.setGeometry(np, nt);
+            trianglesAfter = static_cast<int>(nt.size() / 3);
+            meanQuality    = Relaxer::quality(m);
+        }
+
+        /** @brief One line describing the last run. */
+        std::string report() const {
+            return "decimated " + std::to_string(trianglesBefore) + " -> " +
+                   std::to_string(trianglesAfter) + " triangles in " + std::to_string(collapses) +
+                   " collapses: worst error " + std::to_string(worstError) + ", mean q=" +
+                   std::to_string(meanQuality);
+        }
+
+    private:
+        // Rim planes outweigh the surface's own by this much.
+        static constexpr double k_boundaryWeight = 1000.0;
+
+        // A collapse that turns any surviving triangle further than this
+        // (cos 80°) is a fold-over in the making.
+        static constexpr double k_minCosTurn = 0.17;
+
+        // Symmetric 4x4 quadric, upper triangle:
+        // aa ab ac ad / bb bc bd / cc cd / dd.
+        struct Quadric {
+            std::array<double, 10> q{};
+
+            void addPlane(double a, double b, double c, double d, double w) {
+                q[0] += w * a * a, q[1] += w * a * b, q[2] += w * a * c, q[3] += w * a * d;
+                q[4] += w * b * b, q[5] += w * b * c, q[6] += w * b * d;
+                q[7] += w * c * c, q[8] += w * c * d;
+                q[9] += w * d * d;
+            }
+            Quadric operator+(const Quadric &o) const {
+                Quadric r;
+                for (int i = 0; i < 10; ++i) {
+                    r.q[i] = q[i] + o.q[i];
+                }
+                return r;
+            }
+            double eval(const double x[3]) const {
+                return q[0] * x[0] * x[0] + 2 * q[1] * x[0] * x[1] + 2 * q[2] * x[0] * x[2] +
+                       2 * q[3] * x[0] + q[4] * x[1] * x[1] + 2 * q[5] * x[1] * x[2] +
+                       2 * q[6] * x[1] + q[7] * x[2] * x[2] + 2 * q[8] * x[2] + q[9];
+            }
+        };
+
+        struct Candidate {
+            double   cost;
+            int      a, b;
+            unsigned va, vb;
+            double   x[3]; // where the merged vertex goes
+            bool operator>(const Candidate &o) const { return cost > o.cost; }
+        };
+
+        static double dot3(const double u[3], const double v[3]) {
+            return u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+        }
+
+        // (p[b]-p[a]) x (p[c]-p[a]): the face normal, twice the area long.
+        static void cross(const std::vector<double> &p, int a, int b, int c, double out[3]) {
+            const double u[3] = {p[3 * b] - p[3 * a], p[3 * b + 1] - p[3 * a + 1],
+                                 p[3 * b + 2] - p[3 * a + 2]};
+            const double v[3] = {p[3 * c] - p[3 * a], p[3 * c + 1] - p[3 * a + 1],
+                                 p[3 * c + 2] - p[3 * a + 2]};
+            out[0] = u[1] * v[2] - u[2] * v[1];
+            out[1] = u[2] * v[0] - u[0] * v[2];
+            out[2] = u[0] * v[1] - u[1] * v[0];
+        }
+
+        // Where the merged vertex goes: the quadric's minimum when it is well
+        // defined and near the edge, else the best of the endpoints and the
+        // midpoint (a flat or straight region has no unique minimum).
+        static void place(const Quadric &Q, const std::vector<double> &p, int a, int b,
+                          Candidate &c) {
+            const auto &q   = Q.q;
+            const double m[3] = {0.5 * (p[3 * a] + p[3 * b]), 0.5 * (p[3 * a + 1] + p[3 * b + 1]),
+                                 0.5 * (p[3 * a + 2] + p[3 * b + 2])};
+            const double e[3] = {p[3 * b] - p[3 * a], p[3 * b + 1] - p[3 * a + 1],
+                                 p[3 * b + 2] - p[3 * a + 2]};
+            const double len2 = dot3(e, e);
+
+            const double det = q[0] * (q[4] * q[7] - q[5] * q[5]) -
+                               q[1] * (q[1] * q[7] - q[5] * q[2]) +
+                               q[2] * (q[1] * q[5] - q[4] * q[2]);
+            const double tr = q[0] + q[4] + q[7];
+            if (std::abs(det) > 1e-10 * tr * tr * tr) {
+                // Solve A x = -b by Cramer's rule.
+                const double r[3] = {-q[3], -q[6], -q[8]};
+                const double x[3] = {
+                    (r[0] * (q[4] * q[7] - q[5] * q[5]) - q[1] * (r[1] * q[7] - q[5] * r[2]) +
+                     q[2] * (r[1] * q[5] - q[4] * r[2])) / det,
+                    (q[0] * (r[1] * q[7] - q[5] * r[2]) - r[0] * (q[1] * q[7] - q[5] * q[2]) +
+                     q[2] * (q[1] * r[2] - r[1] * q[2])) / det,
+                    (q[0] * (q[4] * r[2] - r[1] * q[5]) - q[1] * (q[1] * r[2] - r[1] * q[2]) +
+                     r[0] * (q[1] * q[5] - q[4] * q[2])) / det};
+                const double d[3] = {x[0] - m[0], x[1] - m[1], x[2] - m[2]};
+                if (dot3(d, d) <= 4.0 * len2) { // a far-off minimum is numerical noise
+                    std::copy(x, x + 3, c.x);
+                    c.cost = std::max(0.0, Q.eval(x));
+                    return;
+                }
+            }
+            const double *options[3] = {&p[3 * a], &p[3 * b], m};
+            c.cost = std::numeric_limits<double>::max();
+            for (const double *o : options) {
+                const double cost = std::max(0.0, Q.eval(o));
+                if (cost < c.cost) {
+                    c.cost = cost;
+                    std::copy(o, o + 3, c.x);
+                }
+            }
+        }
+
+        // Each vertex mapped to the first one at the same place (within a
+        // hair of the bounding box), found by sorting quantised positions.
+        static std::vector<int> welded(const std::vector<double> &p) {
+            const int n = static_cast<int>(p.size() / 3);
+            double    lo[3] = {0, 0, 0}, hi[3] = {0, 0, 0};
+            for (int v = 0; v < n; ++v) {
+                for (int k = 0; k < 3; ++k) {
+                    lo[k] = v == 0 ? p[k] : std::min(lo[k], p[3 * v + k]);
+                    hi[k] = v == 0 ? p[k] : std::max(hi[k], p[3 * v + k]);
+                }
+            }
+            const double diag = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) +
+                                          (hi[1] - lo[1]) * (hi[1] - lo[1]) +
+                                          (hi[2] - lo[2]) * (hi[2] - lo[2]));
+            const double tol = diag > 0.0 ? 1e-7 * diag : 1.0;
+            std::vector<std::array<long long, 3>> key(n);
+            for (int v = 0; v < n; ++v) {
+                for (int k = 0; k < 3; ++k) {
+                    key[v][k] = std::llround((p[3 * v + k] - lo[k]) / tol);
+                }
+            }
+            std::vector<int> order(n);
+            for (int v = 0; v < n; ++v) {
+                order[v] = v;
+            }
+            std::sort(order.begin(), order.end(), [&](int a, int b) {
+                return key[a] != key[b] ? key[a] < key[b] : a < b;
+            });
+            std::vector<int> to(n);
+            for (int i = 0; i < n; ++i) {
+                to[order[i]] = (i > 0 && key[order[i]] == key[order[i - 1]]) ? to[order[i - 1]]
+                                                                             : order[i];
+            }
+            return to;
+        }
+
+        // Would collapsing b into a turn one of b's triangles into a copy of
+        // one a already has? That is how a closed mesh's last tetrahedron
+        // would flatten into two back-to-back triangles.
+        static bool duplicates(const std::vector<std::array<int, 3>> &F,
+                               const std::vector<char> &faceAlive,
+                               const std::vector<std::vector<int>> &vf, int a, int b) {
+            const auto sorted = [](std::array<int, 3> t) {
+                std::sort(t.begin(), t.end());
+                return t;
+            };
+            for (int fb : vf[b]) {
+                const auto &tb = F[fb];
+                if (!faceAlive[fb] || tb[0] == a || tb[1] == a || tb[2] == a) {
+                    continue;
+                }
+                std::array<int, 3> moved = tb;
+                for (int &v : moved) {
+                    v = v == b ? a : v;
+                }
+                moved = sorted(moved);
+                for (int fa : vf[a]) {
+                    if (faceAlive[fa] && sorted(F[fa]) == moved) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Would moving a and b to x fold any surviving triangle around them?
+        static bool folds(const std::vector<std::array<int, 3>> &F,
+                          const std::vector<char> &faceAlive,
+                          const std::vector<std::vector<int>> &vf, const std::vector<double> &p,
+                          int a, int b, const double x[3]) {
+            for (int v : {a, b}) {
+                for (int f : vf[v]) {
+                    if (!faceAlive[f]) {
+                        continue;
+                    }
+                    const auto &t = F[f];
+                    const bool hasA = t[0] == a || t[1] == a || t[2] == a;
+                    const bool hasB = t[0] == b || t[1] == b || t[2] == b;
+                    if (hasA && hasB) {
+                        continue; // removed by the collapse
+                    }
+                    double before[3];
+                    cross(p, t[0], t[1], t[2], before);
+                    double q[3][3];
+                    for (int k = 0; k < 3; ++k) {
+                        const bool moved = t[k] == a || t[k] == b;
+                        for (int j = 0; j < 3; ++j) {
+                            q[k][j] = moved ? x[j] : p[3 * t[k] + j];
+                        }
+                    }
+                    const double u[3] = {q[1][0] - q[0][0], q[1][1] - q[0][1], q[1][2] - q[0][2]};
+                    const double w[3] = {q[2][0] - q[0][0], q[2][1] - q[0][1], q[2][2] - q[0][2]};
+                    const double after[3] = {u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2],
+                                             u[0] * w[1] - u[1] * w[0]};
+                    const double lb = std::sqrt(dot3(before, before));
+                    const double la = std::sqrt(dot3(after, after));
+                    if (la < 1e-24 || dot3(before, after) < k_minCosTurn * lb * la) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    };
+
+    /**
+     * @brief Cuts a mesh with a plane and keeps one side.
+     *
+     * The third solver: a plane given by an orientation and a position, and
+     * one run(Mesh &) that removes everything on the other side. Triangles
+     * that cross the plane are clipped exactly, not dropped, so the cut edge
+     * follows the plane; a new vertex on an edge is made once and shared by
+     * the two triangles on either side of it, so the section has no cracks.
+     * The cut is left OPEN — you see into the mesh.
+     *
+     * The plane's normal points along (azimuth, elevation): elevation 90 is
+     * straight up (+Y), so the default is a horizontal plane. `offset` moves
+     * it along that normal, measured from the centre of the mesh's bounding
+     * box, in the mesh's own (object) space — the mesh's origin, size and
+     * spin do not enter into it. `keep` names the side that stays: "above"
+     * is the side the normal points to.
+     */
+    class Cutter {
+    public:
+        Cutter() = default;
+
+        // ---- the plane: what a property sheet edits ---------------------
+        double      azimuth   = 0.0;     // [0, 360] deg, around Y from +X
+        double      elevation = 90.0;    // [-90, 90] deg, 90 = normal straight up
+        double      offset    = 0.0;     // [-1, 1], from the bounding-box centre
+        std::string keep      = "above"; // "above" | "below"
+
+        // ---- outcome: filled by run(), read-only to a UI ----------------
+        int trianglesBefore = 0;
+        int trianglesAfter  = 0;
+        int newVertices     = 0; // created on the cut
+
+        /**
+         * @brief Cut `m` in place. Leaves it untouched when nothing would
+         * remain on the kept side.
+         */
+        void run(Mesh &m) {
+            const std::vector<double> p = m.positions();
+            const std::vector<int>    t = m.triangles();
+            const int                 n = static_cast<int>(p.size() / 3);
+            trianglesBefore             = static_cast<int>(t.size() / 3);
+            trianglesAfter              = trianglesBefore;
+            newVertices                 = 0;
+            if (n == 0 || t.empty()) {
+                return;
+            }
+
+            // The plane: unit normal, through the bounding-box centre moved
+            // by `offset` along it.
+            constexpr double deg = 3.14159265358979323846 / 180.0;
+            const double     az = azimuth * deg, el = elevation * deg;
+            const double     nrm[3] = {std::cos(el) * std::cos(az), std::sin(el),
+                                       std::cos(el) * std::sin(az)};
+            double lo[3] = {p[0], p[1], p[2]}, hi[3] = {p[0], p[1], p[2]};
+            for (int v = 1; v < n; ++v) {
+                for (int k = 0; k < 3; ++k) {
+                    lo[k] = std::min(lo[k], p[3 * v + k]);
+                    hi[k] = std::max(hi[k], p[3 * v + k]);
+                }
+            }
+            const double diag = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) +
+                                          (hi[1] - lo[1]) * (hi[1] - lo[1]) +
+                                          (hi[2] - lo[2]) * (hi[2] - lo[2]));
+            double c[3];
+            for (int k = 0; k < 3; ++k) {
+                c[k] = 0.5 * (lo[k] + hi[k]) + offset * nrm[k];
+            }
+
+            // Signed distance of every vertex, positive on the kept side.
+            // Within a hair of the plane counts as ON it, which is kept and
+            // needs no new vertex — no sliver triangles along the cut.
+            const double     side = keep == "below" ? -1.0 : 1.0;
+            const double     eps  = 1e-9 * (diag > 0.0 ? diag : 1.0);
+            std::vector<double> f(n);
+            for (int v = 0; v < n; ++v) {
+                const double d = nrm[0] * (p[3 * v] - c[0]) + nrm[1] * (p[3 * v + 1] - c[1]) +
+                                 nrm[2] * (p[3 * v + 2] - c[2]);
+                f[v] = std::abs(d) < eps ? 0.0 : side * d;
+            }
+
+            std::vector<double>              np = p; // new vertices are appended
+            std::vector<int>                 nt;
+            std::map<std::pair<int, int>, int> onEdge; // edge -> its cut vertex
+            const auto cutVertex = [&](int a, int b) {
+                const std::pair<int, int> key{std::min(a, b), std::max(a, b)};
+                if (auto it = onEdge.find(key); it != onEdge.end()) {
+                    return it->second;
+                }
+                const double s = f[a] / (f[a] - f[b]);
+                for (int k = 0; k < 3; ++k) {
+                    np.push_back(p[3 * a + k] + s * (p[3 * b + k] - p[3 * a + k]));
+                }
+                const int id = static_cast<int>(np.size() / 3) - 1;
+                onEdge.emplace(key, id);
+                ++newVertices;
+                return id;
+            };
+
+            for (std::size_t i = 0; i + 2 < t.size(); i += 3) {
+                const int tri[3] = {t[i], t[i + 1], t[i + 2]};
+                if (tri[0] < 0 || tri[1] < 0 || tri[2] < 0 || tri[0] >= n || tri[1] >= n ||
+                    tri[2] >= n) {
+                    continue;
+                }
+                // Clip the triangle against the kept half-space (Sutherland-
+                // Hodgman): at most four corners, in order, then a fan.
+                int poly[4], count = 0;
+                for (int e = 0; e < 3; ++e) {
+                    const int a = tri[e], b = tri[(e + 1) % 3];
+                    if (f[a] >= 0.0) {
+                        poly[count++] = a;
+                    }
+                    if ((f[a] > 0.0 && f[b] < 0.0) || (f[a] < 0.0 && f[b] > 0.0)) {
+                        poly[count++] = cutVertex(a, b);
+                    }
+                }
+                for (int k = 1; k + 1 < count; ++k) {
+                    nt.insert(nt.end(), {poly[0], poly[k], poly[k + 1]});
+                }
+            }
+            if (nt.empty()) {
+                trianglesAfter = trianglesBefore;
+                newVertices    = 0;
+                return; // nothing on the kept side: leave the mesh as it was
+            }
+
+            // Drop the vertices nothing uses any more.
+            std::vector<int>    remap(np.size() / 3, -1);
+            std::vector<double> cp;
+            for (int &v : nt) {
+                if (remap[v] < 0) {
+                    remap[v] = static_cast<int>(cp.size() / 3);
+                    cp.insert(cp.end(), {np[3 * v], np[3 * v + 1], np[3 * v + 2]});
+                }
+                v = remap[v];
+            }
+            m.setGeometry(cp, nt);
+            trianglesAfter = static_cast<int>(nt.size() / 3);
+        }
+
+        /** @brief One line describing the last run. */
+        std::string report() const {
+            return "cut " + std::to_string(trianglesBefore) + " -> " +
+                   std::to_string(trianglesAfter) + " triangles, " +
+                   std::to_string(newVertices) + " new vertices along the cut";
+        }
+    };
+
+    // Defined here, once both solvers are complete types.
+    inline std::string Mesh::decimate() {
+        Decimator d;
+        d.run(*this);
+        return d.report();
+    }
+
+    inline std::string Mesh::relax() {
+        Relaxer r;
+        r.run(*this);
+        return r.report();
+    }
 
 } // namespace scene

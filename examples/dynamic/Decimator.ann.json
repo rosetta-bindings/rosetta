@@ -1,0 +1,23 @@
+{
+  "ratio":            { "doc": "Fraction of the triangles to keep; 0.1 keeps one in ten",
+                        "range": [0.01, 1], "label": "Keep ratio", "widget": "slider" },
+  "maxError":         { "doc": "Stop before a collapse would move the surface further than this, in object units; 0 = no limit",
+                        "range": [0, 0.1], "label": "Max error", "widget": "slider" },
+  "preserveBoundary": { "doc": "Hold open rims in place, so holes do not grow",
+                        "label": "Preserve boundary", "widget": "checkbox" },
+
+  "trianglesBefore":  { "doc": "Triangles before the last run", "readonly": true,
+                        "label": "Triangles before" },
+  "trianglesAfter":   { "doc": "Triangles after the last run", "readonly": true,
+                        "label": "Triangles after" },
+  "collapses":        { "doc": "Edges collapsed by the last run", "readonly": true,
+                        "label": "Collapses" },
+  "worstError":       { "doc": "Largest surface deviation a collapse introduced, in object units",
+                        "readonly": true, "label": "Worst error" },
+  "meanQuality":      { "doc": "Mean triangle quality after the last run; 1 is equilateral",
+                        "readonly": true, "label": "Mean quality" },
+
+  "run":              { "doc": "Decimate the mesh in place (quadric-error edge collapse)",
+                        "button": "Decimate", "expensive": true },
+  "report":           { "doc": "One line describing the last run", "button": "Report" }
+}

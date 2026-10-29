@@ -47,9 +47,17 @@
 //   ROSETTA_CLAUDE_MODEL   model; default claude-opus-5 (API), Claude Code's own
 //                          default (Claude Code)
 //   ROSETTA_CLAUDE_CLI     path to the `claude` executable (default: found on PATH)
+//
+// VOICE (when built with whisper.cpp, see voice.h): the microphone button (or
+// F8) records, a second click transcribes locally, and the text lands in the
+// prompt box to be checked and sent — or is sent at once with "send when
+// done". Send (or Enter) while recording stops the microphone and sends the
+// transcript as soon as it is ready. Recognition is biased towards the scene's own vocabulary: the bound
+// class, method and field names, and the objects in the list.
 
 #pragma once
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
 #include <QHBoxLayout>
@@ -66,6 +74,9 @@
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QScrollBar>
+#include <QShortcut>
+#include <QTimer>
+#include <QToolButton>
 #include <QTextBlockFormat>
 #include <QTextCharFormat>
 #include <QTextBrowser>
@@ -77,6 +88,11 @@
 
 #include "../interp.h"
 #include "scenesync.h"
+
+#ifdef ROSETTA_VOICE
+#include "voice.h"
+#include <set>
+#endif
 
 /**
  * @brief The prompt box: multi-line, Enter sends, Shift+Enter starts a new line.
@@ -159,6 +175,9 @@ public:
         auto *row = new QHBoxLayout;
         row->addWidget(backend_);
         row->addWidget(input_, 1);
+#ifdef ROSETTA_VOICE
+        setup_voice(row);
+#endif
         row->addWidget(send_);
         row->addWidget(stop_);
         row->addWidget(retry_);
@@ -218,6 +237,16 @@ signals:
 
 private slots:
     void submit() {
+#ifdef ROSETTA_VOICE
+        // Send while speaking = stop the microphone, then send what was said
+        // (with anything already typed) once it is transcribed. Also covers a
+        // Send pressed while an earlier recording is still being transcribed.
+        if (voice_->recording() || voice_->transcribing()) {
+            send_on_transcript_ = true;
+            voice_->stop(); // no-op while transcribing
+            return;
+        }
+#endif
         const QString text = input_->toPlainText().trimmed();
         if (text.isEmpty() || busy_) {
             return;
@@ -261,6 +290,9 @@ private slots:
     }
 
     void stop() {
+#ifdef ROSETTA_VOICE
+        voice_->cancel();
+#endif
         cancelled_ = true;
         if (reply_) {
             reply_->abort();
@@ -272,6 +304,152 @@ private slots:
 
 private:
     bool claude_code() const { return backend_->currentIndex() == 0; }
+
+#ifdef ROSETTA_VOICE
+    // ---- voice input --------------------------------------------------------
+
+    void setup_voice(QHBoxLayout *row) {
+        voice_ = new voice::VoiceInput(this);
+
+        mic_ = new QToolButton(this);
+        mic_->setText(QStringLiteral("🎤"));
+        mic_->setCheckable(true);
+        mic_->setToolTip(QStringLiteral(
+            "Speak instead of typing (F8): click, talk, click again — or press Enter (or Send) "
+            "to stop and send at once.\n"
+            "Transcribed on this machine by whisper.cpp; Esc cancels."));
+        auto_send_ = new QCheckBox(QStringLiteral("send when done"), this);
+        auto_send_->setToolTip(QStringLiteral(
+            "Send the transcript to Claude at once, instead of leaving it in the prompt box to "
+            "check first."));
+        row->addWidget(mic_);
+        row->addWidget(auto_send_);
+
+        auto *toggle = new QShortcut(QKeySequence(Qt::Key_F8), this);
+        toggle->setContext(Qt::WindowShortcut);
+        auto *cancel = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+        cancel->setContext(Qt::WindowShortcut); // like F8: works with the focus anywhere
+
+        tick_ = new QTimer(this);
+        tick_->setInterval(200);
+
+        connect(mic_, &QToolButton::clicked, this, &ClaudePanel::toggle_voice);
+        connect(toggle, &QShortcut::activated, this, &ClaudePanel::toggle_voice);
+        connect(cancel, &QShortcut::activated, voice_, &voice::VoiceInput::cancel);
+        connect(tick_, &QTimer::timeout, this, [this] {
+            status_->setText(QStringLiteral("● Listening… %1 s — Enter (or Send) to stop and send, "
+                                            "🎤 / F8 to stop, Esc to cancel")
+                                 .arg(voice_->seconds(), 0, 'f', 1));
+        });
+        cancel->setEnabled(false); // Esc belongs to the rest of the window unless recording
+
+        // Enter = stop and send, wherever the focus is. The prompt box already
+        // sends on Enter, but after clicking 🎤 (or pressing F8 from the 3D
+        // view) the focus is elsewhere. Only live while speaking or
+        // transcribing, so the console's own Enter is untouched otherwise.
+        QShortcut *send_keys[] = {new QShortcut(QKeySequence(Qt::Key_Return), this),
+                                  new QShortcut(QKeySequence(Qt::Key_Enter), this)}; // keypad
+        for (QShortcut *k : send_keys) {
+            k->setContext(Qt::WindowShortcut);
+            k->setEnabled(false);
+            connect(k, &QShortcut::activated, this, &ClaudePanel::submit);
+        }
+        const auto arm_send_keys = [this, send_keys] {
+            const bool live = voice_->recording() || voice_->transcribing();
+            for (QShortcut *k : send_keys) {
+                k->setEnabled(live);
+            }
+        };
+
+        connect(voice_, &voice::VoiceInput::recordingChanged, this, [this, cancel, arm_send_keys](bool on) {
+            arm_send_keys();
+            cancel->setEnabled(on);
+            mic_->setChecked(on);
+            mic_->setStyleSheet(on ? QStringLiteral("background: #c0392b; color: white;") : QString());
+            on ? tick_->start() : tick_->stop();
+            if (!on) {
+                status_->clear();
+            }
+        });
+        connect(voice_, &voice::VoiceInput::transcribingChanged, this, [this, arm_send_keys](bool on) {
+            arm_send_keys();
+            mic_->setEnabled(!on && !busy_);
+            status_->setText(!on                  ? QString()
+                             : send_on_transcript_ ? QStringLiteral("Transcribing… (then sending)")
+                                                   : QStringLiteral("Transcribing…"));
+        });
+        connect(voice_, &voice::VoiceInput::transcribed, this, [this](const QString &text) {
+            QString prompt = input_->toPlainText().trimmed();
+            prompt += (prompt.isEmpty() ? QString() : QStringLiteral(" ")) + text;
+            input_->setPlainText(prompt);
+            input_->moveCursor(QTextCursor::End);
+            input_->setFocus();
+            const bool send     = auto_send_->isChecked() || send_on_transcript_;
+            send_on_transcript_ = false;
+            if (send) {
+                submit();
+            }
+        });
+        connect(voice_, &voice::VoiceInput::failed, this, [this](const QString &why) {
+            mic_->setChecked(false);
+            note(QStringLiteral("Voice: %1").arg(why), "#c0392b");
+            // Send was pressed: nothing was heard, but anything typed still goes.
+            const bool send     = send_on_transcript_;
+            send_on_transcript_ = false;
+            if (send) {
+                submit();
+            }
+        });
+
+        if (!voice_->model_available()) {
+            mic_->setToolTip(mic_->toolTip() +
+                             QStringLiteral("\n\nNo model yet — run `cmake -P "
+                                            "fetch_whisper_model.cmake` in examples/dynamic, or "
+                                            "set ROSETTA_WHISPER_MODEL."));
+        }
+    }
+
+    void toggle_voice() {
+        if (voice_->recording()) {
+            voice_->stop();
+            return;
+        }
+        if (busy_ || voice_->transcribing()) {
+            mic_->setChecked(false);
+            return;
+        }
+        voice_->set_vocabulary(vocabulary());
+        voice_->start();
+    }
+
+    // What whisper should expect to hear: the objects in the scene first, then
+    // the bound classes, then their members.
+    QStringList vocabulary() const {
+        QStringList          out;
+        std::set<std::string> seen;
+        const auto add = [&](const std::string &w) {
+            if (!w.empty() && seen.insert(w).second) {
+                out << QString::fromStdString(w);
+            }
+        };
+        for (const auto &[name, obj] : interp_->vars) {
+            add(name);
+        }
+        const auto &classes = server_->registry().classes();
+        for (const auto *k : classes) {
+            add(k->name);
+        }
+        for (const auto *k : classes) {
+            for (std::size_t i = 0; i < k->n_methods; ++i) {
+                add(k->methods[i].name);
+            }
+            for (std::size_t i = 0; i < k->n_fields; ++i) {
+                add(k->fields[i].name);
+            }
+        }
+        return out;
+    }
+#endif
 
     // ---- the Claude Code backend ----------------------------------------
 
@@ -613,6 +791,9 @@ private:
         send_->setEnabled(!on);
         stop_->setEnabled(on);
         backend_->setEnabled(!on);
+#ifdef ROSETTA_VOICE
+        mic_->setEnabled(!on && !voice_->transcribing());
+#endif
         status_->setText(!on ? QString()
                              : claude_code() ? QStringLiteral("Starting Claude Code…")
                                              : QStringLiteral("%1 is working…").arg(model_));
@@ -745,6 +926,14 @@ private:
     QPushButton  *reset_  = nullptr;
     QLabel       *status_ = nullptr;
     QComboBox    *backend_ = nullptr;
+
+#ifdef ROSETTA_VOICE
+    voice::VoiceInput *voice_     = nullptr;
+    bool               send_on_transcript_ = false; // Send was pressed while speaking
+    QToolButton       *mic_       = nullptr;
+    QCheckBox         *auto_send_ = nullptr;
+    QTimer            *tick_      = nullptr;
+#endif
 
     QNetworkAccessManager net_;
     QNetworkReply        *reply_ = nullptr;

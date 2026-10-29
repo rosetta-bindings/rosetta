@@ -19,6 +19,8 @@
         { "name": "scene::Vec3", "header": "scene.h", "annotations": "Vec3.ann.json" },
         { "name": "scene::Mesh", "header": "scene.h", "annotations": "Mesh.ann.json" },
         { "name": "scene::Shading", "header": "scene.h" },
-        { "name": "scene::Relaxer", "header": "scene.h", "annotations": "Relaxer.ann.json" }
+        { "name": "scene::Relaxer", "header": "scene.h", "annotations": "Relaxer.ann.json" },
+        { "name": "scene::Decimator", "header": "scene.h", "annotations": "Decimator.ann.json" },
+        { "name": "scene::Cutter", "header": "scene.h", "annotations": "Cutter.ann.json" }
     ]
 }
