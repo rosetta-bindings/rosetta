@@ -1,9 +1,12 @@
-\chapter{Overloads and coverage}
+\chapter{Overloads, coverage and API diffs}
 \label{ch:coverage}
 
 Two features that belong together, because the second is what makes the first
 readable: rosetta binds \textbf{overload sets}, and every generation writes a
 machine-readable \code{coverage.json} saying what bound, what did not, and why.
+Next to it goes \code{api.json}, a snapshot of the public API that
+\code{rosetta\_gen --api-diff} compares between releases
+(Section~\ref{sec:api-diff}).
 
 \section{Overloads}
 
@@ -217,6 +220,113 @@ language backends record only methods. The top-level \code{bound} scalar is
 therefore not comparable across those two groups --- count methods by signature
 instead.
 \end{warn}
+
+\section{\code{api.json}: what a release breaks}
+\label{sec:api-diff}
+
+\code{coverage.json} answers ``did a \emph{target} stop binding something?''.
+The other question a release raises is ``did the \emph{library's API} change
+under its users?''. For that, \code{generate()} also writes
+\code{<out\_dir>/api.json} on every run. It describes the IR, before any
+backend has decided anything: classes, fields, methods, constructors,
+enumerations and free functions, with exact signatures, parameter names,
+defaults, and the \code{range}, \code{readonly} and \code{combobox}
+annotations. Keep the snapshot of each release, and
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen --api-diff v1.2/bindings bindings
+\end{lstlisting}
+
+reports what changed and which changes break existing callers. Two versions of
+one class:
+
+\begin{lstlisting}[style=cpp]
+// v1                                       // v2
+struct Mesh {                               struct Mesh {
+  [[= rosetta::range{0, 100}]] int quality;   [[= rosetta::range{10, 100}]] int quality;
+  void remesh(double edge);                   void remesh(double edge, int passes = 1);
+  void smooth(int iterations);                void smooth(int iterations, bool keep);
+  double area() const;                        double surface() const;
+                                              void clear();
+};                                          };
+\end{lstlisting}
+
+\begin{lstlisting}[style=plain]
+API diff 1.0 -> 2.0: 3 breaking, 0 warnings, 2 compatible
+
+BREAKING
+  x Mesh::quality: the field's range narrowed: values valid before are now rejected  [range_narrowed]
+      was: int quality in [0, 100]
+      now: int quality in [10, 100]
+  x Mesh::smooth: the method's parameters changed  [signature_changed]
+      was: void smooth(int iterations)
+      now: void smooth(int iterations, bool keep)
+  x Mesh::area: the method was renamed to 'surface' (same signature); ...  [method_renamed]
+      was: double area() const
+      now: double surface() const
+
+COMPATIBLE
+  + Mesh::remesh: the method gained trailing parameters with defaults  [params_appended]
+  + Mesh::clear: new method  [method_added]
+\end{lstlisting}
+
+\subsection{The rules}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{9.6cm}@{}}
+\toprule
+\textbf{Severity} & \textbf{Changes} \\
+\midrule
+breaking & a class, enumeration, function, method, constructor, field or
+  enumerator removed or renamed; parameters or return type changed; static
+  $\leftrightarrow$ instance; no longer \code{const} or \code{virtual}; became
+  pure virtual, abstract or \code{final}; a base removed; a parameter lost its
+  default or changed its output-parameter status; a field became read-only,
+  changed type, or gained or narrowed a \code{range}; a \code{combobox} choice
+  removed; an enumerator's value changed; the name scripts see
+  (\field{expose}) changed \\
+\addlinespace
+warning & a parameter renamed (callers passing it by keyword break); a default
+  value changed; an enumeration's underlying type changed \\
+\addlinespace
+compatible & anything added; trailing parameters added \emph{with defaults};
+  a default added; a method became \code{const}; a field became writable; a
+  range widened or removed \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Overloads of one name are paired by identical parameter types first. An old
+overload left unpaired is then matched with a new one that only adds
+parameters with defaults. If exactly one overload is still unpaired on each
+side, the two are reported as one \code{signature\_changed}. Anything else
+left over is reported as removed or added.
+
+\begin{note}
+Renames are \emph{detected}, never assumed. A disappearance and an appearance
+are reported as one rename only when they are in the same scope, have the same
+signature (a field: the same type; an enumerator: the same value; a class: the
+same members), and nothing else on either side matches. A rename is still
+breaking. What the detection adds is that the report names the replacement.
+\end{note}
+
+\subsection{In CI}
+
+The command exits 0 when nothing breaks, 1 when something does (with
+\code{--strict}, warnings count too), and 2 on bad input. \code{--json} prints
+the changes with a stable \code{kind} slug for each, for tooling;
+\code{--breaking-only} hides the additions. Commit \code{api.json} next to
+\code{coverage.json}, and a pull request that breaks the API fails the check
+instead of breaking users after the release:
+
+\begin{lstlisting}[style=sh]
+rosetta_gen --api-diff api/api.json bindings || echo "needs a major version"
+\end{lstlisting}
+
+The diff itself is the header-only \code{<rosetta/api\_diff.h>}, which needs
+only C++17 and nlohmann/json, so other tools can call
+\code{rosetta::api::diff(before, after)} directly.
 
 \section{Instrumenting a backend of your own}
 

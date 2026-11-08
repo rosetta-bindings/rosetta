@@ -562,6 +562,38 @@ call_method {"target": "bunny", "method": "positions"}
 A script, on the other hand, receives vectors whole
 (Section~\ref{sec:mcp-scripts}).
 
+\subsection*{Callbacks}
+\label{sec:mcp-callbacks}
+
+JSON has no functions, so a \code{std::function} parameter takes a
+\emph{recording} callback in a plain tool call. Each call's arguments come back
+with the result, which is what an agent wants from a progress callback:
+
+\begin{lstlisting}[style=plain]
+call_method {"target": "box", "method": "onProgress", "args": [{"$record": true}]}
+  -> {"result": null,
+      "callbacks": [{"calls": 1, "first": [[1.0]]}]}
+\end{lstlisting}
+
+\code{"returns": v} gives the value a callback must return (a \code{bool}
+``keep going'', say). A recording keeps the first 20 calls and the last, and
+describes an object C++ passes as \code{\{"\$object": "scene::Vec3"\}} rather
+than giving it a handle, because that object is borrowed for the duration of
+the call only. \code{describe\_class} lists the callback's parameter and
+return types, and tells the agent what to pass.
+
+When the callback needs logic, a script passes a real function:
+
+\begin{lstlisting}[style=plain]
+run_script  obj("box"):onProgress(function(f) print(f) end)
+run_python  obj("box").onProgress(lambda f: seen.append(f))
+\end{lstlisting}
+
+A Lua callback runs under \code{lua\_pcall}, so a Lua error or the time limit
+never unwinds through C++, and one that the library keeps fails cleanly after
+the script has ended. A Python callable takes the GIL itself, so the library
+can keep it and call it later. A Python exception comes back as an error.
+
 \section{Constraints the agent cannot bypass}
 
 Everything the core enforces stays enforced, and a rejection comes back as a
@@ -582,8 +614,8 @@ call_method {"target": "bunny", "method": "at", "args": ["nope"]}
        at(int, int) -- takes 2 argument(s), 1 given
 
 call_method {"target": "bunny", "method": "onProgress", "args": [1]}
-  -> error: ... onProgress(std::function<void(double)>) -- not callable:
-       callback: a std::function parameter needs a foreign-callable adapter
+  -> error: parameter of type std::function<void(double)> is a callback:
+       pass {"$record": true} to record its calls ...
 \end{lstlisting}
 
 The valid assignment in the first call (\code{shading}) still lands; only the
@@ -901,8 +933,11 @@ What to know before choosing it:
 \begin{itemize}
   \item \textbf{The agent orchestrates; it does not compute.} Loops belong in
     a script, heavy numerical work in your C++ methods.
-  \item \textbf{No callbacks.} \code{std::function} parameters are described
-    but not callable, as in every dynamic consumer.
+  \item \textbf{Callbacks are parameters, and JSON has no functions.} A plain
+    tool call passes \code{\{"\$record": true\}} and gets each call's
+    arguments back under \code{callbacks}; a script passes a real function
+    (Section~\ref{sec:mcp-callbacks}). A \code{std::function} field or return
+    value is still not callable.
   \item \textbf{No persistence.} Handles live as long as the server process
     --- the client session for stdio, the application for the Qt host.
   \item \textbf{Positional enum names across disagreeing overloads} stay

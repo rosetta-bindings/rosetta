@@ -147,3 +147,61 @@ TEST_F(Mcp, ServeSpeaksNewlineDelimitedJsonRpc) {
     EXPECT_EQ(json::parse(l1)["id"], 1);
     EXPECT_EQ(json::parse(l2)["error"]["code"], -32700);
 }
+
+// ---- callbacks (std::function parameters) -------------------------------------
+
+TEST_F(Mcp, DescribeClassSpellsOutACallbackSignature) {
+    auto [err, d] = tool("describe_class", {{"class", "Person"}});
+    ASSERT_FALSE(err) << d;
+    json grow;
+    for (const json &m : d["methods"]) {
+        if (m["name"] == "growUntil") {
+            grow = m;
+        }
+    }
+    ASSERT_FALSE(grow.is_null()) << d;
+    const std::string s = grow.dump();
+    EXPECT_NE(s.find("\"kind\":\"function\""), std::string::npos) << s;
+    EXPECT_NE(s.find("callback_params"), std::string::npos) << s;
+    EXPECT_NE(s.find("$record"), std::string::npos) << "the agent must be told what to pass";
+}
+
+TEST_F(Mcp, ARecordedCallbackReturnsItsCallsWithTheResult) {
+    tool("create_object", {{"class", "Person"}, {"name", "p"}});
+    auto [err, r] = tool("call_method", {{"target", "p"},
+                                         {"method", "eachScore"},
+                                         {"args", json::array({{{"$record", true}}})}});
+    ASSERT_FALSE(err) << r;
+    EXPECT_EQ(r["result"], 6.0);
+    ASSERT_EQ(r["callbacks"].size(), 1u);
+    EXPECT_EQ(r["callbacks"][0]["calls"], 3);
+    EXPECT_EQ(r["callbacks"][0]["first"][2], json::array({2, 3.0}));
+}
+
+TEST_F(Mcp, ARecordedCallbackCanReturnAValueAndSeesObjectsAndEnums) {
+    tool("create_object", {{"class", "Person"}, {"name", "p"}});
+    auto [err, r] = tool("call_method", {{"target", "p"},
+                                         {"method", "growUntil"},
+                                         {"args", {{"cb", {{"$record", true}, {"returns", false}}}}}});
+    ASSERT_FALSE(err) << r;
+    EXPECT_EQ(r["result"], 0);
+    // The object is described, never given a handle: it is borrowed for the
+    // duration of the call only.
+    EXPECT_EQ(r["callbacks"][0]["first"][0], json::array({{{"$object", "demo::Person"}}, "Red"}));
+    EXPECT_EQ(server.objects().size(), 1u);
+}
+
+TEST_F(Mcp, NullOrNothingIsAnEmptyCallback) {
+    tool("create_object", {{"class", "Person"}, {"name", "p"}});
+    EXPECT_FALSE(tool("call_method", {{"target", "p"}, {"method", "eachScore"}, {"args", json::array({nullptr})}}).first);
+    auto [err, r] = tool("call_method", {{"target", "p"}, {"method", "eachScore"}});
+    ASSERT_FALSE(err) << r;
+    EXPECT_FALSE(r.contains("callbacks"));
+}
+
+TEST_F(Mcp, AnythingElseWhereACallbackGoesIsExplained) {
+    tool("create_object", {{"class", "Person"}, {"name", "p"}});
+    auto [err, msg] = tool("call_method", {{"target", "p"}, {"method", "growUntil"}, {"args", json::array({"print"})}});
+    EXPECT_TRUE(err);
+    EXPECT_NE(msg.get<std::string>().find("{\"$record\": true}"), std::string::npos) << msg;
+}

@@ -19,13 +19,14 @@ The binary always lands in **`<repo>/bin/rosetta_gen`** (not the build tree). If
 
 ---
 
-## The four modes
+## The modes
 
 ```
 rosetta_gen <manifest.json> [out_dir]        # plain: emit the generator project only
 rosetta_gen --build <manifest.json> [opts]   # the whole pipeline in one command
 rosetta_gen --clean <manifest.json> [opts]   # remove everything generated
 rosetta_gen --init  [manifest.json] [src]    # write a starter manifest + project skeleton
+rosetta_gen --api-diff <old> <new> [opts]    # what changed between two releases' api.json
 ```
 
 `rosetta_gen --help` prints the full built-in help; `--build --help` and `--clean --help` list each mode's options.
@@ -279,6 +280,16 @@ not removing gen (no rosetta_gen marker in its CMakeLists)
 
 ---
 
+## `--api-diff`: what a release breaks
+
+```bash
+bin/rosetta_gen --api-diff v1.2/bindings bindings [--json] [--breaking-only] [--strict]
+```
+
+Every generation writes `api.json` (the public-API snapshot) next to `coverage.json`. This mode compares two of them, given as the files or as the folders that hold them, and classifies each change as breaking, warning or compatible. Full rules and formats: [API_DIFF.md](API_DIFF.md).
+
+---
+
 ## Exit status
 
 | Mode | `0` | non-zero |
@@ -287,6 +298,7 @@ not removing gen (no rosetta_gen marker in its CMakeLists)
 | `--build` | every *attempted* backend built (skips don't count) | generator build/run failed, or ≥ 1 backend build failed |
 | `--clean` | clean ran (nothing to remove is fine) | manifest missing / invalid |
 | `--init` | manifest written | target file already exists, bad arguments |
+| `--api-diff` | no breaking change (`--strict`: no warning either) | `1` breaking change(s); `2` bad arguments or unreadable snapshot |
 
 ---
 

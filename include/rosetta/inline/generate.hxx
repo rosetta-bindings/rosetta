@@ -1467,7 +1467,16 @@ endif()
         template <typename R, typename... A>
         inline void fill_callback_sig_impl(GenType &g, std::type_identity<std::function<R(A...)>>) {
             g.callback_sig.push_back(type_descriptor<std::remove_cvref_t<R>>());
-            (g.callback_sig.push_back(type_descriptor<std::remove_cvref_t<A>>()), ...);
+            g.callback_sig.back().cb_ref = std::is_lvalue_reference_v<R>;
+            (
+                [&] {
+                    g.callback_sig.push_back(type_descriptor<std::remove_cvref_t<A>>());
+                    g.callback_sig.back().cb_ref = std::is_lvalue_reference_v<A>;
+                    g.callback_sig.back().cb_mutable_ref =
+                        std::is_lvalue_reference_v<A> &&
+                        !std::is_const_v<std::remove_reference_t<A>>;
+                }(),
+                ...);
         }
         template <typename F> inline void fill_callback_sig(GenType &g) {
             fill_callback_sig_impl(g, std::type_identity<F>{});
@@ -3848,6 +3857,20 @@ namespace rosetta {
             std::ofstream out(path);
             if (out) {
                 out << coverage::to_json(classes);
+            } else {
+                std::fprintf(stderr, "rosetta::generate: could not write %s — skipped\n",
+                             path.string().c_str());
+            }
+        }
+
+        // The public-API snapshot, for `rosetta_gen --api-diff` between two
+        // releases. Same policy as the coverage report: always written, and a
+        // failure to write it is a warning, never an error.
+        {
+            const std::filesystem::path path = opt.out_dir / "api.json";
+            std::ofstream               out(path);
+            if (out) {
+                out << api::to_json(classes, enums, functions, opt.version);
             } else {
                 std::fprintf(stderr, "rosetta::generate: could not write %s — skipped\n",
                              path.string().c_str());

@@ -255,8 +255,9 @@ Being clear about this early saves disappointment later.
     finished binding. The generated code depends on pybind11, or on N-API, or
     on sol2 --- not on rosetta.
   \item \textbf{It does not bind everything.} Some C++ has no shape in the
-    destination language: a \code{std::function} parameter, a raw pointer
-    return, an operator with no name to bind to. Those members are
+    destination language, or not yet in every one: an operator with no name
+    to bind to, a raw pointer return, a \code{std::function} parameter on a
+    target that has no callback support. Those members are
     \emph{skipped}, never fatal, and every skip is recorded with a reason in
     \code{coverage.json} (Chapter~\ref{ch:coverage}). A binding that silently
     loses a method is the failure mode this design exists to avoid.

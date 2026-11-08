@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <functional>
 #include <gtest/gtest.h>
 #include <rosetta/runtime/mcp.h>
 #include <sstream>
@@ -38,6 +39,34 @@ namespace demo {
         bool   olderThan(const Person &o) const { return age > o.age; }
 
         static Person make(const std::string &n) { return Person(n, 0); }
+
+        // Callbacks: a progress-style one, one handed an object by reference
+        // and an enum, and one the library keeps for later.
+        double eachScore(const std::function<void(int, double)> &cb) const {
+            double sum = 0;
+            for (std::size_t i = 0; i < scores.size(); ++i) {
+                if (cb) {
+                    cb(static_cast<int>(i), scores[i]);
+                }
+                sum += scores[i];
+            }
+            return sum;
+        }
+        int growUntil(std::function<bool(Person &, Colour)> cb) {
+            int n = 0;
+            while (n < 10 && cb(*this, colour)) {
+                ++age;
+                ++n;
+            }
+            return n;
+        }
+        std::function<void()> stored;
+        void                  keep(std::function<void()> cb) { stored = std::move(cb); }
+        void                  fire() const {
+            if (stored) {
+                stored();
+            }
+        }
     };
 
 } // namespace demo
@@ -61,6 +90,22 @@ namespace {
         .kind = Kind::vector, .spelling = "std::vector<double>", .element = &td_double};
     TypeDesc td_person{
         .kind = Kind::object, .spelling = "demo::Person", .object = "demo::Person", .cls = &kPerson};
+    TypeDesc td_void{.kind = Kind::void_, .spelling = "void"};
+
+    // Callback descriptors, as the dynamic backend emits them: the signature
+    // rides in params / result.
+    const TypeDesc *const td_each_cb_params[] = {&td_int, &td_double};
+    TypeDesc td_each_cb{.kind     = Kind::function,
+                        .spelling = "std::function<void(int, double)>",
+                        .params   = td_each_cb_params,
+                        .n_params = 2};
+    const TypeDesc *const td_grow_cb_params[] = {&td_person, &td_colour};
+    TypeDesc td_grow_cb{.kind     = Kind::function,
+                        .spelling = "std::function<bool(demo::Person &, demo::Colour)>",
+                        .params   = td_grow_cb_params,
+                        .n_params = 2,
+                        .result   = &td_bool};
+    TypeDesc td_thunk_cb{.kind = Kind::function, .spelling = "std::function<void()>"};
 
     demo::Person &self_of(const ObjectRef &r) { return *static_cast<demo::Person *>(r.ptr); }
 
@@ -105,6 +150,9 @@ namespace {
     const MetaParam kAt2[]    = {{.name = "i", .type = &td_int}, {.name = "j", .type = &td_int}};
     const MetaParam kOlder[]  = {{.name = "other", .type = &td_person, .is_ref = true}};
     const MetaParam kMake[]   = {{.name = "n", .type = &td_string, .is_ref = true}};
+    const MetaParam kEach[]   = {{.name = "cb", .type = &td_each_cb, .is_ref = true, .default_value = "null"}};
+    const MetaParam kGrow[]   = {{.name = "cb", .type = &td_grow_cb}};
+    const MetaParam kKeep[]   = {{.name = "cb", .type = &td_thunk_cb}};
 
     const MetaMethod kMethods[] = {
         {.name = "at", .ret = &td_double, .params = kAt1, .n_params = 1, .is_const = true,
@@ -125,6 +173,26 @@ namespace {
         {.name = "make", .ret = &td_person, .params = kMake, .n_params = 1, .is_static = true,
          .invoke = +[](const ObjectRef &, const ArgList &a) {
              return make_any(&td_person, demo::Person::make(value_cast<std::string>(a[0])));
+         }},
+        {.name = "eachScore", .ret = &td_double, .params = kEach, .n_params = 1, .is_const = true,
+         .invoke = +[](const ObjectRef &s, const ArgList &a) {
+             return make_any(&td_double, self_of(s).eachScore(
+                 fn_cast<std::function<void(int, double)>>(a[0], &td_each_cb)));
+         }},
+        {.name = "growUntil", .ret = &td_int, .params = kGrow, .n_params = 1,
+         .invoke = +[](const ObjectRef &s, const ArgList &a) {
+             return make_any(&td_int, self_of(s).growUntil(
+                 fn_cast<std::function<bool(demo::Person &, demo::Colour)>>(a[0], &td_grow_cb)));
+         }},
+        {.name = "keep", .ret = &td_void, .params = kKeep, .n_params = 1,
+         .invoke = +[](const ObjectRef &s, const ArgList &a) {
+             self_of(s).keep(fn_cast<std::function<void()>>(a[0], &td_thunk_cb));
+             return Any::none();
+         }},
+        {.name = "fire", .ret = &td_void, .is_const = true,
+         .invoke = +[](const ObjectRef &s, const ArgList &) {
+             self_of(s).fire();
+             return Any::none();
          }},
     };
 

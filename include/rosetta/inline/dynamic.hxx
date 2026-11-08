@@ -36,6 +36,8 @@ namespace rosetta::dyn {
             return "object";
         case Kind::vector:
             return "vector";
+        case Kind::function:
+            return "function";
         }
         return "unknown";
     }
@@ -75,6 +77,12 @@ namespace rosetta::dyn {
      */
     inline const TypeDesc *builtin_list() {
         static const TypeDesc t{Kind::vector, "vector<?>"};
+        return &t;
+    }
+
+    /** @brief The descriptor of a host function: "callable, signature unknown". */
+    inline const TypeDesc *builtin_function() {
+        static const TypeDesc t{Kind::function, "function"};
         return &t;
     }
 
@@ -138,6 +146,10 @@ namespace rosetta::dyn {
 
     inline Any Any::opaque(std::any v, const TypeDesc *t) { return Any(t, std::move(v)); }
 
+    inline Any Any::function(Function f, const TypeDesc *t) {
+        return Any(t ? t : builtin_function(), std::any(std::move(f)));
+    }
+
     inline Kind Any::kind() const { return type_ ? type_->kind : Kind::unknown; }
 
     namespace detail {
@@ -196,6 +208,10 @@ namespace rosetta::dyn {
         return detail::unbox<ObjectRef>(*this, "object");
     }
 
+    inline const Function &Any::as_function() const {
+        return detail::unbox<Function>(*this, "function");
+    }
+
     inline std::string Any::to_string() const {
         std::ostringstream os;
         switch (kind()) {
@@ -246,6 +262,8 @@ namespace rosetta::dyn {
                << ">";
             return os.str();
         }
+        case Kind::function:
+            return std::string("<function ") + (type_ ? type_->spelling : "?") + ">";
         case Kind::unknown:
             return std::string("<opaque ") + (type_ ? type_->spelling : "?") + ">";
         }
@@ -426,6 +444,16 @@ namespace rosetta::dyn {
             // the marshaller has no idea what is inside either one.
             return ak == Kind::unknown ? Match::convert : Match::none;
 
+        case Kind::function:
+            // Any callable fits: its arity and types are checked when C++ calls
+            // it, the way a script's own function would be. None is accepted
+            // too, as an EMPTY std::function — what "no progress callback"
+            // means to most C++ APIs (`if (cb) cb(...)`).
+            if (ak == Kind::function) {
+                return Match::exact;
+            }
+            return ak == Kind::void_ ? Match::convert : Match::none;
+
         case Kind::void_:
             return Match::none;
         }
@@ -527,6 +555,9 @@ namespace rosetta::dyn {
         inline Any default_any(const MetaParam &p) {
             const std::string d = p.default_value ? p.default_value : "";
             const TypeDesc   *t = p.type;
+            if (d == "null") { // an omitted callback: an empty std::function
+                return Any::none();
+            }
             if (d == "true" || d == "false") {
                 return Any::boolean(d == "true");
             }

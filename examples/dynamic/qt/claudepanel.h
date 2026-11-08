@@ -41,12 +41,30 @@
 // "default"): a turn a safety classifier declines is re-run on Anthropic's
 // recommended fallback model instead of returned as a refusal.
 //
+// OLLAMA (local) — a model running on this machine through Ollama, with no
+// account, key or network: the panel calls Ollama's native /api/chat (which,
+// unlike its Anthropic-compatible endpoint, lets a request set the context size
+// and turn thinking off) and runs the same in-process tool loop. Only models
+// Ollama reports as tool-capable are offered. A small model does not explore
+// the way Claude does, so its system prompt carries a reference of the bound
+// library — every class, field (type, range, choices) and method, built from
+// the same registry the property panel reads — plus worked tool-call examples
+// and the objects in the scene; obvious argument-name slips (`target` for
+// `object`) are forgiven.
+//
 // Configuration (environment):
 //   ANTHROPIC_API_KEY      API backend (or ANTHROPIC_AUTH_TOKEN, sent as Bearer)
 //   ANTHROPIC_BASE_URL     API backend, default https://api.anthropic.com
 //   ROSETTA_CLAUDE_MODEL   model; default claude-opus-5 (API), Claude Code's own
 //                          default (Claude Code)
 //   ROSETTA_CLAUDE_CLI     path to the `claude` executable (default: found on PATH)
+//   OLLAMA_HOST            Ollama backend, default http://localhost:11434
+//   ROSETTA_OLLAMA_MODEL   Ollama backend: model to preselect (default: the last
+//                          one used, else qwen3:8b when installed)
+//   ROSETTA_ASSISTANT      claude-code | api | ollama: the backend for this run
+//                          (default: the one last picked in the panel)
+//   ROSETTA_OLLAMA_CTX     Ollama backend: context window, default 16384 tokens
+//                          (Ollama's own default, 4096, cannot hold the tools)
 //
 // VOICE (when built with whisper.cpp, see voice.h): the microphone button (or
 // F8) records, a second click transcribes locally, and the text lands in the
@@ -74,6 +92,7 @@
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QScrollBar>
+#include <QSettings>
 #include <QShortcut>
 #include <QTimer>
 #include <QToolButton>
@@ -85,6 +104,10 @@
 #include <QWidget>
 
 #include <rosetta/runtime/mcp.h>
+
+#include <map>
+#include <memory>
+#include <utility>
 
 #include "../interp.h"
 #include "scenesync.h"
@@ -168,12 +191,24 @@ public:
         backend_ = new QComboBox(this);
         backend_->addItem(QStringLiteral("Claude Code (your login)"));
         backend_->addItem(QStringLiteral("Anthropic API (API key)"));
+        backend_->addItem(QStringLiteral("Ollama (local)"));
         backend_->setToolTip(QStringLiteral(
             "Claude Code: runs the `claude` CLI with your Claude Code login, connected to this "
-            "viewer's MCP server.\nAnthropic API: calls the API directly with ANTHROPIC_API_KEY."));
+            "viewer's MCP server.\nAnthropic API: calls the API directly with ANTHROPIC_API_KEY."
+            "\nOllama: a model running on this machine — no account, no key, nothing leaves "
+            "it."));
+
+        ollama_model_ = new QComboBox(this);
+        ollama_model_->setToolTip(QStringLiteral(
+            "Ollama models that support tool calling (`ollama pull qwen3:8b` adds one)."));
+        think_ = new QCheckBox(QStringLiteral("think"), this);
+        think_->setToolTip(QStringLiteral(
+            "Let the model reason before answering: sometimes better choices, always much slower."));
 
         auto *row = new QHBoxLayout;
         row->addWidget(backend_);
+        row->addWidget(ollama_model_);
+        row->addWidget(think_);
         row->addWidget(input_, 1);
 #ifdef ROSETTA_VOICE
         setup_voice(row);
@@ -192,11 +227,12 @@ public:
         connect(stop_, &QPushButton::clicked, this, &ClaudePanel::stop);
         connect(retry_, &QPushButton::clicked, this, [this] {
             retry_->setEnabled(false);
-            request();
+            ollama() ? ollama_request() : request();
         });
         connect(reset_, &QPushButton::clicked, this, [this] {
             stop();
-            messages_ = json::array();
+            messages_        = json::array();
+            ollama_messages_ = json::array();
             session_id_.clear();
             log_->clear();
             greet();
@@ -209,14 +245,40 @@ public:
             cli_ = QStandardPaths::findExecutable(QStringLiteral("claude"));
         }
 
-        // Default: Claude Code when it is installed (no key needed), else the API.
-        backend_->setCurrentIndex(!cli_.isEmpty() || !has_credentials() ? 0 : 1);
-        connect(backend_, &QComboBox::currentIndexChanged, this, [this] {
-            if (!busy_) {
-                greet();
+        ollama_base_ = ollama_base_url();
+        ollama_ctx_  = qEnvironmentVariableIsSet("ROSETTA_OLLAMA_CTX")
+                           ? qEnvironmentVariableIntValue("ROSETTA_OLLAMA_CTX")
+                           : 16384;
+
+        // Default: the backend used last time; else Claude Code when it is
+        // installed (no key needed), else the API.
+        const int last = QSettings(QStringLiteral("rosetta"), QStringLiteral("scene-viewer"))
+                             .value(QStringLiteral("assistant/backend"), -1)
+                             .toInt();
+        backend_->setCurrentIndex(last >= 0 && last < backend_->count()
+                                      ? last
+                                      : (!cli_.isEmpty() || !has_credentials() ? 0 : 1));
+        // ROSETTA_ASSISTANT picks one for this run only (scripted runs, --claude).
+        const QString forced = qEnvironmentVariable("ROSETTA_ASSISTANT").toLower();
+        if (forced == QStringLiteral("claude-code") || forced == QStringLiteral("api") ||
+            forced == QStringLiteral("ollama")) {
+            backend_->setCurrentIndex(forced == QStringLiteral("claude-code") ? 0
+                                      : forced == QStringLiteral("api")   ? 1
+                                                                          : 2);
+        }
+        // Connected after the initial pick, so only a choice made in the UI is remembered.
+        connect(backend_, &QComboBox::currentIndexChanged, this, [this](int i) {
+            QSettings(QStringLiteral("rosetta"), QStringLiteral("scene-viewer"))
+                .setValue(QStringLiteral("assistant/backend"), i);
+            backend_changed();
+        });
+        connect(ollama_model_, &QComboBox::currentTextChanged, this, [this](const QString &m) {
+            if (!m.isEmpty() && !filling_models_) {
+                QSettings(QStringLiteral("rosetta"), QStringLiteral("scene-viewer"))
+                    .setValue(QStringLiteral("assistant/ollama_model"), m);
             }
         });
-        greet();
+        backend_changed();
     }
 
     /** @brief The viewer's MCP endpoint, for the Claude Code backend. */
@@ -225,6 +287,10 @@ public:
     /** @brief Send `text` as if typed (used by the viewer's --claude flag). */
     void ask(const QString &text) {
         input_->setPlainText(text);
+        if (ollama() && ollama_model_->count() == 0) {
+            ask_when_ready_ = true; // the model list is still loading
+            return;
+        }
         submit();
     }
 
@@ -266,6 +332,19 @@ private slots:
             run_claude_code(text);
             return;
         }
+        if (ollama()) {
+            if (ollama_model_->currentText().isEmpty()) {
+                note(QStringLiteral("No tool-capable Ollama model is available (see above)."),
+                     "#c0392b");
+                return;
+            }
+            input_->clear();
+            bubble(QStringLiteral("You"), text, "#2e86c1");
+            ollama_messages_.push_back({{"role", "user"}, {"content", text.toStdString()}});
+            rounds_ = 0;
+            ollama_request();
+            return;
+        }
         if (!has_credentials()) {
             note(QStringLiteral("This tab needs an API key (ANTHROPIC_API_KEY, set before "
                                 "launching the viewer)."),
@@ -304,6 +383,26 @@ private slots:
 
 private:
     bool claude_code() const { return backend_->currentIndex() == 0; }
+    bool ollama() const { return backend_->currentIndex() == 2; }
+
+    void backend_changed() {
+        ollama_model_->setVisible(ollama());
+        think_->setVisible(ollama());
+        input_->setPlaceholderText(
+            ollama() ? QStringLiteral("Ask the local model — e.g. \"decimate the bunny to 10%, "
+                                      "then make it glossy\"   (Enter sends, Shift+Enter: new "
+                                      "line)")
+                     : QStringLiteral("Ask Claude — e.g. \"relax the bunny until its worst "
+                                      "triangle is above 0.1, then make it glossy\"   (Enter "
+                                      "sends, Shift+Enter: new line)"));
+        if (busy_) {
+            return;
+        }
+        greet();
+        if (ollama()) {
+            refresh_ollama_models();
+        }
+    }
 
 #ifdef ROSETTA_VOICE
     // ---- voice input --------------------------------------------------------
@@ -759,6 +858,15 @@ private:
     json run_tool(const json &block) {
         const std::string name  = block["name"];
         const json        input = block.value("input", json::object());
+        const auto [text, is_error] = execute_tool(name, input);
+        return {{"type", "tool_result"},
+                {"tool_use_id", block["id"]},
+                {"content", text},
+                {"is_error", is_error}};
+    }
+
+    /** @brief Run one tool against the live scene, and log it. Returns (text, is_error). */
+    std::pair<std::string, bool> execute_tool(const std::string &name, const json &input) {
         tool_call(QString::fromStdString(name), input);
 
         scenesync::publish(*interp_, *server_); // the server sees what the scene holds
@@ -779,10 +887,7 @@ private:
         emit sceneChanged();
 
         tool_result(QString::fromStdString(text), is_error);
-        return {{"type", "tool_result"},
-                {"tool_use_id", block["id"]},
-                {"content", text},
-                {"is_error", is_error}};
+        return {text, is_error};
     }
 
     void busy(bool on) {
@@ -791,26 +896,409 @@ private:
         send_->setEnabled(!on);
         stop_->setEnabled(on);
         backend_->setEnabled(!on);
+        ollama_model_->setEnabled(!on);
+        think_->setEnabled(!on);
 #ifdef ROSETTA_VOICE
         mic_->setEnabled(!on && !voice_->transcribing());
 #endif
-        status_->setText(!on ? QString()
-                             : claude_code() ? QStringLiteral("Starting Claude Code…")
-                                             : QStringLiteral("%1 is working…").arg(model_));
+        status_->setText(!on            ? QString()
+                         : claude_code() ? QStringLiteral("Starting Claude Code…")
+                         : ollama()      ? QStringLiteral("%1 (Ollama, on this machine) is working…")
+                                          .arg(ollama_model_->currentText())
+                                         : QStringLiteral("%1 is working…").arg(model_));
     }
 
     void finish(bool can_retry = false) {
         busy(false);
         // Retry replays the API backend's pending turn; Claude Code keeps its own history.
-        retry_->setEnabled(!claude_code() && can_retry && !messages_.empty() &&
-                           messages_.back()["role"] == "user");
+        const json &history = ollama() ? ollama_messages_ : messages_;
+        retry_->setEnabled(!claude_code() && can_retry && !history.empty() &&
+                           history.back()["role"] != "assistant");
         input_->setFocus();
         emit turnFinished();
+    }
+
+    // ---- the Ollama backend --------------------------------------------------
+
+    static QString ollama_base_url() {
+        QString h = qEnvironmentVariable("OLLAMA_HOST", QStringLiteral("http://localhost:11434"));
+        if (!h.contains(QStringLiteral("://"))) {
+            h.prepend(QStringLiteral("http://"));
+        }
+        QUrl u(h);
+        if (u.host() == QStringLiteral("0.0.0.0")) { // a bind address, not one to call
+            u.setHost(QStringLiteral("127.0.0.1"));
+        }
+        if (u.port() < 0) {
+            u.setPort(11434);
+        }
+        return u.toString(QUrl::StripTrailingSlash);
+    }
+
+    QNetworkRequest ollama_req(const QString &path) const {
+        QNetworkRequest req(QUrl(ollama_base_ + path));
+        req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+        return req;
+    }
+
+    // The installed models that can call tools: /api/tags lists them,
+    // /api/show says which have the "tools" capability.
+    void refresh_ollama_models() {
+        QNetworkReply *r = net_.get(ollama_req(QStringLiteral("/api/tags")));
+        connect(r, &QNetworkReply::finished, this, [this, r] {
+            r->deleteLater();
+            const json tags = json::parse(r->readAll().toStdString(), nullptr, false);
+            if (r->error() != QNetworkReply::NoError || tags.is_discarded()) {
+                note(QStringLiteral("Ollama is not reachable at %1 — start it (the Ollama app, or "
+                                    "`ollama serve`), or set OLLAMA_HOST.")
+                         .arg(ollama_base_),
+                     "#c0392b");
+                return;
+            }
+            std::vector<std::string> names;
+            for (const json &m : tags.value("models", json::array())) {
+                names.push_back(m.value("name", ""));
+            }
+            if (names.empty()) {
+                note(QStringLiteral("Ollama has no models yet: `ollama pull qwen3:8b`."), "#c0392b");
+                return;
+            }
+            auto pending = std::make_shared<std::size_t>(names.size());
+            auto usable  = std::make_shared<std::map<std::string, bool>>();
+            for (const std::string &name : names) {
+                QNetworkReply *s = net_.post(ollama_req(QStringLiteral("/api/show")),
+                                             QByteArray::fromStdString(json{{"model", name}}.dump()));
+                connect(s, &QNetworkReply::finished, this, [this, s, name, pending, usable] {
+                    s->deleteLater();
+                    const json info  = json::parse(s->readAll().toStdString(), nullptr, false);
+                    bool       tools = false;
+                    if (!info.is_discarded()) {
+                        for (const json &c : info.value("capabilities", json::array())) {
+                            tools = tools || c == "tools";
+                        }
+                    }
+                    (*usable)[name] = tools;
+                    if (--*pending == 0) {
+                        fill_ollama_models(*usable);
+                    }
+                });
+            }
+        });
+    }
+
+    void fill_ollama_models(const std::map<std::string, bool> &usable) {
+        const QString want = qEnvironmentVariable(
+            "ROSETTA_OLLAMA_MODEL", QSettings(QStringLiteral("rosetta"), QStringLiteral("scene-viewer"))
+                                        .value(QStringLiteral("assistant/ollama_model"))
+                                        .toString());
+        filling_models_ = true;
+        ollama_model_->clear();
+        QStringList skipped;
+        for (const auto &[name, tools] : usable) {
+            if (tools) {
+                ollama_model_->addItem(QString::fromStdString(name));
+            } else {
+                skipped << QString::fromStdString(name);
+            }
+        }
+        int pick = ollama_model_->findText(want);
+        if (pick < 0) {
+            pick = ollama_model_->findText(QStringLiteral("qwen3:8b"));
+        }
+        ollama_model_->setCurrentIndex(pick < 0 ? 0 : pick);
+        filling_models_ = false;
+        if (ask_when_ready_ && ollama_model_->count() > 0) {
+            ask_when_ready_ = false;
+            submit();
+        }
+        if (!skipped.isEmpty()) {
+            note(QStringLiteral("Not offered (no tool calling in Ollama): %1.")
+                     .arg(skipped.join(QStringLiteral(", "))),
+                 "gray");
+        }
+        if (ollama_model_->count() == 0) {
+            note(QStringLiteral("None of the installed models can call tools — `ollama pull "
+                                "qwen3:8b` adds one that can."),
+                 "#c0392b");
+        }
+    }
+
+    json ollama_tools() const {
+        json out = json::array();
+        for (const json &t : server_->tools()) {
+            out.push_back({{"type", "function"},
+                           {"function",
+                            {{"name", t["name"]},
+                             {"description", t["description"]},
+                             {"parameters", t["inputSchema"]}}}});
+        }
+        return out;
+    }
+
+    // What a small model needs up front. The rules and the library reference
+    // come first and never change, so Ollama can reuse their cached prefix
+    // from one round to the next; the scene's objects change, so they go last.
+    std::string ollama_system_prompt() const {
+        std::string out =
+            "You control a live 3D viewer of a C++ scene library through tools. The user sees "
+            "the 3D view, an object list and a property panel; every change you make is shown "
+            "immediately.\n\n"
+            "Rules:\n"
+            "- Act with the tools; do not describe code or tell the user how to do it.\n"
+            "- Use ONLY the classes, fields and methods in the reference below, with their exact "
+            "names. Values must respect the ranges and choices given.\n"
+            "- Objects in the scene are passed by name (e.g. \"bunny\").\n"
+            "- To use a solver (a class whose run method takes a Mesh): create it, set its "
+            "fields, then call run with the mesh.\n"
+            "- A no-argument method that runs a solver with its defaults (its description says "
+            "so) is only for a request with no amount. When the user gives an amount or a "
+            "setting (\"to 10%\", \"20 passes\"), use the solver class and set the field that "
+            "controls it.\n"
+            "- Check every result against the request. If the numbers do not match it, fix it "
+            "with another call, or say plainly that it did not work - never claim success the "
+            "results do not show.\n"
+            "- When done, reply in one or two short sentences with what changed and the numbers "
+            "that matter.\n\n"
+            "Examples of correct tool calls:\n"
+            "  call_method {\"target\": \"bunny\", \"method\": \"subdivide\"}\n"
+            "  set_fields {\"object\": \"bunny\", \"values\": {\"preset\": \"glossy\", "
+            "\"opacity\": 0.5}}\n"
+            "  create_object {\"class\": \"Decimator\", \"name\": \"dec\"}\n"
+            "  set_fields {\"object\": \"dec\", \"values\": {\"ratio\": 0.1}}\n"
+            "  call_method {\"target\": \"dec\", \"method\": \"run\", \"args\": [\"bunny\"]}\n"
+            "  call_method {\"target\": \"Relaxer\", \"method\": \"minQuality\", \"args\": "
+            "[\"bunny\"]}   (a static method: the target is the class)\n\n";
+        out += library_reference();
+        out += "\nObjects in the scene now:";
+        for (const auto &[name, obj] : interp_->vars) {
+            out += "\n  " + name + " (" + std::string(obj.meta() ? obj.meta()->name : "?") + ")";
+        }
+        out += "\n";
+        return out;
+    }
+
+    static std::string first_line(const char *doc, std::size_t max = 160) {
+        std::string s = doc ? doc : "";
+        s             = s.substr(0, s.find('\n'));
+        return s.size() > max ? s.substr(0, max) + "..." : s;
+    }
+
+    static std::string type_text(const rosetta::dyn::TypeDesc *t) {
+        if (!t) {
+            return "?";
+        }
+        std::string s = t->spelling;
+        if (t->kind == rosetta::dyn::Kind::enum_ && t->n_enumerators) {
+            s += " (one of:";
+            for (std::size_t i = 0; i < t->n_enumerators; ++i) {
+                s += std::string(i ? ", " : " ") + t->enumerators[i].name;
+            }
+            s += ")";
+        }
+        return s;
+    }
+
+    // Every bound class: what it is, its fields with their constraints, and
+    // its callable methods with their parameters — read from the registry,
+    // so it is always the library as built.
+    std::string library_reference() const {
+        std::string out = "Library reference:\n";
+        for (const auto *k : server_->registry().classes()) {
+            out += "\nclass " + std::string(k->name);
+            if (const std::string d = first_line(k->doc); !d.empty()) {
+                out += " - " + d;
+            }
+            out += "\n";
+            for (std::size_t i = 0; i < k->n_fields; ++i) {
+                const auto &f = k->fields[i];
+                out += "  field " + std::string(f.name) + ": " + type_text(f.type);
+                if (f.range.has) {
+                    out += " in [" + json(f.range.lo).dump() + ", " + json(f.range.hi).dump() + "]";
+                }
+                if (f.n_choices) {
+                    out += ", one of:";
+                    for (std::size_t c = 0; c < f.n_choices; ++c) {
+                        out += std::string(c ? ", " : " ") + "\"" + f.choices[c] + "\"";
+                    }
+                }
+                if (f.readonly) {
+                    out += ", read-only";
+                }
+                if (const std::string d = first_line(f.doc, 100); !d.empty()) {
+                    out += " - " + d;
+                }
+                out += "\n";
+            }
+            for (std::size_t i = 0; i < k->n_methods; ++i) {
+                const auto &m = k->methods[i];
+                if (!m.invoke) {
+                    continue; // described but not callable: not worth the model's attention
+                }
+                out += std::string("  ") + (m.is_static ? "static " : "") + "method " + m.name + "(";
+                for (std::size_t a = 0; a < m.n_params; ++a) {
+                    out += std::string(a ? ", " : "") + m.params[a].name + ": " +
+                           type_text(m.params[a].type);
+                }
+                out += ")";
+                if (m.ret && m.ret->kind != rosetta::dyn::Kind::void_) {
+                    out += " -> " + type_text(m.ret);
+                }
+                if (const std::string d = first_line(m.doc, 100); !d.empty()) {
+                    out += " - " + d;
+                }
+                out += "\n";
+            }
+        }
+        return out;
+    }
+
+    // Small models mix up the tools' argument names (`target` vs `object`,
+    // `fields` vs `values`); take the obvious intent rather than fail.
+    static json normalize_args(const std::string &tool, json a) {
+        if (a.is_string()) { // some models send the arguments as a JSON string
+            a = json::parse(a.get<std::string>(), nullptr, false);
+        }
+        if (!a.is_object()) {
+            return json::object();
+        }
+        const auto alias = [&](const char *to, std::initializer_list<const char *> from) {
+            for (const char *f : from) {
+                if (!a.contains(to) && a.contains(f)) {
+                    a[to] = a[f];
+                    a.erase(f);
+                }
+            }
+        };
+        if (tool == "call_method") {
+            alias("target", {"object", "name", "class"});
+            alias("args", {"arguments", "params"});
+        } else if (tool == "set_fields") {
+            alias("object", {"target", "name"});
+            alias("values", {"fields"});
+        } else if (tool == "inspect_object" || tool == "release_object") {
+            alias("object", {"target", "name"});
+        } else if (tool == "create_object") {
+            alias("class", {"class_name", "type"});
+        } else if (tool == "describe_class") {
+            alias("class", {"name", "class_name"});
+        }
+        return a;
+    }
+
+    void ollama_request() {
+        if (++rounds_ > k_max_rounds) {
+            note(QStringLiteral("Stopped after %1 tool rounds.").arg(k_max_rounds), "#c0392b");
+            finish();
+            return;
+        }
+        busy(true);
+        cancelled_ = false;
+
+        json msgs = json::array({{{"role", "system"}, {"content", ollama_system_prompt()}}});
+        for (const json &m : ollama_messages_) {
+            msgs.push_back(m);
+        }
+        const json body = {
+            {"model", ollama_model_->currentText().toStdString()},
+            {"stream", false},
+            {"think", think_->isChecked()},
+            {"keep_alive", "30m"},
+            {"options", {{"num_ctx", ollama_ctx_}}},
+            {"messages", msgs},
+            {"tools", ollama_tools()},
+        };
+        QNetworkRequest req = ollama_req(QStringLiteral("/api/chat"));
+        req.setTransferTimeout(15 * 60 * 1000); // a first load plus a long think
+        reply_ = net_.post(req, QByteArray::fromStdString(body.dump()));
+        connect(reply_, &QNetworkReply::finished, this, [this, r = reply_] { on_ollama_reply(r); });
+    }
+
+    void on_ollama_reply(QNetworkReply *r) {
+        r->deleteLater();
+        reply_ = nullptr;
+        if (cancelled_) {
+            note(QStringLiteral("Stopped."), "gray");
+            finish(true);
+            return;
+        }
+        const json resp = json::parse(r->readAll().toStdString(), nullptr, false);
+        if (r->error() != QNetworkReply::NoError || resp.is_discarded() || resp.contains("error")) {
+            QString why = r->errorString();
+            if (!resp.is_discarded() && resp.contains("error")) {
+                why = QString::fromStdString(resp["error"].is_string()
+                                                 ? resp["error"].get<std::string>()
+                                                 : resp["error"].dump());
+            }
+            if (r->error() == QNetworkReply::ConnectionRefusedError) {
+                why = QStringLiteral("not running at %1").arg(ollama_base_);
+            }
+            note(QStringLiteral("Ollama: %1").arg(why), "#c0392b");
+            finish(true);
+            return;
+        }
+
+        const json &msg     = resp.contains("message") ? resp["message"] : json::object();
+        std::string content = msg.value("content", "");
+        // Some models inline their reasoning instead of returning it apart.
+        for (std::size_t a; (a = content.find("<think>")) != std::string::npos;) {
+            const std::size_t b = content.find("</think>", a);
+            content.erase(a, b == std::string::npos ? std::string::npos : b + 8 - a);
+        }
+        const json calls = msg.value("tool_calls", json::array());
+
+        json assistant = {{"role", "assistant"}, {"content", content}};
+        if (!calls.empty()) {
+            assistant["tool_calls"] = calls;
+        }
+        ollama_messages_.push_back(assistant);
+
+        const QString text = QString::fromStdString(content).trimmed();
+        if (!text.isEmpty()) {
+            bubble(ollama_model_->currentText(), text, "#8e44ad");
+        }
+        if (calls.empty()) {
+            if (text.isEmpty()) {
+                // Nothing to keep: drop the empty turn so Retry re-asks cleanly.
+                ollama_messages_.erase(ollama_messages_.end() - 1);
+                note(QStringLiteral("The model returned an empty reply — Retry, rephrase, or tick "
+                                    "\"think\"."),
+                     "#c0392b");
+                finish(true);
+                return;
+            }
+            finish();
+            return;
+        }
+        for (const json &c : calls) {
+            const json        fn   = c.value("function", json::object());
+            const std::string name = fn.value("name", "");
+            const auto [result, is_error] =
+                execute_tool(name, normalize_args(name, fn.value("arguments", json::object())));
+            (void)is_error; // the text says so; Ollama's tool message has no error flag
+            ollama_messages_.push_back({{"role", "tool"}, {"tool_name", name}, {"content", result}});
+        }
+        if (cancelled_) {
+            note(QStringLiteral("Stopped."), "gray");
+            finish(true);
+            return;
+        }
+        ollama_request();
     }
 
     // ---- the transcript ---------------------------------------------------
 
     void greet() {
+        if (ollama()) {
+            note(QStringLiteral("Chat about the scene with a model running on this machine, through "
+                                "Ollama (%1) — no account, no key, nothing leaves it. It sees the "
+                                "objects in the list on the left and changes them with the same "
+                                "tools an MCP client gets; its prompt also carries a reference of "
+                                "the bound library, which small models need. Context: %2 tokens.")
+                     .arg(ollama_base_)
+                     .arg(ollama_ctx_),
+                 "gray");
+            return;
+        }
         if (claude_code()) {
             note(QStringLiteral("Chat with Claude about the scene, through Claude Code and your "
                                 "Claude Code login (no API key). It sees the objects in the list "
@@ -926,6 +1414,15 @@ private:
     QPushButton  *reset_  = nullptr;
     QLabel       *status_ = nullptr;
     QComboBox    *backend_ = nullptr;
+
+    // Ollama backend
+    QComboBox *ollama_model_    = nullptr;
+    QCheckBox *think_           = nullptr;
+    QString    ollama_base_;
+    int        ollama_ctx_      = 16384;
+    json       ollama_messages_ = json::array(); // native /api/chat history, no system prompt
+    bool       filling_models_  = false;
+    bool       ask_when_ready_  = false; // ask() arrived before the model list
 
 #ifdef ROSETTA_VOICE
     voice::VoiceInput *voice_     = nullptr;

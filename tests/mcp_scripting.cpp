@@ -141,6 +141,49 @@ TEST_F(McpLua, VectorsArriveWholeButResultsAreSummarized) {
     EXPECT_EQ(r["result"]["back"]["length"], 4);
 }
 
+TEST_F(McpLua, LuaFunctionsAreCallbacks) {
+    auto [err, r] = lua(R"(
+        local p = new("Person", "Ada", 30)
+        local seen = {}
+        local sum = p:eachScore(function(i, v) seen[#seen + 1] = i * 10 + v end)
+        -- the object arrives by reference: changing it changes the C++ one
+        local n = p:growUntil(function(who, colour)
+            who.name = "Ada-" .. colour
+            return who.age < 33
+        end)
+        return {sum = sum, seen = table.concat(seen, ","), n = n, age = p.age, name = p.name}
+    )");
+    ASSERT_FALSE(err) << r;
+    // (A map, not a list: this fixture summarizes lists past two items.)
+    EXPECT_EQ(r["result"], json::parse(
+        R"({"sum": 6.0, "seen": "1.0,12.0,23.0", "n": 3, "age": 33, "name": "Ada-Red"})"));
+}
+
+TEST_F(McpLua, ACallbackErrorIsALuaErrorAndAStoredCallbackOutlivesNothing) {
+    auto [err, r] = lua(R"(
+        local p = new("Person")
+        keep("p", p)
+        local ok, e = pcall(function() return p:eachScore(function() error("inside") end) end)
+        p:keep(function() print("late") end)
+        p:fire()
+        return {ok, string.find(e, "inside") ~= nil}
+    )");
+    ASSERT_FALSE(err) << r;
+    EXPECT_EQ(r["result"], json::parse("[false, true]"));
+    EXPECT_EQ(r["output"], "late\n");
+    // The script is over and its Lua state closed: calling the stored function
+    // now fails cleanly instead of touching a dead lua_State.
+    auto [err2, msg] = tool("call_method", {{"target", "p"}, {"method", "fire"}});
+    EXPECT_TRUE(err2);
+    EXPECT_NE(text(msg).find("after its script had finished"), std::string::npos) << msg;
+}
+
+TEST_F(McpLua, ARunawayCallbackStillHitsTheTimeLimit) {
+    auto [err, msg] = lua(R"(new("Person"):eachScore(function() while true do end end))", 0.2);
+    EXPECT_TRUE(err);
+    EXPECT_NE(text(msg).find("time"), std::string::npos) << msg;
+}
+
 // ---------------------------------------------------------------------------
 // Python
 // ---------------------------------------------------------------------------
@@ -204,6 +247,45 @@ TEST_F(McpPython, TimeoutDoesNotLeakIntoTheNextRun) {
     auto [err2, r] = py("sum(range(100000))");
     ASSERT_FALSE(err2) << r;
     EXPECT_EQ(r["result"], 4999950000LL);
+}
+
+TEST_F(McpPython, PythonCallablesAreCallbacks) {
+    auto [err, r] = py(R"(
+p = new("Person", "Ada", 30)
+seen = []
+total = p.eachScore(lambda i, v: seen.append((i, v)))
+def rename(who, colour):
+    who.name = "Ada-" + colour
+    return who.age < 33
+n = p.growUntil(rename)
+try:
+    p.eachScore(lambda i, v: 1 / 0)
+    failed = None
+except RuntimeError as e:
+    failed = "ZeroDivisionError" in str(e)
+{"total": total, "seen": str(seen), "n": n, "age": p.age, "name": p.name, "failed": failed}
+)");
+    ASSERT_FALSE(err) << r;
+    EXPECT_EQ(r["result"]["total"], 6.0);
+    EXPECT_EQ(r["result"]["seen"], "[(0, 1.0), (1, 2.0), (2, 3.0)]");
+    EXPECT_EQ(r["result"]["n"], 3);
+    EXPECT_EQ(r["result"]["age"], 33);
+    EXPECT_EQ(r["result"]["name"], "Ada-Red");
+    EXPECT_EQ(r["result"]["failed"], true);
+}
+
+TEST_F(McpPython, AStoredCallableStaysCallableAfterTheScript) {
+    ASSERT_FALSE(py(R"(
+p = new("Person")
+keep("q", p)
+hits = []
+p.keep(lambda: hits.append(1))
+)").first);
+    // C++ calls it from a plain tool call, outside run_python: the GIL is
+    // taken by the callback itself.
+    EXPECT_FALSE(tool("call_method", {{"target", "q"}, {"method", "fire"}}).first);
+    EXPECT_FALSE(tool("call_method", {{"target", "q"}, {"method", "fire"}}).first);
+    EXPECT_TRUE(server.release("q")); // destroys the callable, again outside any script
 }
 
 TEST_F(McpPython, SharesHandlesWithLuaAndTheJsonTools) {

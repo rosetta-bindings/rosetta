@@ -68,8 +68,10 @@ Everything below is discovered by **reflection** from your unmodified headers �
 - **Factories returning `std::unique_ptr<T>`** — the script-side object takes ownership (python, nanobind, node, wasm, lua). A `unique_ptr` parameter, field or reference is not bound.
 - **`std::map` / `std::unordered_map` / `std::optional`** — a `dict` / `None`-or-value in Python, a plain object / value-or-`undefined` in Node and WebAssembly, a table / `nil`-or-value in Lua, `Record<K, V>` / `T | undefined` in TypeScript. Other targets skip such members for now (reported in the [coverage report](docs/COVERAGE.md)).
 - **Parameter names & default arguments** — read from the declaration, so a binding offers `mesh.remesh(edge_length=0.5)` rather than `remesh(arg0)`, and a C++ default reaches the host language as one ([details](docs/MANIFEST.md#doc-comments-doc_comments)).
+- **An API diff between releases**: every generation writes `api.json`, a snapshot of the public API. `rosetta_gen --api-diff old new` reports what a release breaks (removed or renamed members, changed signatures, narrowed ranges, renumbered enumerators) and exits non-zero when something does ([details](docs/API_DIFF.md)).
 - **The documentation your library already has** — `///` and `/** @param … @return … */` blocks are read out of the headers and become Python docstrings, TSDoc, Javadoc, C# XML docs and OpenAPI descriptions. Nothing to write, nothing to annotate; turn it off with `"doc_comments": false`.
-- Members a backend can't marshal (e.g. `std::function` params) are **skipped**, not fatal.
+- **Callbacks (`std::function` parameters)** — pass a Python, JavaScript or Lua function where C++ takes a `std::function` (python, nanobind, node, wasm, lua, dynamic, mcp). Node, WebAssembly and Lua bind one only when every type in its signature converts. Over MCP, an agent's plain tool call passes `{"$record": true}` and gets each call's arguments back with the result, and `run_script` / `run_python` take a real function. Julia, C#, Java and REST skip callbacks for now.
+- Members a backend can't marshal (e.g. a raw pointer, or a callback on a target without callback support) are **skipped**, not fatal.
 
 **Opt-in annotations** (enrich without intruding — see the [annotation reference](docs/ANNOTATIONS.md))
 
@@ -159,7 +161,7 @@ What that buys, relative to the language backends:
 
 - **Overloads come back.** The metadata keeps the whole overload set and scores it against the actual arguments, so the name-keyed targets' first-only limit ([COVERAGE.md](docs/COVERAGE.md)) doesn't apply — and a failed call can name every candidate it rejected, with the reason.
 - **UI by query, not by codegen.** A property inspector is a walk over `registry()`: `label` → caption, `doc` → tooltip, `range` → slider bounds, `readonly` → disabled row, `combobox` / enumerators → drop-down, `button` → action row. Annotations are enforced once, in the core, instead of per backend.
-- **What can't be marshalled is described, not deleted** — a `std::function` parameter stays in the metadata with the reason it is unavailable, so a UI can grey it out.
+- **What can't be marshalled is described, not deleted** — a member the core cannot call (say, a callback that writes through a `double &`) stays in the metadata with the reason it is unavailable, so a UI can grey it out.
 - **Lifetime is explicit** — a `T&` return crosses without a copy and *pins* its parent, so a sub-object handle cannot outlive the object it points into.
 
 The generated tables are aggregate initializers, so like the other targets they build with an **off-the-shelf C++20 compiler**. The per-call cost (name lookup, overload scoring, `Any` marshalling) makes this the right tool for control — properties, commands, menus, scripting glue — and it wants a cache in front of it for bulk data; [`examples/dynamic`](examples/dynamic) measures both and shows a terminal interpreter and a Qt viewer (3D view, property panel, console) driving one set of tables without naming a single bound type.

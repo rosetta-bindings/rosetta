@@ -134,7 +134,7 @@ Mesh::at(std::string) matched no overload of 2:
 
 Two more consequences worth knowing:
 
-- **What cannot be marshalled is described, not deleted.** A member whose type no gate claimed keeps its entry with a null thunk and a stated reason (`.skip_reason = "callback: a std::function parameter needs a foreign-callable adapter"`), so a UI can grey it out instead of the member silently vanishing.
+- **What cannot be marshalled is described, not deleted.** A member whose type no gate claimed keeps its entry with a null thunk and a stated reason (for instance `.skip_reason = "callback writing through a non-const reference to a non-class type: ..."`), so a UI can grey it out instead of the member silently vanishing.
 - **Ownership is explicit.** `ObjectRef::owner` is non-null when the reference owns the object. A getter returning `T&` can hand back a *borrowed* handle carrying the parent's owner — which pins the parent and closes the dangling-sub-object hole that a raw-pointer return has.
 
 ### What it costs

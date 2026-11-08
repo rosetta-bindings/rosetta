@@ -190,6 +190,14 @@ target_compile_options(coverage PRIVATE -fannotation-attributes)
 target_link_libraries(coverage PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
 gtest_discover_tests(coverage)
 
+# The public-API snapshot (api.json) and the diff between two of them
+# (<rosetta/api_diff.h>, `rosetta_gen --api-diff`).
+add_executable(api_diff api_diff.cpp)
+target_include_directories(api_diff PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(api_diff PRIVATE -fannotation-attributes)
+target_link_libraries(api_diff PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
+gtest_discover_tests(api_diff)
+
 # Foreign-sequence marshalling (rosetta::is_sequence — GEO::vector-style
 # containers through a std::vector boundary). Verifies generated sources.
 add_executable(sequence sequence.cpp)

@@ -54,6 +54,7 @@
 #include <any>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <memory>
 #include <string>
@@ -96,6 +97,10 @@ namespace rosetta::dyn {
         enum_,
         object,
         vector,
+        // A callable: a std::function parameter, filled from a script function
+        // (or anything else that can stand behind dyn::Function). Last, so the
+        // numeric values of the others are unchanged.
+        function,
     };
 
     const char *kind_name(Kind k);
@@ -133,6 +138,14 @@ namespace rosetta::dyn {
         // by the generated registration function rather than at static-init
         // time, because two classes can reference each other's TypeDesc.
         const MetaClass *cls = nullptr;
+
+        // Set for kind == function: the callback's signature, so a UI or an MCP
+        // client can say what the function will be called with, and so the
+        // arguments C++ hands the callback are boxed with their real types
+        // (enumerator names, class metadata). `result` is null for void.
+        const TypeDesc *const *params   = nullptr;
+        std::size_t            n_params = 0;
+        const TypeDesc        *result   = nullptr;
     };
 
     /** @brief Structural equality — used by overload scoring, not by identity. */
@@ -168,6 +181,18 @@ namespace rosetta::dyn {
      * possible (raw()) but every marshaller should go through the as_* / cast
      * accessors so the canonical contract stays enforceable in one place.
      */
+    /**
+     * @brief The canonical box for Kind::function: a host-language function as
+     * C++ sees it. It is called with the callback's arguments, already boxed,
+     * and returns its result boxed (Any::none() for void). Throwing
+     * rosetta::dyn::Error reports a failure in the host function to whoever
+     * called the bound member.
+     *
+     * fn_cast() (dynamic_cast.hxx) adapts one of these to the exact
+     * std::function<R(A...)> a bound member takes.
+     */
+    using Function = std::function<Any(const std::vector<Any> &)>;
+
     struct ObjectRef {
         void            *ptr = nullptr;
         const MetaClass *cls = nullptr;
@@ -204,6 +229,9 @@ namespace rosetta::dyn {
         static Any object(void *p, const MetaClass *c, std::shared_ptr<void> owner = {},
                           const TypeDesc *t = nullptr);
         static Any opaque(std::any v, const TypeDesc *t);
+        // A callable. `t` defaults to a generic Kind::function descriptor (a
+        // host function has no C++ signature to name).
+        static Any function(Function f, const TypeDesc *t = nullptr);
 
         const TypeDesc *type() const { return type_; }
         Kind            kind() const;
@@ -218,6 +246,7 @@ namespace rosetta::dyn {
         const std::string      &as_string() const;
         const std::vector<Any> &as_list() const;
         const ObjectRef        &as_object() const;
+        const Function         &as_function() const;
 
         const std::any &raw() const { return box_; }
         std::any       &raw() { return box_; }

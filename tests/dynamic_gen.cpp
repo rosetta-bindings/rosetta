@@ -50,9 +50,16 @@ namespace dyn_test {
         Point       &ref_origin() { return origin; }
         static Shape make(const std::string &n) { return Shape(n, 1); }
 
-        // Not marshalable: a std::function parameter. Described in the metadata
-        // with a reason, rather than silently absent.
+        // A callback: filled from a host function through fn_cast.
         void on_change(const std::function<void(int)> &cb) { cb(quality); }
+        void visit(std::function<bool(Point &, Mode)> cb, int limit = 3) {
+            (void)cb, (void)limit;
+        }
+
+        // Not marshalable: the callback writes through `double &`, which a
+        // host function cannot write back. Described in the metadata with a
+        // reason, rather than silently absent.
+        void adjust(std::function<void(double &)> cb) { (void)cb; }
     };
 
 } // namespace dyn_test
@@ -181,12 +188,27 @@ TEST(DynamicBackend, EmitsConstructorsIncludingTheImplicitDefault) {
 // Skips are described, not deleted
 // ---------------------------------------------------------------------------
 
+TEST(DynamicBackend, CallbackParametersBindThroughFnCast) {
+    const std::string s = dynamic_source();
+    EXPECT_NE(s.find("fn_cast<"), std::string::npos) << "a std::function parameter must bind";
+    EXPECT_NE(s.find(".kind = Kind::function"), std::string::npos);
+    // The callback's signature is described, so its arguments are boxed typed:
+    // visit's callback takes (Point &, Mode) and returns bool.
+    EXPECT_NE(s.find(".n_params = 2, .result = &"), std::string::npos);
+    // A defaulted callback-taking method keeps its other default; on_change has
+    // no skip reason any more.
+    const auto at   = s.find(".name = \"on_change\"");
+    const auto next = s.find("{.name = ", at + 1);
+    ASSERT_NE(at, std::string::npos);
+    EXPECT_TRUE(s.find(".skip_reason", at) == std::string::npos || s.find(".skip_reason", at) > next);
+}
+
 TEST(DynamicBackend, UnmarshalableMethodIsDescribedWithAReasonNotDropped) {
     const std::string s = dynamic_source();
     // The method still appears — a UI can list it and say why it is disabled.
-    const auto at = s.find(".name = \"on_change\"");
+    const auto at = s.find(".name = \"adjust\"");
     ASSERT_NE(at, std::string::npos);
-    EXPECT_NE(s.find(".skip_reason = \"callback:", at), std::string::npos);
+    EXPECT_NE(s.find(".skip_reason = \"callback writing through", at), std::string::npos);
     // …and no thunk was emitted for it.
     const auto next = s.find("{.name = ", at + 1);
     EXPECT_TRUE(s.find(".invoke =", at) == std::string::npos ||
@@ -198,7 +220,7 @@ TEST(DynamicBackend, SkipsAreRecordedInTheCoverageReport) {
     dynamic_source();
     bool found = false;
     for (const auto &sk : rosetta::coverage::log().skips) {
-        if (sk.target == "dynamic" && sk.member == "on_change") {
+        if (sk.target == "dynamic" && sk.member == "adjust") {
             found = true;
             EXPECT_EQ(sk.reason, "unmarshalable_type");
         }

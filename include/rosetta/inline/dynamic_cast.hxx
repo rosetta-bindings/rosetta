@@ -10,8 +10,9 @@
 // generically, and every backend that speaks Any inherits it.
 //
 // Coverage is deliberately the same set the dynamic backend's type gate lets
-// through: bool, arithmetic, enum, std::string, std::vector<U> of those, and
-// bound class types by value / reference / pointer. A type outside that set
+// through: bool, arithmetic, enum, std::string, std::vector<U> of those, bound
+// class types by value / reference / pointer, and std::function<R(A...)> over
+// those (fn_cast, at the bottom). A type outside that set
 // never reaches these templates — the emitter records a coverage skip and emits
 // a null thunk instead, keeping rosetta's skip-don't-emit-something-that-throws
 // policy.
@@ -20,6 +21,7 @@
 
 #pragma once
 
+#include <functional>
 #include <type_traits>
 #include <utility>
 
@@ -186,6 +188,70 @@ namespace rosetta::dyn {
         using U = cast_detail::bare<T>;
         return Any::object(const_cast<U *>(std::addressof(x)), t ? t->cls : nullptr,
                            std::move(owner), t);
+    }
+
+    // -------- callbacks ----------------------------------------------------
+
+    namespace cast_detail {
+
+        template <class F> struct fn_adapter; // only std::function<R(A...)>
+
+        // One argument C++ hands the callback, boxed with its declared type.
+        // A class taken by reference is BORROWED, not copied: the host function
+        // sees the very object C++ is working on (a mesh being visited), valid
+        // for the duration of the call — the same contract as the C++ callback.
+        template <class A> Any callback_arg(const TypeDesc *t, A &&a) {
+            using U = bare<A>;
+            if constexpr (std::is_class_v<U> && !std::is_same_v<U, std::string> &&
+                          !is_vector_v<U> && std::is_lvalue_reference_v<A>) {
+                return borrow_any(t, a);
+            } else {
+                return make_any(t, std::forward<A>(a));
+            }
+        }
+
+        inline const TypeDesc *param_type(const TypeDesc *t, std::size_t i) {
+            return t && i < t->n_params ? t->params[i] : nullptr;
+        }
+
+        template <class R, class... A> struct fn_adapter<std::function<R(A...)>> {
+            static std::function<R(A...)> make(const Any &v, const TypeDesc *t) {
+                // None: an EMPTY std::function, which C++ APIs read as "no callback".
+                if (v.empty() || v.kind() == Kind::void_) {
+                    return {};
+                }
+                if (v.kind() != Kind::function) {
+                    bad("a function", v);
+                }
+                return [f = v.as_function(), t](A... a) -> R {
+                    std::size_t      i = 0;
+                    (void)i, (void)t; // unused when the callback takes no argument
+                    // Braced initialization evaluates left to right, so `i`
+                    // walks the declared parameter types in order.
+                    std::vector<Any> args{
+                        callback_arg<A>(param_type(t, i++), std::forward<A>(a))...};
+                    Any r = f(args);
+                    if constexpr (!std::is_void_v<R>) {
+                        return value_cast<R>(r);
+                    }
+                };
+            }
+        };
+
+    } // namespace cast_detail
+
+    /**
+     * @brief Read `v` (a Kind::function, or none) as the std::function type F.
+     *
+     * `t` is the PARAMETER's descriptor; its `params` give each argument C++
+     * passes the callback its real TypeDesc, so an enum arrives with its
+     * enumerator names and a class with its metadata. The returned
+     * std::function keeps the host function alive for as long as C++ holds it;
+     * whether the HOST can still run it then is the host's business (a script
+     * runtime makes a late call fail with an Error rather than crash).
+     */
+    template <class F> F fn_cast(const Any &v, const TypeDesc *t) {
+        return cast_detail::fn_adapter<cast_detail::bare<F>>::make(v, t);
     }
 
 } // namespace rosetta::dyn

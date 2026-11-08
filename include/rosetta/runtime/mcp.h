@@ -51,6 +51,7 @@
 #include <functional>
 #include <iosfwd>
 #include <map>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <rosetta/dynamic.h>
@@ -61,6 +62,10 @@
 namespace rosetta::mcp {
 
     using json = nlohmann::json;
+
+    namespace detail {
+        struct Recording; // a {"$record": true} callback's log; see Server::from_json
+    }
 
     /** @brief How the server presents itself, and its bulk-data policy. */
     struct Options {
@@ -153,6 +158,10 @@ namespace rosetta::mcp {
          *  new or existing handles, long vectors summarized. */
         json encode(const dyn::Any &v);
 
+        /** @brief An argument C++ passed a recorded callback, as JSON: like
+         *  encode(), but an object is described, never given a handle. */
+        json callback_arg_json(const dyn::Any &v) const;
+
         /** @brief Apply the long-sequence summary policy to already-encoded items. */
         json encode_list(std::vector<json> items) const;
 
@@ -185,6 +194,10 @@ namespace rosetta::mcp {
         std::map<std::string, dyn::Object> objects_;
         std::map<std::string, std::size_t> counters_; // per class, for "Mesh#3"
         std::vector<std::pair<json, ToolFn>> extra_tools_;
+
+        // The {"$record": true} callbacks created while converting the current
+        // tool call's arguments, reported with its result (call_tool).
+        mutable std::vector<std::shared_ptr<detail::Recording>> recordings_;
     };
 
 } // namespace rosetta::mcp

@@ -128,12 +128,16 @@ namespace scene {
             t_ = std::move(nt);
         }
 
-        // One-click versions of the two solvers below, with their default
-        // settings — what an Actions button can call, since a button passes
-        // no arguments. Each returns the solver's report. For other settings,
-        // create a Decimator / Relaxer and call its run() on this mesh.
-        std::string decimate(); // keep half the triangles
-        std::string relax();    // 10 passes, step 0.5, shape preserved
+        // Short cuts to the two solvers below, each returning the solver's
+        // report. The no-argument forms use the defaults and are what an
+        // Actions button calls (a button passes no arguments); the one-
+        // argument forms take the setting people actually ask for — and are
+        // what a small language model reaches for first ("decimate(0.1)").
+        // For everything else, create a Decimator / Relaxer and run() it.
+        std::string decimate();             // keep half the triangles
+        std::string decimate(double ratio); // keep `ratio` of them
+        std::string relax();                // 10 passes, step 0.5, shape preserved
+        std::string relax(int passes);
 
         // ---- factories ---------------------------------------------------
         static Mesh cube() {
@@ -244,9 +248,8 @@ namespace scene {
             return m;
         }
 
-        // NOT marshalable by the dynamic model: a std::function parameter has no
-        // canonical Any representation yet. It still appears in the metadata,
-        // with the reason — it does not silently disappear.
+        // A callback: the dynamic model fills it from a host function (an MCP
+        // {"$record": true}, a Lua function, a Python callable).
         void onProgress(const std::function<void(double)> &cb) { cb(1.0); }
 
         // Write geometry back. Relaxer drives the mesh entirely through this
@@ -1175,8 +1178,22 @@ namespace scene {
         return d.report();
     }
 
+    inline std::string Mesh::decimate(double ratio) {
+        Decimator d;
+        d.ratio = ratio;
+        d.run(*this);
+        return d.report();
+    }
+
     inline std::string Mesh::relax() {
         Relaxer r;
+        r.run(*this);
+        return r.report();
+    }
+
+    inline std::string Mesh::relax(int passes) {
+        Relaxer r;
+        r.iterations = passes;
         r.run(*this);
         return r.report();
     }

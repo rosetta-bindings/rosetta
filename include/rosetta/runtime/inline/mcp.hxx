@@ -84,8 +84,40 @@ namespace rosetta::mcp {
             if (t->kind == dyn::Kind::vector && t->element) {
                 j["element"] = type_json(t->element);
             }
+            if (t->kind == dyn::Kind::function) {
+                json ps = json::array();
+                for (std::size_t i = 0; i < t->n_params; ++i) {
+                    ps.push_back(type_json(t->params[i]));
+                }
+                j["callback_params"]  = ps;
+                j["callback_returns"] = t->result ? type_json(t->result) : json("void");
+                j["pass"] =
+                    "{\"$record\": true} records each call and returns them with the result "
+                    "(add \"returns\": <value> if the callback must return one); null for none; "
+                    "a real function from run_script / run_python";
+            }
             return j;
         }
+
+        /**
+         * @brief A {"$record": true} callback: counts its calls and keeps the
+         * arguments of the first few and of the last, for the tool result.
+         */
+        struct Recording {
+            static constexpr std::size_t keep_first = 20;
+
+            std::size_t calls = 0;
+            json        first = json::array();
+            json        last;
+
+            json report() const {
+                json r = {{"calls", calls}, {"first", first}};
+                if (calls > first.size()) {
+                    r["last"] = last;
+                }
+                return r;
+            }
+        };
 
         // A MetaParam::default_value literal as JSON (0.001, true, "fast").
         inline json default_json(const char *d) {
@@ -304,6 +336,28 @@ namespace rosetta::mcp {
             }
             return o->as_any();
         }
+        // A recording callback, for a std::function parameter: every call's
+        // arguments are logged and come back with the tool result.
+        if (v.is_object() && v.contains("$record")) {
+            if (v["$record"] != true) {
+                throw dyn::Error("\"$record\" must be true");
+            }
+            auto rec = std::make_shared<detail::Recording>();
+            recordings_.push_back(rec);
+            const Any ret = v.contains("returns") ? from_json(v["returns"]) : Any::none();
+            return Any::function([this, rec, ret](const std::vector<Any> &args) {
+                json a = json::array();
+                for (const Any &x : args) {
+                    a.push_back(callback_arg_json(x));
+                }
+                ++rec->calls;
+                if (rec->first.size() < detail::Recording::keep_first) {
+                    rec->first.push_back(a);
+                }
+                rec->last = std::move(a);
+                return ret;
+            });
+        }
         if (v.is_null()) {
             return Any::none();
         }
@@ -382,6 +436,17 @@ namespace rosetta::mcp {
                     out.push_back(coerce(e, want->element));
                 }
                 return Any::list(std::move(out), want);
+            }
+            break;
+        case Kind::function:
+            // JSON has no functions; say what does work instead of letting
+            // overload resolution report a bare mismatch.
+            if (v.kind() != Kind::function && v.kind() != Kind::void_) {
+                throw dyn::Error(std::string("parameter of type ") + want->spelling +
+                                 " is a callback: pass {\"$record\": true} to record its calls "
+                                 "(add \"returns\": <value> if it must return one), null for "
+                                 "none, or call it from run_script / run_python with a real "
+                                 "function");
             }
             break;
         default:
@@ -517,10 +582,34 @@ namespace rosetta::mcp {
                     {"class", r.cls->qualified},
                     {"ownership", detail::ownership_of(r)}};
         }
+        case Kind::function:
+            return {{"$function", v.type() ? v.type()->spelling : "?"}};
         case Kind::unknown:
             break;
         }
         return {{"$opaque", v.type() ? v.type()->spelling : "?"}};
+    }
+
+    inline json Server::callback_arg_json(const dyn::Any &v) const {
+        using dyn::Kind;
+        // Like encode(), but never mints a handle: an object C++ passes a
+        // callback is BORROWED for the duration of that call, so a handle to
+        // it would dangle by the time the agent read the result.
+        switch (v.kind()) {
+        case Kind::object: {
+            const dyn::ObjectRef &r = v.as_object();
+            return {{"$object", r.cls ? r.cls->qualified : "?"}};
+        }
+        case Kind::vector: {
+            std::vector<json> items;
+            for (const dyn::Any &e : v.as_list()) {
+                items.push_back(callback_arg_json(e));
+            }
+            return encode_list(std::move(items));
+        }
+        default:
+            return const_cast<Server *>(this)->encode(v); // scalars: no handle minted
+        }
     }
 
     inline dyn::ArgList Server::args_for(const json &args, const std::vector<Signature> &cands) const {
@@ -908,7 +997,9 @@ namespace rosetta::mcp {
             {"description",
              "Arguments, positionally as an array or by parameter name as an object. Objects "
              "are passed by handle: {\"$ref\": \"Mesh#1\"} (or the bare handle string where "
-             "the parameter is a class). Enums are passed by enumerator name."}};
+             "the parameter is a class). Enums are passed by enumerator name. A callback "
+             "(std::function) parameter takes {\"$record\": true}: each call's arguments come "
+             "back under `callbacks` in the result."}};
         auto obj = [](json props, std::vector<std::string> req) {
             return json{{"type", "object"}, {"properties", std::move(props)}, {"required", req}};
         };
@@ -991,6 +1082,7 @@ namespace rosetta::mcp {
 
     inline json Server::call_tool(std::string_view name, const json &args) {
         json out;
+        recordings_.clear();
         try {
             if (name == "list_classes") {
                 out = list_classes();
@@ -1025,6 +1117,15 @@ namespace rosetta::mcp {
             return {{"content", json::array({{{"type", "text"}, {"text", e.what()}}})},
                     {"isError", true}};
         }
+        // What the {"$record": true} callbacks of this call saw, in argument order.
+        if (!recordings_.empty() && out.is_object()) {
+            json cbs = json::array();
+            for (const auto &r : recordings_) {
+                cbs.push_back(r->report());
+            }
+            out["callbacks"] = std::move(cbs);
+        }
+        recordings_.clear();
         return {{"content", json::array({{{"type", "text"}, {"text", out.dump(2)}}})},
                 {"structuredContent", out},
                 {"isError", false}};
@@ -1038,7 +1139,10 @@ namespace rosetta::mcp {
             "handle such as \"Mesh#1\"; pass it to call_method / inspect_object / set_fields, "
             "or as an argument to another method as {\"$ref\": \"Mesh#1\"}. Objects live until "
             "release_object. Field ranges and read-only flags are enforced by the server; "
-            "errors explain what was wrong. Large arrays are summarized, not returned in full.";
+            "errors explain what was wrong. Large arrays are summarized, not returned in full. "
+            "A callback (std::function) parameter takes {\"$record\": true}, which records "
+            "every call (a progress callback's values, say) and returns them under `callbacks`; "
+            "from run_script / run_python, pass a real function instead.";
         if (!opts_.instructions.empty()) {
             s += "\n\n" + opts_.instructions;
         }

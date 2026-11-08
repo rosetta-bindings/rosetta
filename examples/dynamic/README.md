@@ -188,18 +188,16 @@ The Qt panel uses the same mechanism: the `Origin ›` button drills into the
 nested `Vec3` with a handle that pins its `Mesh`, so editing the sub-form writes
 through to the parent and the parent cannot be freed while the sub-form is open.
 
-**6. What can't be marshalled is described, not deleted.** `Mesh::onProgress` takes a `std::function`, which has no canonical `Any` representation yet. It still appears in the metadata, with the reason, so a UI can grey it out — and it lands in `coverage.json`:
+**6. Callbacks cross too.** `Mesh::onProgress` takes a `std::function<void(double)>`. The core holds a host function as an `Any` of kind `function`, and the generated thunk adapts it to that exact `std::function`. From C++:
 
-```
-> methods scene::Mesh
-  void onProgress(std::function<void(double)>)  -- unavailable: callback: a
-      std::function parameter needs a foreign-callable adapter
-> call m onProgress 1
-  ! Mesh::onProgress(long long) matched no overload of 1:
-    onProgress(std::function<void(double)>) — not callable: callback: ...
+```cpp
+m.call("onProgress", {Any::function([](const std::vector<Any> &a) {
+    std::printf("%g\n", a[0].as_number());
+    return Any::none();
+})});
 ```
 
-Every other backend makes such a member vanish, which looks identical to never having asked for it.
+Over MCP (below), an agent passes `{"$record": true}` and gets the calls back with the result, and a Lua or Python script passes a real function. The console has no function literal, so `call m onProgress 1` is refused with a reason. A member the core cannot call at all keeps its entry with that reason too, so a UI can grey it out instead of it vanishing.
 
 ## An LLM agent as a fourth consumer (MCP)
 
@@ -246,6 +244,47 @@ export ANTHROPIC_API_KEY=...        # read at startup
 sandboxed, so it is off by default. The model defaults to `claude-opus-5`;
 override it with `ROSETTA_CLAUDE_MODEL`. Details are in the
 [design note](../../docs/MCP.md#in-app-chat-the-qt-viewers-claude-panel).
+
+### A local model instead (Ollama)
+
+The panel's selector has a third choice, **Ollama (local)**: a model running on
+your machine through [Ollama](https://ollama.com), with no account, no key and
+no network. Combined with voice input, the whole speech → model → scene loop
+runs offline.
+
+```bash
+ollama pull qwen3:8b      # ~5 GB; any model Ollama lists as tool-capable works
+./run.sh viewer           # then pick "Ollama (local)" and a model in the panel
+```
+
+The panel lists only the installed models that support tool calling. It talks to
+Ollama's native `/api/chat`, which lets each request set the context window
+(16k tokens by default, `ROSETTA_OLLAMA_CTX`; Ollama's own default of 4k cannot
+hold the tool definitions) and turn thinking off (the **think** box, off by
+default: much faster, and qwen3:8b calls tools reliably without it).
+
+A small model does not explore the way Claude does, so its system prompt carries
+a **reference of the bound library**: every class, field (type, range, choices)
+and callable method, built from the same registry the property panel reads, with
+a few worked tool calls and the objects in the scene. The panel also forgives
+obvious argument-name slips (`target` for `object`).
+
+Measured with qwen3:8b on an Apple-silicon laptop: *"decimate the bunny to 10% of
+its triangles, then tell me how many it has"* went 69 451 → 6 946 and was
+reported correctly in 3 runs out of 3 (8–17 s each); *"relax the bunny with 20
+passes, then make it glossy"* took 7 s. What made the difference, beyond the
+reference, was giving `Mesh` the direct forms a small model reaches for first,
+`decimate(ratio)` and `relax(passes)`. Without them it fell back to the
+no-argument `decimate()`, which halves the mesh, and reported success anyway. Short
+verb methods with the setting as an argument are the API shape small models
+handle best.
+
+| Variable | |
+|---|---|
+| `ROSETTA_ASSISTANT` | `claude-code`, `api` or `ollama` for this run (default: the last one picked in the panel) |
+| `ROSETTA_OLLAMA_MODEL` | model to preselect (default: the last one used, else `qwen3:8b`) |
+| `ROSETTA_OLLAMA_CTX` | context window in tokens (default 16384) |
+| `OLLAMA_HOST` | where Ollama listens (default `http://localhost:11434`) |
 
 ### Talking to the scene (voice input)
 

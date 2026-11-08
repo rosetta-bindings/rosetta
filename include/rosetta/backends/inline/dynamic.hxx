@@ -328,6 +328,11 @@ int main() {
          * the core could not evaluate — then the parameter stays required.
          */
         inline std::string dyn_default(const GenParam &p) {
+            // A defaulted callback (`= nullptr`, `= {}`) defaults to none: an
+            // empty std::function. Whatever the text, that is what it means.
+            if (p.has_default && p.type.is_callback) {
+                return "null";
+            }
             if (!p.has_default || p.default_text.empty()) {
                 return {};
             }
@@ -400,9 +405,47 @@ int main() {
          * backends, though, the member still reaches the metadata — so a UI can
          * grey it out and say why, instead of the member silently not existing.
          */
-        inline const char *dyn_reject(const GenType &t, const GenContext &c) {
+        inline const char *dyn_reject(const GenType &t, const GenContext &c,
+                                      bool is_param = false) {
             if (t.is_callback) {
-                return "callback: a std::function parameter needs a foreign-callable adapter";
+                // A std::function PARAMETER is filled from a host function
+                // (fn_cast). A field or return value would need the opposite
+                // direction — a C++ callable handed to the host — which is not
+                // modelled.
+                if (!is_param) {
+                    return "callback: only a std::function parameter is modelled, not a field or "
+                           "return value";
+                }
+                if (t.callback_sig.empty()) {
+                    return "callback: signature not reflected";
+                }
+                const GenType &ret = t.callback_sig.front();
+                if (ret.kind != "void") {
+                    if (ret.is_callback) {
+                        return "callback returning a callback";
+                    }
+                    if (ret.cb_ref) {
+                        return "callback returning a reference: a host function has nothing "
+                               "to refer to";
+                    }
+                    if (const char *r = dyn_reject(ret, c)) {
+                        return r;
+                    }
+                }
+                for (std::size_t i = 1; i < t.callback_sig.size(); ++i) {
+                    const GenType &a = t.callback_sig[i];
+                    if (a.is_callback) {
+                        return "callback taking a callback";
+                    }
+                    if (a.cb_mutable_ref && a.kind != "object") {
+                        return "callback writing through a non-const reference to a non-class "
+                               "type: the host function cannot write it back";
+                    }
+                    if (const char *r = dyn_reject(a, c)) {
+                        return r;
+                    }
+                }
+                return nullptr;
             }
             if (!t.interop.empty()) {
                 return "interop type: no canonical Any representation";
@@ -437,6 +480,20 @@ int main() {
 
         /** @brief The C++ spelling value_cast / ref_cast should be given. */
         inline std::string dyn_cpp(const GenType &t) {
+            // A callback is re-spelled from its reflected signature: the
+            // prettified GenType::spelling drops namespaces ("Point &" for
+            // "geo::Point &"), which would not compile in the generated TU.
+            if (t.is_callback && !t.callback_sig.empty()) {
+                const GenType &r = t.callback_sig.front();
+                std::string    s = "std::function<" + (r.kind == "void" ? "void" : dyn_cpp(r)) + "(";
+                for (std::size_t i = 1; i < t.callback_sig.size(); ++i) {
+                    const GenType &a = t.callback_sig[i];
+                    s += (i > 1 ? ", " : "");
+                    s += (a.cb_ref && !a.cb_mutable_ref ? "const " : "") + dyn_cpp(a) +
+                         (a.cb_ref ? " &" : "");
+                }
+                return s + ")>";
+            }
             if (t.kind == "boolean") {
                 return "bool";
             }
@@ -455,6 +512,9 @@ int main() {
 
         /** @brief The rosetta::dyn::Kind enumerator for `t`. */
         inline std::string dyn_kind(const GenType &t) {
+            if (t.is_callback) {
+                return "Kind::function";
+            }
             if (t.kind == "void") {
                 return "Kind::void_";
             }
@@ -505,6 +565,9 @@ int main() {
                 for (const auto &e : t.element) {
                     k += "{" + key(e) + "}";
                 }
+                for (const auto &e : t.callback_sig) {
+                    k += "(" + key(e) + ")";
+                }
                 return k;
             }
 
@@ -522,8 +585,25 @@ int main() {
                     elem = id(t.element[0], c);
                 }
 
+                // A callback's signature: the result (if any) and each
+                // argument, so the arguments C++ passes are boxed typed.
+                std::string cb_result, cb_params;
+                if (t.is_callback && !t.callback_sig.empty()) {
+                    if (t.callback_sig.front().kind != "void") {
+                        cb_result = id(t.callback_sig.front(), c);
+                    }
+                    for (std::size_t i = 1; i < t.callback_sig.size(); ++i) {
+                        cb_params += (i > 1 ? ", &" : "&") + id(t.callback_sig[i], c);
+                    }
+                }
+
                 const std::string nm = "td_" + std::to_string(next++);
                 ids[k]               = nm;
+
+                if (!cb_params.empty()) {
+                    defs += "    const TypeDesc *const " + nm + "_params[] = {" + cb_params +
+                            "};\n";
+                }
 
                 std::string enums_id;
                 if (t.kind == "enum" && !t.enumerators.empty()) {
@@ -564,6 +644,13 @@ int main() {
                                             : nullptr) {
                     defs += ", .cls = &k_" + dyn_ident(qualified_of(*k));
                 }
+                if (!cb_params.empty()) {
+                    defs += ",\n        .params = " + nm + "_params, .n_params = " +
+                            std::to_string(t.callback_sig.size() - 1);
+                }
+                if (!cb_result.empty()) {
+                    defs += ", .result = &" + cb_result;
+                }
                 defs += "};\n";
                 return nm;
             }
@@ -572,9 +659,15 @@ int main() {
         // -------- member emission ------------------------------------------
 
         /** @brief The expression that produces argument `i` inside a thunk. */
-        inline std::string dyn_arg(const GenParam &p, std::size_t i) {
+        inline std::string dyn_arg(const GenParam &p, std::size_t i, DynTypes &T,
+                                   const GenContext &c) {
             const std::string cpp = dyn_cpp(p.type);
             const std::string idx = "a[" + std::to_string(i) + "]";
+            // A callback: the host function adapted to this exact std::function,
+            // its arguments boxed with the descriptors in the parameter's type.
+            if (p.type.is_callback) {
+                return "fn_cast<" + cpp + ">(" + idx + ", &" + T.id(p.type, c) + ")";
+            }
             // A by-reference class parameter must NOT copy — that is what makes a
             // non-copyable class still passable (the compile-time side draws the
             // same line with GenParam::is_ref).
@@ -596,7 +689,7 @@ int main() {
                     // not yet callable.
                     return "out_params: multi-value returns are not modelled yet";
                 }
-                if (const char *r = dyn_reject(p.type, c)) {
+                if (const char *r = dyn_reject(p.type, c, /*is_param=*/true)) {
                     return r;
                 }
                 if (p.type.kind == "object" && !p.is_ref && !p.type.copy_constructible) {
@@ -616,7 +709,7 @@ int main() {
 
             std::string args;
             for (std::size_t i = 0; i < m.params.size(); ++i) {
-                args += (i ? ", " : "") + dyn_arg(m.params[i], i);
+                args += (i ? ", " : "") + dyn_arg(m.params[i], i, T, c);
             }
 
             std::string call;
@@ -825,7 +918,7 @@ int main() {
                 const auto &ps = k.ctors[ci];
                 bool        ok = true;
                 for (const auto &p : ps) {
-                    ok = ok && !dyn_reject(p.type, c) && !p.is_out &&
+                    ok = ok && !dyn_reject(p.type, c, /*is_param=*/true) && !p.is_out &&
                          (p.type.kind == "object" ? (p.is_ref || p.type.copy_constructible)
                                                   : !p.is_mutable_ref);
                 }
@@ -848,7 +941,7 @@ int main() {
 
                 std::string args;
                 for (std::size_t i = 0; i < ps.size(); ++i) {
-                    args += (i ? ", " : "") + dyn_arg(ps[i], i);
+                    args += (i ? ", " : "") + dyn_arg(ps[i], i, T, c);
                 }
                 ctors += "        {";
                 if (!ps.empty()) {
@@ -1023,7 +1116,7 @@ int main() {
                 const char *reject = dyn_reject(f.ret, c);
                 for (const auto &p : f.params) {
                     if (!reject) {
-                        reject = dyn_reject(p.type, c);
+                        reject = dyn_reject(p.type, c, /*is_param=*/true);
                     }
                     if (!reject && p.is_out) {
                         reject = "out_params: multi-value returns are not modelled yet";
@@ -1048,7 +1141,7 @@ int main() {
                     coverage::note_bound_function("dynamic", f);
                     std::string args;
                     for (std::size_t i = 0; i < f.params.size(); ++i) {
-                        args += (i ? ", " : "") + dyn_arg(f.params[i], i);
+                        args += (i ? ", " : "") + dyn_arg(f.params[i], i, T, c);
                     }
                     const std::string call = f.qualified + "(" + args + ")";
                     funcs += "        .invoke = +[](const ObjectRef &, const ArgList &" +

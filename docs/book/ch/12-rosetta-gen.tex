@@ -26,13 +26,14 @@ build tree. If you scaffolded your project with \code{rosetta\_gen --init} or
 \code{tools/rosetta\_init.py}, its bootstrap \code{CMakeLists.txt} does this for you and the binary appears at
 \code{extern/rosetta/bin/rosetta\_gen}.
 
-\section{The four modes}
+\section{The modes}
 
 \begin{lstlisting}[style=plain]
 rosetta_gen <manifest.json> [out_dir]        # plain: emit the generator project only
 rosetta_gen --build <manifest.json> [opts]   # the whole pipeline in one command
 rosetta_gen --clean <manifest.json> [opts]   # remove everything generated
 rosetta_gen --init  [manifest.json] [src]    # write a starter manifest + project skeleton
+rosetta_gen --api-diff <old> <new> [opts]    # what changed between two releases' api.json
 \end{lstlisting}
 
 \code{rosetta\_gen --help} prints the full built-in help; \code{--build --help}
@@ -366,6 +367,18 @@ sharing a name survives:
 not removing gen (no rosetta_gen marker in its CMakeLists)
 \end{lstlisting}
 
+\section{\code{--api-diff}: what a release breaks}
+
+\begin{lstlisting}[style=sh]
+bin/rosetta_gen --api-diff v1.2/bindings bindings [--json] [--breaking-only] [--strict]
+\end{lstlisting}
+
+Every generation writes \code{api.json}, a snapshot of the public API, next to
+\code{coverage.json}. This mode compares two of them, given as the files or as
+the folders that hold them, classifies each change as breaking, warning or
+compatible, and exits 1 when something breaks. The rules and both formats are
+in Section~\ref{sec:api-diff}.
+
 \section{Exit status}
 
 \begin{center}
@@ -380,6 +393,8 @@ plain & project emitted & manifest missing / invalid, emit error \\
 \code{--clean} & clean ran (nothing to remove is fine) &
   manifest missing / invalid \\
 \code{--init} & manifest written & target file already exists, bad arguments \\
+\code{--api-diff} & no breaking change (\code{--strict}: no warning either) &
+  1: breaking change(s); 2: bad arguments or an unreadable snapshot \\
 \bottomrule
 \end{tabular}
 \end{center}

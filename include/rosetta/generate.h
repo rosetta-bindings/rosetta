@@ -325,6 +325,17 @@ namespace rosetta {
         bool                 is_callback = false;
         std::vector<GenType> callback_sig;
 
+        // Set on a callback_sig entry for a NON-CONST lvalue-reference
+        // parameter of the callback (`std::function<void(double &)>`): the
+        // callee is expected to write through it. The cvref-stripped type above
+        // cannot say so, and a backend that boxes the argument by value would
+        // silently drop the write, so it must skip such a callback instead.
+        bool cb_mutable_ref = false;
+        // Set on a callback_sig entry for ANY lvalue-reference parameter (or
+        // return) of the callback, const or not — enough, with cb_mutable_ref,
+        // to re-spell the exact std::function type from the stripped entries.
+        bool cb_ref = false;
+
         // Copyability of the (cvref-stripped) type, captured at reflection time.
         // Every runtime backend copies at some boundary — pybind's automatic
         // return policy copies an lvalue-ref return, embind's property getters
@@ -1195,4 +1206,9 @@ namespace rosetta {
 // ordering note at the top of coverage.h.
 #include <rosetta/coverage.h>
 
+// The public-API snapshot (api.json). Declared here, defined after
+// inline/generate.hxx so it can use the IR accessors.
+#include <rosetta/api.h>
+
 #include "inline/generate.hxx"
+#include "inline/api.hxx"

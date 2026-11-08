@@ -274,7 +274,7 @@ Three things are worth naming:
     at(int) — argument 1 ("nope") is not a int
     at(int, int) — takes 2 argument(s), 1 given
   ```
-- **`onProgress` is described, not deleted** — a UI greys it out and says why (`a std::function parameter needs a foreign-callable adapter`).
+- **`onProgress` takes a callback in the core, but not yet through this module.** The dynamic model now fills a `std::function` parameter from a host function (C++ `Any::function`, MCP's `{"$record": true}`, a Lua or Python function in `run_script` / `run_python`). The `rosetta::script` casters this module uses have no host-function → `Value` conversion yet, so a Python function passed here is refused with a reason ([TODO](../../docs/TODO.md)).
 
 And the thing the exercise is for — `qt/propertypanel.h`'s widget dispatch, in the language of the toolkit binding (`build_panel_spec` in `drive.py`):
 

@@ -98,11 +98,49 @@ namespace rosetta::mcp {
                 }
                 return py::cast(Obj{dyn::Object::adopt(*r.cls, r.ptr, r.owner)});
             }
+            case Kind::function: // C++ never hands a callable back (returns are not modelled)
             case Kind::unknown:
                 break;
             }
             return py::str(std::string("<opaque ") + (v.type() ? v.type()->spelling : "?") + ">");
         }
+
+        dyn::Any from_py(py::handle h);
+
+        /**
+         * @brief A Python callable held by a C++ std::function (a callback).
+         *
+         * C++ may keep the callback and call — or destroy — it outside
+         * run_python, on whatever thread it likes, so both take the GIL
+         * themselves. The interpreter is never finalized (see the header), so
+         * the function stays callable for as long as C++ holds it.
+         */
+        struct PyFn {
+            py::object fn;
+
+            explicit PyFn(py::object f) : fn(std::move(f)) {}
+            PyFn(const PyFn &)            = delete;
+            PyFn &operator=(const PyFn &) = delete;
+            ~PyFn() {
+                py::gil_scoped_acquire gil;
+                fn = py::object();
+            }
+
+            dyn::Any operator()(const std::vector<dyn::Any> &args) const {
+                py::gil_scoped_acquire gil;
+                try {
+                    py::tuple a(args.size());
+                    for (std::size_t i = 0; i < args.size(); ++i) {
+                        a[i] = to_py(args[i]);
+                    }
+                    return from_py(fn(*a));
+                } catch (py::error_already_set &e) {
+                    // Converted here, while the GIL is held: the C++ caller
+                    // sees an ordinary dyn::Error with Python's message.
+                    throw dyn::Error(std::string("Python callback: ") + e.what());
+                }
+            }
+        };
 
         inline dyn::Any from_py(py::handle h) {
             using dyn::Any;
@@ -123,6 +161,11 @@ namespace rosetta::mcp {
             }
             if (py::isinstance<Obj>(h)) {
                 return h.cast<Obj &>().obj.as_any();
+            }
+            if (PyCallable_Check(h.ptr())) { // a callback, for a std::function parameter
+                auto fn = std::make_shared<PyFn>(py::reinterpret_borrow<py::object>(h));
+                return Any::function(
+                    [fn](const std::vector<Any> &args) { return (*fn)(args); });
             }
             if (py::hasattr(h, "tolist")) { // numpy arrays and scalars
                 return from_py(h.attr("tolist")());
@@ -592,7 +635,9 @@ def _run(src, g):
              "read-only enforced); o.method(*args, **kw) calls a method; "
              "classes.Class.staticMethod(*args) a static one; call(\"function\", *args) a free "
              "function; keep(\"name\", o) publishes an object as a handle for later tool calls. "
-             "Enums are strings (enumerator names); vectors are Python lists, passed whole. The "
+             "Enums are strings (enumerator names); vectors are Python lists, passed whole. Where "
+             "C++ takes a callback (std::function), pass any Python callable (a lambda, a "
+             "function); C++ calls it with the callback's arguments. The "
              "value of the LAST EXPRESSION is the result (else a global named `result`); objects "
              "become handles, long arrays are summarized; print() is captured. A rejected call "
              "raises RuntimeError. NOT sandboxed: the script runs with the server's own "

@@ -322,6 +322,7 @@ namespace rosetta::script {
             return sink.on_list(v.as_list());
         case dyn::Kind::object:
             return sink.on_object(v.as_object());
+        case dyn::Kind::function: // a callback only travels host -> C++; nothing to render
         case dyn::Kind::unknown:
             break;
         }

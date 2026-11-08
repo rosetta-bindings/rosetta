@@ -41,6 +41,7 @@
 //   util.h/.cpp       file I/O + portable command running
 // This file holds only main() and the help text.
 
+#include "apidiff.h"
 #include "build.h"
 #include "clean.h"
 #include "emit.h"
@@ -55,6 +56,7 @@ static const char *kUsage =
     "       rosetta_gen --build <manifest.json> [options]\n"
     "       rosetta_gen --clean <manifest.json> [options]\n"
     "       rosetta_gen --init [manifest.json] [src_dir]\n"
+    "       rosetta_gen --api-diff <old api.json> <new api.json> [--json]\n"
     "try `rosetta_gen --help` for details and examples\n";
 
 // Full -h / --help: the three modes, the --build options, and worked examples.
@@ -100,6 +102,16 @@ static void print_help() {
         "      (fetches rosetta into extern/, builds rosetta_gen), a\n"
         "      .gitignore and a README.md — each only if not already there.\n"
         "\n"
+        "  rosetta_gen --api-diff <old> <new> [--json] [--breaking-only] [--strict]\n"
+        "      Compare two public-API snapshots. Every generation writes\n"
+        "      api.json next to coverage.json (in the bindings dir); keep the one\n"
+        "      of each release and diff it against the next. Changes are\n"
+        "      classified breaking / warning / compatible (removed or renamed\n"
+        "      members, changed signatures, narrowed ranges, renumbered\n"
+        "      enumerators, …). <old> / <new> may be the api.json or its folder.\n"
+        "      Exits 1 when anything breaks (--strict: warnings too), so a CI\n"
+        "      job can gate a release on it.\n"
+        "\n"
         "--build options:\n"
         "%s"
         "\n"
@@ -125,6 +137,9 @@ static void print_help() {
         "\n"
         "  rosetta_gen --clean manifest.json\n"
         "      Back to sources: delete gen/, bindings/ and the generator binary.\n"
+        "\n"
+        "  rosetta_gen --api-diff v1.2/bindings bindings\n"
+        "      What the current API breaks relative to release 1.2.\n"
         "\n"
         "  rosetta_gen manifest.json gen\n"
         "      Generate only, then run the steps by hand:\n"
@@ -190,6 +205,11 @@ int main(int argc, char **argv) {
     // for that manifest (never the manifest itself).
     if (argc >= 2 && std::string(argv[1]) == "--clean") {
         return clean_main(argc, argv);
+    }
+
+    // `--api-diff old new` compares two api.json snapshots.
+    if (argc >= 2 && std::string(argv[1]) == "--api-diff") {
+        return api_diff_main(argc, argv);
     }
 
     // Any other leading option is a mistake — don't treat it as a manifest path.

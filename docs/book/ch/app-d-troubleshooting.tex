@@ -20,9 +20,11 @@ The likely entries:
 \addlinespace
 \code{unmarshalable\_signature} &
   \code{detail} names the offending type. If it is a foreign container or an
-  Eigen type, Chapter~\ref{ch:types} is the fix. If it is a
-  \code{std::function} or a raw pointer, write an \field{extensions} wrapper
-  with a marshallable signature. \\
+  Eigen type, Chapter~\ref{ch:types} is the fix. If it is a raw pointer, or a
+  \code{std::function} on a target without callback support (\lang{julia},
+  \lang{csharp}, \lang{java}, \lang{rest}), or a
+  callback whose own signature does not convert, write an \field{extensions}
+  wrapper with a marshallable signature. \\
 \addlinespace
 \code{no\_identifier} &
   An operator or conversion function. There is no name to bind to --- expose it

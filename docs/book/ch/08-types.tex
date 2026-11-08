@@ -459,8 +459,11 @@ a 2-D grid of your own & \code{"matrices": ["my::Grid"]} \\
 \code{const char *} & nothing \\
 classes with a protected destructor and a reference count &
   a \field{holders} policy (Section~\ref{sec:holders}) \\
-a \code{std::function} parameter & nothing will help --- the member is skipped,
-  with a reason. Add an \field{extensions} wrapper if you need it. \\
+a \code{std::function} parameter & nothing on \lang{python}, \lang{nanobind},
+  \lang{node}, \lang{wasm}, \lang{lua}, \lang{dynamic} and \lang{mcp}: a script function is passed where
+  C++ takes the callback (\lang{node}, \lang{wasm} and \lang{lua} only when every
+  type in its signature converts). Elsewhere the member is skipped, with a
+  reason; add an \field{extensions} wrapper if you need it. \\
 \bottomrule
 \end{tabular}
 \end{center}

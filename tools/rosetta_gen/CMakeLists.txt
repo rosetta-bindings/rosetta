@@ -39,5 +39,8 @@ add_executable(rosetta_gen
     init.cpp        # --init (example manifest + heuristic source scan)
     build.cpp       # --build (the whole pipeline in one command)
     clean.cpp       # --clean
+    apidiff.cpp     # --api-diff (compare two api.json snapshots)
     util.cpp)       # file I/O + portable command running
 target_include_directories(rosetta_gen PRIVATE ${json_SOURCE_DIR}/include)
+# <rosetta/api_diff.h> only — C++17 + nlohmann, no reflection.
+target_include_directories(rosetta_gen PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include)

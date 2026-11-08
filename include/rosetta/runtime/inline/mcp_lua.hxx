@@ -50,6 +50,12 @@ namespace rosetta::mcp {
             std::size_t       memory    = 0;
             lua_Alloc         base_alloc = nullptr;
             void             *base_ud    = nullptr;
+
+            // False once the state is closed. A Lua function handed to C++ as
+            // a callback may be kept (and called) by the library after the
+            // script ends; this is how that call fails cleanly instead of
+            // touching a closed lua_State.
+            std::shared_ptr<bool> alive = std::make_shared<bool>(true);
         };
 
         inline Run &run_of(lua_State *L) { return **static_cast<Run **>(lua_getextraspace(L)); }
@@ -168,11 +174,14 @@ namespace rosetta::mcp {
                 push_object(L, dyn::Object::adopt(*r.cls, r.ptr, r.owner));
                 return;
             }
+            case Kind::function: // C++ never hands a callable back (returns are not modelled)
             case Kind::unknown:
                 break;
             }
             lua_pushfstring(L, "<opaque %s>", v.type() ? v.type()->spelling : "?");
         }
+
+        dyn::Any lua_function(lua_State *L, int i); // below, after traceback()
 
         inline dyn::Any to_any(lua_State *L, int i) {
             using dyn::Any;
@@ -197,6 +206,8 @@ namespace rosetta::mcp {
                     return b->obj.as_any();
                 }
                 break;
+            case LUA_TFUNCTION:
+                return lua_function(L, i); // a callback
             case LUA_TTABLE: {
                 const lua_Integer n = static_cast<lua_Integer>(lua_rawlen(L, i));
                 std::vector<Any>  out;
@@ -572,10 +583,87 @@ namespace rosetta::mcp {
             lua_setglobal(L, name);
         }
 
+        // ---- Lua functions as C++ callbacks ------------------------------
+
+        /** @brief One Lua function, pinned in the registry for as long as C++
+         *  holds the std::function made from it. */
+        struct LuaFn {
+            lua_State            *L   = nullptr;
+            int                   ref = LUA_NOREF;
+            std::shared_ptr<bool> alive;
+
+            LuaFn(lua_State *l, int r, std::shared_ptr<bool> a) : L(l), ref(r), alive(std::move(a)) {}
+            LuaFn(const LuaFn &)            = delete;
+            LuaFn &operator=(const LuaFn &) = delete;
+            ~LuaFn() {
+                if (*alive) {
+                    luaL_unref(L, LUA_REGISTRYINDEX, ref);
+                }
+            }
+        };
+
+        struct CallbackCall {
+            const LuaFn                 *fn;
+            const std::vector<dyn::Any> *args;
+        };
+
+        // Runs UNDER lua_pcall: every push that could raise (a memory error,
+        // the heap cap) unwinds to that pcall instead of across the C++
+        // frames of the library that is calling the callback.
+        inline int callback_trampoline(lua_State *L) {
+            const auto *cc = static_cast<const CallbackCall *>(lua_touserdata(L, 1));
+            lua_rawgeti(L, LUA_REGISTRYINDEX, cc->fn->ref);
+            const std::size_t n = cc->args->size();
+            luaL_checkstack(L, static_cast<int>(n) + 2, "too many callback arguments");
+            for (std::size_t i = 0; i < n; ++i) {
+                push_any(L, (*cc->args)[i]);
+            }
+            lua_call(L, static_cast<int>(n), 1);
+            return 1;
+        }
+
+        inline dyn::Any call_lua_function(const LuaFn &fn, const std::vector<dyn::Any> &args) {
+            if (!*fn.alive) {
+                throw dyn::Error("a Lua callback was called after its script had finished");
+            }
+            lua_State   *L   = fn.L;
+            const int    top = lua_gettop(L);
+            CallbackCall cc{&fn, &args};
+            lua_pushcfunction(L, traceback);
+            lua_pushcfunction(L, callback_trampoline);
+            lua_pushlightuserdata(L, &cc);
+            if (lua_pcall(L, 1, 1, top + 1) != LUA_OK) {
+                const char *m   = lua_tostring(L, -1);
+                std::string msg = std::string("Lua callback: ") + (m ? m : "error");
+                lua_settop(L, top);
+                throw dyn::Error(msg);
+            }
+            try {
+                dyn::Any r = to_any(L, -1);
+                lua_settop(L, top);
+                return r;
+            } catch (...) {
+                lua_settop(L, top);
+                throw;
+            }
+        }
+
+        inline dyn::Any lua_function(lua_State *L, int i) {
+            lua_pushvalue(L, i);
+            const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+            auto      fn  = std::make_shared<LuaFn>(L, ref, run_of(L).alive);
+            return dyn::Any::function(
+                [fn](const std::vector<dyn::Any> &args) { return call_lua_function(*fn, args); });
+        }
+
         /** @brief Owns the lua_State so every exit path closes it. */
         struct State {
-            lua_State *L = nullptr;
+            lua_State            *L = nullptr;
+            std::shared_ptr<bool> alive; // Run::alive, cleared before the close
             ~State() {
+                if (alive) {
+                    *alive = false;
+                }
                 if (L) {
                     lua_close(L);
                 }
@@ -599,7 +687,8 @@ namespace rosetta::mcp {
                                        std::chrono::duration<double>(timeout_s));
 
         State st;
-        st.L = luaL_newstate();
+        st.alive = run.alive;
+        st.L     = luaL_newstate();
         if (!st.L) {
             throw dyn::Error("could not create a Lua state");
         }
@@ -715,7 +804,8 @@ namespace rosetta::mcp {
              "args...) a free function; keep(\"name\", o) publishes an object as a handle for "
              "later tool calls; print(...) is captured into `output`; clock() is seconds "
              "since the script started. Enums are strings (enumerator names); vectors are "
-             "Lua tables, passed whole. The script's return value is the result (objects "
+             "Lua tables, passed whole. Where C++ takes a callback (std::function), pass a Lua "
+             "function; C++ calls it with the callback's arguments. The script's return value is the result (objects "
              "become handles, long arrays are summarized). Errors raise Lua errors "
              "(catchable with pcall). Sandboxed: no io/os/require."},
             {"inputSchema",
