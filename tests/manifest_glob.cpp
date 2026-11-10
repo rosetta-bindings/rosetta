@@ -283,3 +283,50 @@ TEST(ManifestGlob, PlainHeaderPathsAreUntouched) {
     EXPECT_EQ(headers(m), (Strings{"Point.h", "elsewhere/Mesh.h"}));
     EXPECT_EQ(names(m), (Strings{"Point", "geom::Mesh"}));
 }
+
+// ---- user_sources: globs and '!' exclusions ----------------------------------
+
+namespace {
+    // The basenames of the manifest's user_sources, in order.
+    Strings source_names(const Manifest &m) {
+        Strings out;
+        for (const auto &s : m.user_sources) {
+            out.push_back(fs::path(s).filename().string());
+        }
+        return out;
+    }
+} // namespace
+
+// The common layout: the manifest in its own folder, the sources one level up,
+// a whole-folder glob minus a couple of files spelled out literally.
+TEST(ManifestUserSources, ExclusionsDropFilesFromAGlobThroughDotDot) {
+    Tree t("user_sources");
+    t.file("src/A.cpp").file("src/CMapBuild.cpp").file("src/CombinatorialEngine.cpp")
+        .file("src/Z.cpp").file("src/notes.txt").file("rosetta/lib/T.h");
+    const fs::path p = t.root / "rosetta" / "manifest.json";
+    std::ofstream(p) << R"({
+        "user_include": "lib", "rosetta_include": ".", "targets": ["python"],
+        "user_sources": ["../src/*.cpp", "!../src/CMapBuild.cpp", "!../src/CombinatorialEngine.cpp"],
+        "classes": [{"name": "T", "header": "T.h"}]
+    })";
+    EXPECT_EQ(source_names(load(p)), (Strings{"A.cpp", "Z.cpp"}));
+}
+
+TEST(ManifestUserSources, ExclusionsAreGlobsTooAndOrderIndependent) {
+    Tree t("user_sources_glob");
+    t.file("src/A.cpp").file("src/test_a.cpp").file("src/sub/B.cpp").file("src/sub/test_b.cpp")
+        .file("lib/T.h");
+    const Manifest m = load(t.manifest(R"([{"name": "T", "header": "T.h"}])",
+                                       R"(  "user_sources": ["!src/**/test_*.cpp", "src/**/*.cpp"],
+)"));
+    EXPECT_EQ(source_names(m), (Strings{"A.cpp", "B.cpp"}));
+}
+
+TEST(ManifestUserSources, AnExclusionMatchingNothingIsNotFatal) {
+    Tree t("user_sources_typo");
+    t.file("src/A.cpp").file("lib/T.h");
+    const Manifest m = load(t.manifest(R"([{"name": "T", "header": "T.h"}])",
+                                       R"(  "user_sources": ["src/*.cpp", "!src/Typo.cpp", "!src/none_*.cpp"],
+)"));
+    EXPECT_EQ(source_names(m), (Strings{"A.cpp"})); // and two warnings on stderr
+}

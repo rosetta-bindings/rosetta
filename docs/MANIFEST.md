@@ -1372,6 +1372,18 @@ Each entry may be a **shell glob**, expanded at generation time:
 
 matches `src/a.cxx` as well as `src/algos/stress-inversion/b.cxx`. Like the other wildcards, `**` does not enter hidden (dot) directories. Matches are sorted for reproducible output, and the final list is de-duplicated, so mixing a literal path with a glob that also covers it is safe. A pattern that matches nothing emits a warning and is skipped. Because globs expand when `rosetta_gen` runs, **re-run it after adding or removing matching files**.
 
+An entry starting with **`!`** is an **exclusion**: the files it names, or matches (the same glob syntax), are dropped from the final list. A whole folder minus a few files is then one glob plus the carve-outs:
+
+```json
+"user_sources": [
+  "../src/*.cpp",
+  "!../src/CMapBuild.cpp",
+  "!../src/CombinatorialEngine.cpp"
+]
+```
+
+Exclusions apply after every inclusion has expanded, so their position in the list does not matter, and they can be globs too (`"!src/**/test_*.cpp"`). An exclusion that names or matches no file is not fatal, but it warns, since it usually means a typo and the file it meant to drop is still in the build.
+
 `user_sources` and `user_lib` are independent — use either, or both. The text-only backends (`markdown`, `html`, `json`, `typescript`, `openapi`, `paraview`) compile nothing and ignore it.
 
 Entries may also be **C sources** (`.c`) — e.g. a third-party library's vendored dependencies (zlib, rply, libMeshb, OpenNL…). When any `.c` file is listed, the generated CMakeLists calls `enable_language(C)` automatically so they compile alongside the C++ binding:

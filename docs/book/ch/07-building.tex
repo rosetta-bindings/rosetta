@@ -115,6 +115,22 @@ component that is exactly \code{**} matches \textbf{zero or more directories}
 output and the final list is de-duplicated, so mixing a literal path with a glob
 that also covers it is safe. A pattern matching nothing warns and is skipped.
 
+An entry starting with \code{!} is an \textbf{exclusion}. It names or matches
+(same syntax) files to drop from the final list, so a folder minus a few files
+is one glob and the carve-outs:
+
+\begin{lstlisting}[style=json]
+"user_sources": [
+  "../src/*.cpp",
+  "!../src/CMapBuild.cpp",
+  "!../src/CombinatorialEngine.cpp"
+]
+\end{lstlisting}
+
+Exclusions apply after every inclusion has expanded, so their position in the
+list does not matter. An exclusion that names or matches no file warns: it is
+usually a typo, and the file it meant to drop is still in the build.
+
 \begin{warn}
 Globs expand when \code{rosetta\_gen} runs. \textbf{Re-run it after adding or
 removing matching files} --- a new \code{.cpp} does not appear in the build by

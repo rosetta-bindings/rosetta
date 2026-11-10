@@ -1487,7 +1487,19 @@ Manifest load(const fs::path &manifest_path) {
                     dst.push_back(mt.string());
                 }
             } else {
-                dst.push_back(fs::weakly_canonical(base / fs::path(p)).string());
+                const fs::path lit = fs::weakly_canonical(base / fs::path(p));
+                // A literal exclusion naming no file is almost always a typo,
+                // and it would otherwise fail silently: the file it meant to
+                // drop stays in the build. (A literal inclusion that does not
+                // exist fails loudly at compile time already.)
+                std::error_code ec;
+                if (excl && !fs::exists(lit, ec)) {
+                    std::fprintf(stderr,
+                                 "rosetta_gen: warning: \"user_sources\" exclusion names no "
+                                 "file: %s\n",
+                                 p.c_str());
+                }
+                dst.push_back(lit.string());
             }
         };
         if (us.is_array()) {
