@@ -364,6 +364,105 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             return first;
         }
 
+        // ---- nanobind trampolines --------------------------------------------
+        // What lets a Python subclass override a C++ virtual. The same virtual
+        // set as pybind11's (virtual_methods: instance virtuals, none for a
+        // "final" or held class), spelled the nanobind way:
+        //
+        //   using Nb_T_base = ns::T;
+        //   struct Nb_T : Nb_T_base {
+        //       NB_TRAMPOLINE(Nb_T_base, N);       // N = number of overrides
+        //       int legs() const override { NB_OVERRIDE(legs); }
+        //   };
+        //
+        // NB_TRAMPOLINE also inherits the constructors (`using NBBase::NBBase`).
+        // Its base goes through an alias because it is a macro argument: a
+        // template-id spelling (`Grid<double, 3>`) would be split at the comma.
+        // NB_OVERRIDE deduces the return type itself, so unlike pybind11's
+        // macro it needs no comma-safe return alias.
+
+        // The overrides a class's trampoline gets: its virtuals whose signature
+        // nanobind can cast (an unbindable one keeps its C++ body; Python just
+        // cannot override it).
+        inline std::vector<const GenMethod *> nbx_overrides(const GenClass &k) {
+            std::vector<const GenMethod *> out;
+            for (const GenMethod *m : virtual_methods(k)) {
+                if (m->sig_bindable) {
+                    out.push_back(m);
+                }
+            }
+            return out;
+        }
+
+        // The trampoline's C++ name: "Nb_" + the exposed name folded into an
+        // identifier. The exposed name is unique across the module but need
+        // not BE an identifier — a template instance exposes as
+        // "Grid<double, 3>" unless the manifest renames it.
+        inline std::string nbx_tramp_name(const GenClass &k) {
+            std::string id = "Nb_";
+            for (const char ch : exposed_of(k)) {
+                id += std::isalnum(static_cast<unsigned char>(ch)) ? ch : '_';
+            }
+            return id;
+        }
+
+        inline bool nbx_has_trampoline(const GenClass &k) {
+            return k.is_destructible && !nbx_overrides(k).empty();
+        }
+
+        inline std::string nbx_trampoline_for(const GenClass &k) {
+            if (!nbx_has_trampoline(k)) {
+                return {};
+            }
+            const auto        ovs  = nbx_overrides(k);
+            const std::string kq   = qualified_of(k);
+            const std::string name = nbx_tramp_name(k);
+            std::string s = "using " + name + "_base = " + kq + ";\n";
+            s += "struct " + name + " : " + name + "_base {\n";
+            s += "    NB_TRAMPOLINE(" + name + "_base, " + std::to_string(ovs.size()) + ");\n";
+            for (const GenMethod *m : ovs) {
+                std::string sig = "    " + qualify_objects(m->ret_cpp, m->ret) + " " + m->name + "(";
+                std::string fwd;
+                for (std::size_t i = 0; i < m->param_cpp.size(); ++i) {
+                    const std::string pn = "p" + std::to_string(i);
+                    std::string       pt = m->param_cpp[i];
+                    if (i < m->params.size()) {
+                        pt = qualify_objects(std::move(pt), m->params[i].type);
+                    }
+                    sig += (i ? ", " : "") + pt + " " + pn;
+                    fwd += ", " + pn;
+                }
+                sig += ")";
+                if (m->is_const) {
+                    sig += " const";
+                }
+                if (m->is_noexcept) {
+                    sig += " noexcept";
+                }
+                sig += std::string(" override { ") +
+                       (m->is_pure ? "NB_OVERRIDE_PURE(" : "NB_OVERRIDE(") + m->name + fwd +
+                       "); }\n";
+                s += sig;
+            }
+            return s + "};\n";
+        }
+
+        // Every trampoline of the module, in a namespace of their own. The
+        // scoped `using namespace std;` resolves the unqualified std names the
+        // exact parameter spellings carry (`vector<double, allocator<double>>`),
+        // without leaking into the registration code — same as rosetta_py.
+        inline std::string nbx_trampolines_of(const GenContext &c) {
+            std::string body;
+            for (const auto &k : c.classes) {
+                body += nbx_trampoline_for(k);
+            }
+            if (body.empty()) {
+                return {};
+            }
+            return "\nnamespace rosetta_nb {\nusing namespace std;\n" + body +
+                   "} // namespace rosetta_nb\n";
+        }
+
         inline std::string nbx_class(const GenClass &k, const GenContext &c) {
             // A class whose destructor is not public cannot be wrapped: every
             // runtime backend destroys what it holds. Skip it with a note —
@@ -377,16 +476,18 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             }
 
             std::vector<std::string> segs;
+            const bool               tramp = nbx_has_trampoline(k);
 
-            // No constructor for an abstract class: nb::init<> instantiates the
-            // Alias type (== T when no trampoline is emitted, which is always
-            // here), so `new T{}` on a pure-virtual interface is ill-formed.
-            // The walk still records the implicitly-declared default ctor of
-            // such a class, so the guard belongs on the loop, not only on the
-            // is_default_constructible fallback. Same rule as the wasm / lua /
-            // julia expanded backends.
-            bool saw_default = false;
-            for (std::size_t i = 0; !k.is_abstract && i < k.ctor_param_cpp.size(); ++i) {
+            // The constructors. nb::init<> builds the trampoline when the
+            // instance is a Python subclass and T itself otherwise. An abstract
+            // T can only be built AS a subclass, so without a trampoline it gets
+            // no constructor at all; with one, its constructors bind behind the
+            // is_abstract guard below. (The walk still records the implicit
+            // default ctor of an abstract class, hence the loop collects them
+            // all and the decision is made once.)
+            std::vector<std::string> ctors;
+            bool                     saw_default = false;
+            for (std::size_t i = 0; i < k.ctor_param_cpp.size(); ++i) {
                 const auto &params = k.ctor_param_cpp[i];
                 if (params.empty()) {
                     saw_default = true;
@@ -395,10 +496,13 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
                 for (std::size_t j = 0; j < params.size(); ++j) {
                     args += (j ? ", " : "") + qualify_std(params[j]);
                 }
-                segs.push_back(".def(nb::init<" + args + ">())");
+                ctors.push_back(".def(nb::init<" + args + ">())");
             }
-            if (!saw_default && !k.is_abstract && k.is_default_constructible) {
-                segs.push_back(".def(nb::init<>())");
+            if (!saw_default && k.is_default_constructible) {
+                ctors.push_back(".def(nb::init<>())");
+            }
+            if (!k.is_abstract) {
+                segs = ctors;
             }
             for (const auto &f : k.fields) {
                 if (is_adapted(f.type)) {
@@ -442,10 +546,35 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             // Trailing template argument: the bound base, so a derived instance
             // is accepted where the base is expected (nb_bound_base explains
             // why there is at most one).
+            // The trampoline rides as one more template argument (nanobind
+            // tells a base from an alias by which way the derivation goes).
             const std::string base = nb_bound_base(k, c);
-            std::string       s    = "    nb::class_<" + qualified_of(k) +
-                            (base.empty() ? "" : ", " + base) + ">(m, \"" + exposed_of(k) + "\"" +
-                            doc_arg(px_class_doc(k)) + ")"; // the class comment: help(Cls) prints it
+            const std::string decl =
+                "nb::class_<" + qualified_of(k) + (base.empty() ? "" : ", " + base) +
+                (tramp ? ", rosetta_nb::" + nbx_tramp_name(k) : "") + ">(m, \"" + exposed_of(k) +
+                "\"" + doc_arg(px_class_doc(k)) + ")"; // the class comment: help(Cls) prints it
+
+            // An abstract class with a trampoline: its constructors build
+            // Nb_T, which is itself still abstract when a pure virtual could
+            // not be overridden (an unbindable signature) — undetectable from
+            // the IR. So they bind behind `if constexpr`, compiling away rather
+            // than breaking the build, exactly as the pybind11 backend does.
+            if (k.is_abstract && tramp && !ctors.empty()) {
+                std::string s = "    {\n        auto c = " + decl;
+                for (const auto &seg : segs) {
+                    s += "\n            " + seg;
+                }
+                s += ";\n        [](auto &c) {\n"
+                     "            if constexpr (!std::is_abstract_v<rosetta_nb::" +
+                     nbx_tramp_name(k) + ">) {\n";
+                for (const auto &ctor : ctors) {
+                    s += "                c" + ctor + ";\n";
+                }
+                s += "            }\n        }(c);\n    }\n";
+                return s;
+            }
+
+            std::string s = "    " + decl;
             for (const auto &seg : segs) {
                 s += "\n        " + seg;
             }
@@ -453,17 +582,40 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             return s;
         }
 
-        inline std::string nanobind_expanded_source(const GenContext &c0) {
+        inline std::string nbx_preamble(const GenContext &c); // below
+
+        // The nanobind binding as (file name, contents) pairs: auto_nanobind.cpp,
+        // then one auto_nanobind_part_K.cpp per extra class slice
+        // (class_slices, GenContext::binding_shards). A part holds
+        // `void rosetta_nb_part_K(nb::module_ &m)` registering its slice; the
+        // module entry calls the parts in order — bases before derived —
+        // between the enums and the free functions. Every part repeats the
+        // preamble (includes, trampolines), which every TU naming the classes
+        // must see. Same scheme as the python backend's auto_pybind_part_K.
+        inline std::vector<std::pair<std::string, std::string>>
+        nanobind_sources(const GenContext &c0) {
             // Same rule as python: where nanobind has the caster for
             // the owning library, a dual-marked type (registered sequence +
             // interop) binds as numpy rather than through the copy adapter.
-            const GenContext c = interop_wins(c0, px_interop_caster);
+            const GenContext c      = interop_wins(c0, px_interop_caster);
+            const auto       slices = class_slices(c);
+            const bool       split  = slices.size() > 1;
             std::string      body;
             for (const auto &e : c.enums) {
                 body += nbx_enum(e);
             }
-            for (const auto &k : c.classes) {
-                body += nbx_class(k, c);
+            std::vector<std::string> parts;
+            for (const auto &[lo, hi] : slices) {
+                std::string part;
+                for (std::size_t i = lo; i < hi; ++i) {
+                    part += nbx_class(c.classes[i], c);
+                }
+                if (split) {
+                    parts.push_back(std::move(part));
+                    body += "    rosetta_nb_part_" + std::to_string(parts.size() - 1) + "(m);\n";
+                } else {
+                    body += part;
+                }
             }
             for (const auto &f : c.functions) {
                 GenMethod probe; // free functions go through the same gates
@@ -506,6 +658,32 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
                 coverage::note_bound_function("nanobind", f);
             }
 
+            const std::string pre = nbx_preamble(c);
+            std::string       out = pre;
+            for (std::size_t k = 0; k < parts.size(); ++k) {
+                out += (k ? "" : "\n") + std::string("void rosetta_nb_part_") +
+                       std::to_string(k) + "(nb::module_ &m);\n";
+            }
+            out += "\nNB_MODULE(" + c.lib + ", m) {\n";
+            out += init_block(c);
+            out += "    m.doc() = \"Auto-generated (expanded) nanobind bindings for " + c.lib +
+                   ".\";\n";
+            out += body;
+            out += "}\n";
+            std::vector<std::pair<std::string, std::string>> files{{"auto_nanobind.cpp", out}};
+            for (std::size_t k = 0; k < parts.size(); ++k) {
+                const std::string id = std::to_string(k);
+                files.emplace_back("auto_nanobind_part_" + id + ".cpp",
+                                   pre + "\n// Part " + id + " of the class registrations.\n"
+                                         "void rosetta_nb_part_" + id +
+                                         "(nb::module_ &m) {\n" + parts[k] + "}\n");
+            }
+            return files;
+        }
+
+        // Everything before the registrations: the casters, the user headers,
+        // the namespace aliases and the trampolines.
+        inline std::string nbx_preamble(const GenContext &c) {
             std::string out = "// Generated by rosetta::generate (expanded, reflection-free) — "
                               "do not edit by hand.\n";
             // nanobind splits its casters one per header, where pybind11 ships
@@ -534,6 +712,8 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             out += "#include <nanobind/stl/unordered_map.h>\n";
             out += "#include <nanobind/stl/set.h>\n";
             out += "#include <nanobind/stl/unordered_set.h>\n";
+            out += "#include <nanobind/trampoline.h>\n"; // NB_TRAMPOLINE / NB_OVERRIDE
+            out += "#include <type_traits>\n";           // the abstract-trampoline guard
             out += "#include <algorithm>\n";
             out += "#include <filesystem>\n";
             out += "#include <vector>\n";
@@ -571,13 +751,12 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             }
             out += using_namespaces_of(c); // `using namespace` for namespaced user types
             out += "\nnamespace nb = nanobind;\n";
-            out += "\nNB_MODULE(" + c.lib + ", m) {\n";
-            out += init_block(c);
-            out += "    m.doc() = \"Auto-generated (expanded) nanobind bindings for " + c.lib +
-                   ".\";\n";
-            out += body;
-            out += "}\n";
+            out += nbx_trampolines_of(c); // empty when no class has an overridable virtual
             return out;
+        }
+
+        inline std::string nanobind_expanded_source(const GenContext &c) {
+            return nanobind_sources(c).front().second;
         }
 
         inline std::string Nanobind::render(const GenContext &c) const {
@@ -585,9 +764,25 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
         }
 
         inline void Nanobind::emit(const GenContext &c) const {
-            auto dir = c.out_dir / "nanobind";
-            write_file(dir / "auto_nanobind.cpp", nanobind_expanded_source(c));
-            write_file(dir / "CMakeLists.txt", render_meta(NANOBINDX_CMAKE, c));
+            auto        dir   = c.out_dir / "nanobind";
+            const auto  files = nanobind_sources(c);
+            std::string list;
+            for (const auto &[name, text] : files) {
+                write_file(dir / name, text);
+                list += (list.empty() ? "" : " ") + name;
+            }
+            remove_stale_parts(dir, "auto_nanobind_part_", files.size() - 1);
+            // The template names the source in two nanobind_add_module() calls
+            // (stable-ABI or not); both get the full list.
+            std::string       cm   = render_meta(NANOBINDX_CMAKE, c);
+            const std::string from = " auto_nanobind.cpp)";
+            const std::string to   = " " + list + ")";
+            // Resume AFTER each replacement: with one source `to` equals `from`.
+            for (std::size_t at = 0; (at = cm.find(from, at)) != std::string::npos;
+                 at += to.size()) {
+                cm.replace(at, from.size(), to);
+            }
+            write_file(dir / "CMakeLists.txt", cm);
             // Wheel packaging. The builder script and the README's packaging
             // section are shared verbatim with python (both come from
             // backends/inline/python.hxx); only pyproject.toml and the ABI

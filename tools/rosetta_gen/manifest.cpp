@@ -412,6 +412,51 @@ static std::vector<UserLibEntry> parse_user_libs(const json &ul, const fs::path 
     return out;
 }
 
+// One row per backend: its canonical name, then every other spelling it
+// answers to. Add an alias here and both the manifest's "targets" and
+// --only / --skip accept it.
+const std::vector<std::pair<std::string, std::vector<std::string>>> &lang_aliases() {
+    static const std::vector<std::pair<std::string, std::vector<std::string>>> rows = {
+        {"wasm", {"webassembly"}},
+        {"node", {"javascript", "js"}},
+        {"nanobind", {"py"}},
+    };
+    return rows;
+}
+
+std::string canonical_lang(const std::string &lang) {
+    std::string lower = lang;
+    for (char &ch : lower) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    for (const auto &[base, aliases] : lang_aliases()) {
+        if (std::find(aliases.begin(), aliases.end(), lower) != aliases.end()) {
+            return base;
+        }
+    }
+
+    // Eleven languages once carried an "-expanded" suffix. Seven of them shipped
+    // two backends each, a reflection-driven one and an "-expanded" one; only
+    // the expanded half survives and the short name now means it. The other four
+    // (lua, qt, qml, imgui) never had a thin twin and only wore the suffix
+    // because their siblings did. The registry still answers to the old
+    // spellings, but everything downstream keys off the lang STRING — the
+    // output directory (bindings/<lang>), the per-language build recipe, the
+    // wheel check — so an un-canonicalised spelling would generate into
+    // bindings/node and then look for bindings/node-expanded to build.
+    static const char *kCollapsed[] = {"python", "nanobind", "node", "wasm", "julia", "csharp",
+                                       "java",   "lua",      "qt",   "qml",  "imgui"};
+    for (const char *base : kCollapsed) {
+        if (lang == std::string(base) + "-expanded") {
+            std::fprintf(stderr,
+                         "rosetta_gen: target \"%s\" is deprecated — it is now spelled \"%s\"\n",
+                         lang.c_str(), base);
+            return std::string(base);
+        }
+    }
+    return lang;
+}
+
 Manifest load(const fs::path &manifest_path) {
     std::ifstream in(manifest_path);
     if (!in) {
@@ -520,34 +565,10 @@ Manifest load(const fs::path &manifest_path) {
     const std::string module_name =
         j.contains("module_name") ? j.at("module_name").get<std::string>() : m.generator_name;
 
-    // Eleven languages once carried an "-expanded" suffix. Seven of them shipped
-    // two backends each, a reflection-driven one and an "-expanded" one; only
-    // the expanded half survives and the short name now means it. The other four
-    // (lua, qt, qml, imgui) never had a thin twin and only wore the suffix
-    // because their siblings did. The registry still answers to the old
-    // spellings, but everything downstream of here keys off the lang STRING —
-    // the output directory (bindings/<lang>), the per-language build recipe, the
-    // wheel check — so an un-canonicalised alias would generate into
-    // bindings/node and then look for bindings/node-expanded to build. Fold it
-    // here, once.
-    const auto canonical_lang = [](std::string lang) {
-        static const char *kCollapsed[] = {"python", "nanobind", "node", "wasm", "julia", "csharp",
-                                           "java",   "lua",      "qt",   "qml",  "imgui"};
-        for (const char *base : kCollapsed) {
-            if (lang == std::string(base) + "-expanded") {
-                std::fprintf(stderr,
-                             "rosetta_gen: target \"%s\" is deprecated — it is now spelled "
-                             "\"%s\"\n",
-                             lang.c_str(), base);
-                return std::string(base);
-            }
-        }
-        return lang;
-    };
-
     // A target is either a bare string ("node") — using module_name — or an
     // object { "lang": ..., "name": ..., "link_options": [...] } overriding
     // the module name and optionally adding per-target linker flags.
+    std::vector<std::string> spelled; // each target's lang as written, for the duplicate error
     for (const auto &t : j.at("targets")) {
         TargetEntry e;
         if (t.is_string()) {
@@ -770,6 +791,18 @@ Manifest load(const fs::path &manifest_path) {
                 }
             }
         }
+        // Every target generates into bindings/<lang>, so two targets that
+        // resolve to one backend ("node" and "js") would overwrite each other.
+        const std::string as_written =
+            t.is_string() ? t.get<std::string>() : t.at("lang").get<std::string>();
+        for (std::size_t i = 0; i < m.targets.size(); ++i) {
+            if (m.targets[i].lang == e.lang) {
+                throw std::runtime_error("targets \"" + spelled[i] + "\" and \"" + as_written +
+                                         "\" both resolve to the backend \"" + e.lang +
+                                         "\"; list it once");
+            }
+        }
+        spelled.push_back(as_written);
         m.targets.push_back(std::move(e));
     }
 

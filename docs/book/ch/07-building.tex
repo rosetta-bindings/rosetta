@@ -447,9 +447,10 @@ for the whole library would be 80\,MB. So the work is split twice:
     concatenates their IR in manifest order and runs the backends once
     (\code{rosetta::generate\_described}). Nothing is serialized: the IR never
     leaves the process.
-  \item \textbf{The bindings.} The \lang{python}, \lang{wasm} and \lang{julia}
-    backends write \code{auto\_<backend>\_part\_K.cpp} files, each registering
-    a slice of the classes, and list them in the emitted CMake. pybind11 parts
+  \item \textbf{The bindings.} The \lang{python}, \lang{nanobind},
+    \lang{wasm} and \lang{julia} backends write
+    \code{auto\_<backend>\_part\_K.cpp} files, each registering a slice of the
+    classes, and list them in the emitted CMake. pybind11 and nanobind parts
     are functions the module entry calls in order; embind parts are
     \code{EMSCRIPTEN\_BINDINGS} blocks of their own; jlcxx parts receive the
     module after every \code{add\_type} has run.

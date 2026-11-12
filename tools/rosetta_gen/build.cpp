@@ -77,6 +77,15 @@ static std::vector<std::string> split_list(const std::string &s) {
     return out;
 }
 
+// --only / --skip name backends the way the manifest does, so an alias
+// ("js", "webassembly") means its backend here too.
+static std::vector<std::string> canonical_langs(std::vector<std::string> langs) {
+    for (auto &l : langs) {
+        l = canonical_lang(l);
+    }
+    return langs;
+}
+
 // A job count as written on the command line: digits only, at least 1. The
 // value ends up inside a `cmake --build --parallel N` command line, so anything
 // else is rejected here rather than passed through to the shell.
@@ -319,6 +328,7 @@ const char *kBuildOptions =
     "  --clang-p2996-root PATH  -DCLANG_P2996_ROOT for every CMake configure\n"
     "  --qt-dir PATH            -DQT_DIR for the qt / qml builds\n"
     "  --only a,b / --skip a,b  restrict the backend builds to / exclude these\n"
+    "                           (aliases accepted: js, javascript, webassembly, py)\n"
     "  --cmake-arg ARG          extra argument for every CMake configure (repeatable)\n"
     "  --jobs N, -jN            parallel build jobs (bare -j: one per core)\n"
     "  --fresh                  wipe the gen and bindings dirs first\n"
@@ -353,9 +363,9 @@ int build_main(int argc, char **argv) {
         } else if (a == "--qt-dir") {
             opt.qt_dir = next();
         } else if (a == "--only") {
-            opt.only = split_list(next());
+            opt.only = canonical_langs(split_list(next()));
         } else if (a == "--skip") {
-            opt.skip = split_list(next());
+            opt.skip = canonical_langs(split_list(next()));
         } else if (a == "--cmake-arg") {
             opt.cmake_args.push_back(next());
         } else if (a == "--jobs" || a.rfind("-j", 0) == 0) {

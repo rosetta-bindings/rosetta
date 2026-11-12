@@ -554,6 +554,19 @@ struct Manifest {
     }
 };
 
+// Target-name aliases: each backend may answer to several other spellings
+// ("js" and "javascript" for node, "webassembly" for wasm). A row is one
+// backend's canonical name followed by its aliases; add a spelling by adding it
+// to its row in manifest.cpp. Aliases are matched case-insensitively.
+const std::vector<std::pair<std::string, std::vector<std::string>>> &lang_aliases();
+
+// The canonical backend name for `lang`: an alias resolves to its backend, a
+// retired "<lang>-expanded" spelling to "<lang>" (with a deprecation note on
+// stderr), and anything else is returned unchanged. Everything downstream keys
+// off the canonical name (the bindings/<lang> folder, the build recipe), so a
+// target name must go through here before it is used.
+std::string canonical_lang(const std::string &lang);
+
 // Parse and validate manifest.json (// and /* */ comments tolerated).
 // Relative paths resolve from the manifest's own directory; `user_sources`
 // entries may be shell globs, expanded here. Throws std::runtime_error on

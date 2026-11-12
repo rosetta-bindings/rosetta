@@ -142,7 +142,7 @@ bin/rosetta_gen --build examples/generate/manifest.json
 
 ### Case 4: iterate on one or two backends
 
-While developing you rarely want the full matrix. `--only` / `--skip` filter **which backends get compiled** (generation still emits them all — the filters name the `lang` values):
+While developing you rarely want the full matrix. `--only` / `--skip` filter **which backends get compiled** (generation still emits them all — the filters name the `lang` values, or their [aliases](MANIFEST.md#targets) such as `js` or `webassembly`):
 
 ```bash
 # just python and node, 8-way parallel (`-j` alone: one job per core)

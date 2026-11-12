@@ -713,14 +713,34 @@ script once per interpreter.)MD";
         // Named after the EXPOSED name (unique across the module) and derived
         // from the QUALIFIED spelling, so two bound classes sharing an
         // unqualified identifier (the "expose" rename case) coexist in one TU.
+        // The trampoline's C++ name: "Py_" + the exposed name folded into an
+        // identifier. The exposed name is unique across the module but need
+        // not BE an identifier — a template instance exposes as
+        // "Grid<double, 3>" unless the manifest renames it.
+        inline std::string py_tramp_name(const GenClass &k) {
+            std::string id = "Py_";
+            for (const char ch : exposed_of(k)) {
+                id += std::isalnum(static_cast<unsigned char>(ch)) ? ch : '_';
+            }
+            return id;
+        }
+
         inline std::string trampoline_for(const GenClass &k) {
             const auto virts = virtual_methods(k);
             if (virts.empty()) {
                 return {};
             }
-            const std::string kq = qualified_of(k);
-            std::string s = "class Py_" + exposed_of(k) + " : public " + kq + " {\npublic:\n";
-            s += "    using " + kq + "::" + k.name + ";\n";
+            // A template instance (`Grid<double, 3>`) goes through an alias:
+            // its spelling cannot name the inherited constructors
+            // (`Grid<double, 3>::Grid<double, 3>` is ill-formed), and its comma
+            // would split PYBIND11_OVERRIDE's class argument in two. Any other
+            // class keeps its plain spelling, and its output is unchanged.
+            const std::string kq0   = qualified_of(k);
+            const bool        templ = kq0.find('<') != std::string::npos;
+            const std::string kq    = templ ? py_tramp_name(k) + "_base" : kq0;
+            std::string       s     = templ ? "using " + kq + " = " + kq0 + ";\n" : "";
+            s += "class " + py_tramp_name(k) + " : public " + kq + " {\npublic:\n";
+            s += "    using " + kq + "::" + (templ ? kq : k.name) + ";\n";
             for (const GenMethod *m : virts) {
                 // A virtual whose signature pybind11 can't cast (e.g. a pointer to an
                 // incomplete type) would make PYBIND11_OVERRIDE fail to compile. Skip
@@ -1722,8 +1742,8 @@ script once per interpreter.)MD";
             }
             std::string guarded =
                 "    [](auto &c) {\n"
-                "        if constexpr (!std::is_abstract_v<rosetta_py::Py_" +
-                exposed_of(k) + ">) {\n";
+                "        if constexpr (!std::is_abstract_v<rosetta_py::" +
+                py_tramp_name(k) + ">) {\n";
             std::size_t i = 0;
             while (i < s.size()) {
                 std::size_t nl = s.find('\n', i);
@@ -1807,7 +1827,7 @@ script once per interpreter.)MD";
                 extra += ", std::shared_ptr<" + kq + ">";
             }
             if (has_tramp) {
-                extra += ", rosetta_py::Py_" + exposed_of(k);
+                extra += ", rosetta_py::" + py_tramp_name(k);
             }
             for (const auto &b : k.bases) {
                 for (const auto &g : c.classes) {

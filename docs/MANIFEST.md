@@ -146,7 +146,7 @@ cmake -B build && cmake --build build
 | `out_dir` | — | — | Where every target's **built artifact** is copied after each build (the `.so` / `.pyd` / `.node` / `.js`+`.wasm`). Per-target `out_dir` overrides it. See [Artifact output directory](#artifact-output-directory-out_dir). |
 | `matrices` | — | `[]` | Foreign 2-D matrices (same two entry forms as `sequences`) that marshal as an array of row arrays. See [Foreign matrices](#foreign-matrices-matrices). |
 | `generator_shards` | — | `"auto"` | How many translation units the generator's reflection walk is split into — they compile in parallel and link into one generator. `"auto"`: one up to 24 classes, else ~16 classes per shard. See [Large libraries](#large-libraries-generator_shards-binding_shards). |
-| `binding_shards` | — | `"auto"` | How many source files the compiled `python`, `wasm` and `julia` bindings split their class registrations into. `"auto"`: one up to 30 classes, else ~25 per part. See [Large libraries](#large-libraries-generator_shards-binding_shards). |
+| `binding_shards` | — | `"auto"` | How many source files the compiled `python`, `nanobind`, `wasm` and `julia` bindings split their class registrations into. `"auto"`: one up to 30 classes, else ~25 per part. See [Large libraries](#large-libraries-generator_shards-binding_shards). |
 | `holders` | — | `[]` | Holder policies for libraries that reference-count their objects intrusively (VTK: protected destructors, `T::New()`, `vtkSmartPointer`). Bound classes deriving from a policy's `base` are bound through the library's own holder by `python`, `wasm` and `julia`. See [Reference-counted classes](#reference-counted-classes-holders). |
 | `interop` | — | `[]` | Foreign libraries whose types the target's binding framework marshals itself (`["eigen"]`). `python` / `nanobind` bind them natively (numpy); backends with no caster skip those members. See [Foreign-library interop](#foreign-library-interop-interop). |
 | `user_lib` | — | — | Link the generated bindings against pre-built external libraries — one object, or an array of them when your library has dependencies of its own. See [Linking external libraries](#linking-external-libraries-user_lib). |
@@ -306,7 +306,7 @@ A preset is only a JSON fragment: drop your own into
 |---|:---:|---|---|
 | `header` | ✅ | — | Filename emitted into `#include "..."`. Resolved against `user_include`. May be a **glob** (`"*.h"`), which binds every header it matches — see [Binding a whole folder](#binding-a-whole-folder-header-as-a-glob). |
 | `name` | — | header basename | C++ type name, must be reachable after including `header`. May be namespace-qualified (`space::Vector3`). |
-| `expose` | — | unqualified `name` | The **binding name** — what scripts see (Python attribute, JS export, TypeScript class) and what the generated trampoline is suffixed with (`Py_<expose>` / `Js_<expose>`). Works on an enum entry too. Must be a plain identifier. See [Renaming a class (`expose`)](#renaming-a-class-expose). |
+| `expose` | — | unqualified `name` | The **binding name** — what scripts see (Python attribute, JS export, TypeScript class) and what the generated trampoline is suffixed with (`Py_<expose>` / `Nb_<expose>` / `Js_<expose>`). Works on an enum entry too. Must be a plain identifier. See [Renaming a class (`expose`)](#renaming-a-class-expose). |
 | `annotations` | — | — | Path (relative to the manifest) to an out-of-line annotation JSON side-car, baked into `bindings.h` so the header stays clean. See [OUT_OF_LINE_ANNOTATIONS](OUT_OF_LINE_ANNOTATIONS.md). |
 | `doc` | — | — | A description string for the class (used by doc backends). |
 | `extensions` | — | `[]` | Free functions exposed as **instance methods** of this class. See [Extension methods](#extension-methods-extensions). |
@@ -699,10 +699,10 @@ So the work is split twice:
   same `generator`, whose `main()` concatenates their IR in manifest order and
   runs the backends once (`rosetta::generate_described`). Nothing is
   serialized: the IR never leaves the process.
-- **The bindings** — the `python`, `wasm` and `julia` backends write
+- **The bindings** — the `python`, `nanobind`, `wasm` and `julia` backends write
   `auto_<backend>_part_K.cpp` files, each registering a slice of the classes,
-  and list them in the emitted CMake. pybind11 parts are functions the module
-  entry calls in order; embind parts are `EMSCRIPTEN_BINDINGS` blocks of their
+  and list them in the emitted CMake. pybind11 and nanobind parts are functions
+  the module entry calls in order; embind parts are `EMSCRIPTEN_BINDINGS` blocks of their
   own; jlcxx parts receive the module after every `add_type` has run.
 
 ```json
@@ -1286,6 +1286,16 @@ Every compiled target is **expanded**: reflection runs once on the generation ho
 | `markdown` | API reference document | text output |
 | `html` | styled API reference page | text output |
 | `paraview` | ParaView Server Manager plugin XML | text output |
+
+Some names have **aliases**, other spellings for the same backend (matched case-insensitively):
+
+| Backend | Aliases |
+|---|---|
+| `wasm` | `webassembly` |
+| `node` | `javascript`, `js` |
+| `nanobind` | `py` |
+
+An alias is resolved when the manifest loads, so `"targets": ["js"]` generates into `bindings/node`, and `--only` / `--skip` accept aliases too. Two targets that resolve to the same backend (`"node"` and `"js"`) are an error, since both would write `bindings/node`. To add an alias, add it to its backend's row in `lang_aliases()` in `tools/rosetta_gen/manifest.cpp`.
 
 Each name also accepts a deprecated `-expanded` spelling (`lua-expanded`, `qt-expanded`, …) resolving to the same backend, so manifests written before the suffix was dropped keep working.
 

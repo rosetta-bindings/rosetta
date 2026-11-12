@@ -19,6 +19,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <manifest.h>
 #include <rosetta/generate.h>
@@ -185,6 +186,46 @@ TEST(TargetBuild, MalformedOverridesAreRefused) {
                     "a target's \"user_lib\""));
     EXPECT_TRUE(has(load_error(tree, R"({"lang": "python", "user_lib": []})"),
                     "must not be empty"));
+}
+
+TEST(TargetBuild, AliasTableAndCanonicalLang) {
+    EXPECT_EQ(canonical_lang("webassembly"), "wasm");
+    EXPECT_EQ(canonical_lang("WebAssembly"), "wasm");
+    EXPECT_EQ(canonical_lang("javascript"), "node");
+    EXPECT_EQ(canonical_lang("js"), "node");
+    EXPECT_EQ(canonical_lang("py"), "nanobind");
+    EXPECT_EQ(canonical_lang("lua-expanded"), "lua");
+    EXPECT_EQ(canonical_lang("python"), "python"); // canonical names pass through
+    EXPECT_EQ(canonical_lang("my-plugin"), "my-plugin");
+    // Every row's backend appears once, and no alias is claimed twice.
+    std::vector<std::string> seen;
+    for (const auto &[base, aliases] : lang_aliases()) {
+        for (const auto &a : aliases) {
+            EXPECT_EQ(std::count(seen.begin(), seen.end(), a), 0) << a;
+            seen.push_back(a);
+        }
+    }
+}
+
+TEST(TargetBuild, AliasedTargetsLoadUnderTheCanonicalName) {
+    Tree tree("alias_load");
+    const Manifest m =
+        load(tree.manifest(R"("WebAssembly", {"lang": "js", "name": "geomjs"}, "py")"));
+    ASSERT_EQ(m.targets.size(), 3u);
+    EXPECT_EQ(m.targets[0].lang, "wasm");
+    EXPECT_EQ(m.targets[1].lang, "node");
+    EXPECT_EQ(m.targets[1].name, "geomjs");
+    EXPECT_EQ(m.targets[2].lang, "nanobind");
+    // Per-target keys are checked against the CANONICAL name: "exceptions" is
+    // a wasm key, so it is accepted on "webassembly".
+    EXPECT_TRUE(load_error(tree, R"({"lang": "webassembly", "exceptions": "wasm"})").empty());
+}
+
+TEST(TargetBuild, TwoTargetsResolvingToOneBackendAreRefused) {
+    Tree tree("alias_dup");
+    EXPECT_TRUE(has(load_error(tree, R"("node", "js")"),
+                    "targets \"node\" and \"js\" both resolve to the backend \"node\""));
+    EXPECT_TRUE(has(load_error(tree, R"("py", {"lang": "nanobind"})"), "\"nanobind\""));
 }
 
 // ---- the emitted CMake -----------------------------------------------------------

@@ -98,6 +98,25 @@ TEST(Sharding, PythonSplitsIntoPartsCalledInOrder) {
     EXPECT_TRUE(has(cm, "auto_pybind.cpp auto_pybind_part_0.cpp auto_pybind_part_1.cpp")) << cm;
 }
 
+TEST(Sharding, NanobindSplitsIntoPartsCalledInOrder) {
+    const fs::path dir  = emit("nanobind", 2);
+    const std::string m = read_all(dir / "auto_nanobind.cpp");
+    const std::string p0 = read_all(dir / "auto_nanobind_part_0.cpp");
+    const std::string p1 = read_all(dir / "auto_nanobind_part_1.cpp");
+    const std::string cm = read_all(dir / "CMakeLists.txt");
+    EXPECT_LT(m.find("rosetta_nb_part_0(m);"), m.find("rosetta_nb_part_1(m);"));
+    EXPECT_TRUE(has(p0, "void rosetta_nb_part_0(nb::module_ &m) {"));
+    EXPECT_TRUE(has(p0, "nb::class_<shns::A>")) << "A and B are the first slice";
+    EXPECT_TRUE(has(p1, "nb::class_<shns::C>"));
+    EXPECT_FALSE(has(m, "nb::class_<")) << "the module entry registers no class itself";
+    EXPECT_TRUE(has(p1, "#include <nanobind/nanobind.h>")) << "every part has the preamble";
+    // Both nanobind_add_module() calls (stable ABI or not) list every part.
+    const std::string all = "auto_nanobind.cpp auto_nanobind_part_0.cpp auto_nanobind_part_1.cpp)";
+    const auto first = cm.find(all);
+    ASSERT_NE(first, std::string::npos) << cm;
+    EXPECT_NE(cm.find(all, first + 1), std::string::npos) << cm;
+}
+
 TEST(Sharding, WasmSplitsIntoBindingBlocks) {
     const fs::path    dir = emit("wasm", 2);
     const std::string p1  = read_all(dir / "auto_emscripten_part_1.cpp");

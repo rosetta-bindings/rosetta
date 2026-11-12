@@ -160,7 +160,7 @@ The side-car is **baked into `bindings.h` when `rosetta_gen` runs** — after ed
 
 ## Internal annotations
 
-`rosetta::virtual_spec` is **synthesized by the walk**, never written by users: it marks a method's surviving reflection as virtual / overriding so backends can emit overridable bindings (pybind11 / N-API trampolines). You only meet it when writing a custom backend.
+`rosetta::virtual_spec` is **synthesized by the walk**, never written by users: it marks a method's surviving reflection as virtual / overriding so backends can emit overridable bindings (pybind11 / nanobind / N-API trampolines). You only meet it when writing a custom backend.
 
 ---
 

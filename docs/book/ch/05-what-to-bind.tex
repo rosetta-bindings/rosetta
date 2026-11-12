@@ -57,7 +57,7 @@ base is not bound is then bound as a subclass of its nearest ancestor that is.
 
 By default, a class with public virtual methods gets a \emph{trampoline}
 subclass in the backends that support host-language overriding (pybind11,
-N-API), so a Python or JavaScript subclass can override a C++ virtual. Marking
+nanobind, N-API), so a Python or JavaScript subclass can override a C++ virtual. Marking
 the entry \code{"final": true} suppresses that: the virtuals still bind as
 ordinary callable methods, they just cannot be overridden from outside.
 

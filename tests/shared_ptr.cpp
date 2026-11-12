@@ -220,14 +220,19 @@ TEST(SharedPtr, ExpandedPythonSharesTheSameTrampolineFix) {
 
 // ---- nanobind -------------------------------------------------------
 
-TEST(SharedPtr, NanobindEmitsNoConstructorForAnAbstractClass) {
-    // nb::init<> instantiates the Alias type (== T, no trampoline here), so
-    // `new Executor{}` on the pure-virtual interface would be ill-formed. The
-    // walk still records an implicit default ctor, hence the guard on the loop.
+TEST(SharedPtr, NanobindConstructsAnAbstractClassOnlyThroughItsTrampoline) {
+    // `new Executor{}` on the pure-virtual interface is ill-formed, so the
+    // constructor binds only behind the guard that Nb_Executor (the
+    // trampoline nb::init builds for a Python subclass) is itself complete.
     const auto c = rosetta::gen_detail::make_context<spns::Executor>("sptest");
     const std::string s = render("nanobind", c);
-    EXPECT_NE(s.find("nb::class_<spns::Executor>(m, \"Executor\")"), std::string::npos);
-    EXPECT_EQ(s.find("nb::init"), std::string::npos);
+    EXPECT_NE(s.find("nb::class_<spns::Executor, rosetta_nb::Nb_Executor>(m, \"Executor\")"),
+              std::string::npos) << s;
+    const auto guard = s.find("if constexpr (!std::is_abstract_v<rosetta_nb::Nb_Executor>)");
+    ASSERT_NE(guard, std::string::npos);
+    EXPECT_GT(s.find("c.def(nb::init<>());"), guard) << "the constructor binds only behind the guard";
+    // A return type with a comma needs no alias here: NB_OVERRIDE deduces it.
+    EXPECT_NE(s.find("NB_OVERRIDE(profile);"), std::string::npos);
     // `run(int n)` declares its parameter, so the binding offers it as a
     // keyword argument — nanobind and pybind spell that the same way.
     EXPECT_NE(s.find(".def(\"run\", &spns::Executor::run, nb::arg(\"n\"))"), std::string::npos);

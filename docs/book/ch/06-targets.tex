@@ -82,6 +82,13 @@ Notes worth having:
     C++26-vs-off-the-shelf distinction does not apply to them. \lang{json} is
     \emph{not} one of them: besides the serialisation header it emits a
     buildable \code{demo.cpp} at \code{CMAKE\_CXX\_STANDARD 26}.
+  \item Some names have \textbf{aliases}, matched case-insensitively:
+    \code{webassembly} for \lang{wasm}; \code{javascript} and \code{js} for
+    \lang{node}; \code{py} for \lang{nanobind}. An alias resolves when the
+    manifest loads (\code{"js"} generates into \code{bindings/node}), and
+    \code{--only} / \code{--skip} accept aliases too. Two targets resolving to
+    one backend are an error. The table is \code{lang\_aliases()} in
+    \code{tools/rosetta\_gen/manifest.cpp}, one row per backend.
   \item Each name also accepts a deprecated \code{-expanded} spelling
     (\code{lua-expanded}, \code{qt-expanded}, \ldots) resolving to the same
     backend, so manifests written before the suffix was dropped keep working.
