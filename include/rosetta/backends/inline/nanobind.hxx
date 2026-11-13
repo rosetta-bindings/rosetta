@@ -23,11 +23,7 @@ project({{LIB}}_binding CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON){{BUILD_CONFIG}}
 
-execute_process(
-    COMMAND {{PYTHON_CMD}} -c "import sys; print(sys.executable)"
-    OUTPUT_VARIABLE Python_EXECUTABLE
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-set(Python_EXECUTABLE "${Python_EXECUTABLE}" CACHE FILEPATH "" FORCE)
+{{PYTHON_PROBE}}
 
 # Development.SABIModule is what defines the Python::SABIModule target, and
 # nanobind silently drops a STABLE_ABI request when that target is missing

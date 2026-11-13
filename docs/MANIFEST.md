@@ -551,9 +551,10 @@ By default a generated project takes whatever the `PATH` gives it: the emitted C
 
 Per-target, not top-level, so a manifest carrying both a `python` and a `nanobind` target can point them at different interpreters.
 
-Two things worth knowing:
+Things worth knowing:
 
 - **`--cmake-arg -DPython_EXECUTABLE=…` does not work**, which is why this exists. The generated CMake sets that variable with `CACHE … FORCE` after probing, overriding anything passed on the command line. Before these fields, a venv or a `pyenv` shim was the only way to choose an interpreter.
+- **`-DROSETTA_PYTHON=<python>` at configure time overrides the pin.** The pin is written where the bindings are *generated*, and they may be built elsewhere: bindings generated on macOS with `"python": "/Users/me/.pyenv/.../python3"` and built on Windows. There, pass `-DROSETTA_PYTHON=C:/Python313/python.exe`. Without it, a pin that does not run on the building machine is reported with a CMake warning and `find_package` chooses the interpreter, as if there were no pin. A `ROSETTA_PYTHON` that does not run stops the configure.
 - **`python` also drives the wheel.** A wheel is tagged for whichever interpreter runs `make_wheel.py`, so `rosetta_gen --build --wheel` packages with the pinned interpreter rather than the probed one — otherwise a 3.11 build would emit a `cp312` wheel.
 
 ---
@@ -1442,7 +1443,7 @@ Every compiled backend's generated `CMakeLists.txt` can carry a build configurat
 Both are optional and independent:
 
 - **`build_type`** — one of `Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel` (case-insensitive). Emitted as a *default* inside `if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)`, so `-DCMAKE_BUILD_TYPE=...` at configure time still wins and multi-config generators (Visual Studio, Xcode) are left to pick a configuration at build time. **Omitted ⇒ `Release`.** It previously meant "emit nothing", which left CMake with no build type and hence no optimization flags at all, so the documented two-line build produced an unoptimized module — around 8× slower on a trivial pybind11 call. Pass `-DCMAKE_BUILD_TYPE=Debug` (or set `"build_type": "Debug"`) when you want an unoptimized build.
-- **`optimization`** — an explicit optimization level: `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, `-Oz`, `-Og` or `-Ofast` (the leading `-` may be omitted). Emitted as `add_compile_options(...)` / `add_link_options(...)`, which land *after* the build type's own per-config flags on the compiler command line — so this `-O` overrides the level the build type implies (e.g. `"build_type": "Release", "optimization": "-O2"` builds `-DNDEBUG` but at `-O2` instead of Release's `-O3`). The link option matters for the wasm targets, where emscripten optimizes at link time too.
+- **`optimization`** — an explicit optimization level: `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, `-Oz`, `-Og` or `-Ofast` (the leading `-` may be omitted). Emitted as `add_compile_options(...)` / `add_link_options(...)`, which land *after* the build type's own per-config flags on the compiler command line — so this `-O` overrides the level the build type implies (e.g. `"build_type": "Release", "optimization": "-O2"` builds `-DNDEBUG` but at `-O2` instead of Release's `-O3`). The link option matters for the wasm targets, where emscripten optimizes at link time too. The level is **not applied to the Debug configuration**, and **MSVC gets its own spelling at compile time only**: `-O0`/`-Og` → `/Od`, `-O1`/`-Os`/`-Oz` → `/O1`, `-O2`/`-O3`/`-Ofast` → `/O2`. Visual Studio builds Debug by default, and MSVC refuses an optimization flag next to Debug's `/RTC1` (D8016); it has no link-time `-O` either (LNK4044). On Windows, build with `cmake --build build --config Release`.
 
 The flags apply to the *bindings* (and any [`user_sources`](#compiling-user-sources-user_sources) compiled into them), in every compiled backend. The text-only backends compile nothing and ignore both.
 
