@@ -78,21 +78,78 @@ TEST(RuntimePins, PythonInterpreterIsPinned) {
     for (const char *lang : {"python", "nanobind"}) {
         const std::string bare =
             emitted(lang, "CMakeLists.txt", [](rosetta::GenContext &c) { c.python = "3.11"; });
-        EXPECT_NE(bare.find("COMMAND python3.11 -c \"import sys; print(sys.executable)\""),
-                  std::string::npos)
+        EXPECT_NE(bare.find("set(_rosetta_python_cmd \"python3.11\")"), std::string::npos)
             << lang << " ignored a bare version pin";
+        EXPECT_NE(bare.find("COMMAND \"${_rosetta_python_cmd}\" -c \"import sys; "
+                            "print(sys.executable)\""),
+                  std::string::npos)
+            << lang << " lost the probe";
 
         const std::string path = emitted(lang, "CMakeLists.txt", [](rosetta::GenContext &c) {
             c.python = "/opt/py/bin/python3";
         });
-        EXPECT_NE(path.find("COMMAND /opt/py/bin/python3 -c"), std::string::npos)
+        EXPECT_NE(path.find("set(_rosetta_python_cmd \"/opt/py/bin/python3\")"),
+                  std::string::npos)
             << lang << " ignored an interpreter path";
 
-        // Unpinned keeps the old behaviour exactly.
-        EXPECT_NE(emitted(lang, "CMakeLists.txt", none).find("COMMAND python3 -c"),
+        // Unpinned probes python3, as before.
+        EXPECT_NE(emitted(lang, "CMakeLists.txt", none).find("set(_rosetta_python_cmd \"python3\")"),
                   std::string::npos)
             << lang << " changed the default probe";
     }
+}
+
+// The pin is written where the bindings are GENERATED; they may be built on
+// another machine (generated on macOS, built on Windows). -DROSETTA_PYTHON wins
+// over the pin, a pin that does not run there is reported and find_package
+// chooses, and a ROSETTA_PYTHON that does not run is an error — never an empty
+// interpreter silently forced into the cache.
+TEST(RuntimePins, PythonPinCanBeOverriddenAndFallsBack) {
+    const auto pin = [](rosetta::GenContext &c) { c.python = "/Users/me/.pyenv/bin/python3"; };
+    for (const char *lang : {"python", "nanobind"}) {
+        const std::string cm = emitted(lang, "CMakeLists.txt", pin);
+        const auto        at = [&](const char *s) { return cm.find(s); };
+        EXPECT_NE(at("set(ROSETTA_PYTHON \"\" CACHE FILEPATH"), std::string::npos) << lang;
+        EXPECT_LT(at("if(ROSETTA_PYTHON)"), at("set(_rosetta_python_cmd \"/Users/me")) << lang;
+        EXPECT_NE(at("if(_rosetta_python_rc EQUAL 0 AND _rosetta_python)"), std::string::npos)
+            << lang << " forces the interpreter without checking the probe ran";
+        EXPECT_NE(at("message(FATAL_ERROR \"ROSETTA_PYTHON="), std::string::npos) << lang;
+        EXPECT_NE(at("message(WARNING \"The pinned Python"), std::string::npos) << lang;
+        EXPECT_NE(at("find_package(Python 3 COMPONENTS Interpreter REQUIRED)"), std::string::npos)
+            << lang << " has no fallback when the pin does not run";
+        // the pybind11 template reads both names
+        EXPECT_NE(at("set(Python3_EXECUTABLE \"${_rosetta_python}\" CACHE FILEPATH \"\" FORCE)"),
+                  std::string::npos)
+            << lang;
+    }
+}
+
+// The manifest's optimization level must not reach Debug (MSVC: D8016 with
+// /RTC1) nor the MSVC link line (LNK4044), and MSVC gets its own /O spelling.
+TEST(RuntimePins, OptimizationIsPerCompilerAndNotInDebug) {
+    const std::string cm = emitted("nanobind", "CMakeLists.txt",
+                                   [](rosetta::GenContext &c) { c.optimization = "-O2"; });
+    EXPECT_EQ(cm.find("add_compile_options(-O2)"), std::string::npos) << cm;
+    EXPECT_EQ(cm.find("add_link_options(-O2)"), std::string::npos) << cm;
+    EXPECT_NE(cm.find("if(MSVC)\n    add_compile_options($<$<NOT:$<CONFIG:Debug>>:/O2>)\n"
+                      "else()\n    add_compile_options($<$<NOT:$<CONFIG:Debug>>:-O2>)\n"
+                      "    add_link_options($<$<NOT:$<CONFIG:Debug>>:-O2>)\nendif()"),
+              std::string::npos)
+        << cm;
+
+    const auto msvc_of = [&](const char *level) {
+        const std::string out = emitted("nanobind", "CMakeLists.txt",
+                                        [&](rosetta::GenContext &c) { c.optimization = level; });
+        const std::string head = "if(MSVC)\n    add_compile_options($<$<NOT:$<CONFIG:Debug>>:";
+        const auto        b    = out.find(head);
+        return b == std::string::npos ? std::string() : out.substr(b + head.size(), 3);
+    };
+    EXPECT_EQ(msvc_of("-O0"), "/Od");
+    EXPECT_EQ(msvc_of("-Os"), "/O1");
+    EXPECT_EQ(msvc_of("-O3"), "/O2");
+
+    // no manifest level, no optimization block at all
+    EXPECT_EQ(emitted("nanobind", "CMakeLists.txt", none).find("if(MSVC)"), std::string::npos);
 }
 
 // One field feeds BOTH the find_package floor and pyproject's requires-python,

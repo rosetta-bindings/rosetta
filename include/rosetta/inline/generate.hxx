@@ -49,6 +49,82 @@ namespace rosetta {
             return nullptr;
         }
 
+        // ---- portable integer spelling -----------------------------------------
+        //
+        // A type is reflected CANONICAL: std::size_t, std::ptrdiff_t and (on
+        // Linux) std::uint64_t / std::int64_t come out as `unsigned long` /
+        // `long`, the LP64 types they alias on macOS and Linux. Spelled that way,
+        // a generated binding does not compile on Windows (LLP64), where long is
+        // 32-bit and size_t is `unsigned long long`: the exact-signature casts
+        // that pick an overload (static_cast<R (T::*)(unsigned long)>) match
+        // nothing (MSVC C2440). The alias is gone by the time the type is
+        // reflected, so spell those two types back as the aliases they almost
+        // always come from — identical to them where the binding was generated,
+        // and right on Windows too. The cost is a header that literally says
+        // `unsigned long` (rare outside platform code), which then becomes
+        // size_t on Windows.
+        //
+        // Only on hosts where long is as wide as size_t: generated on Windows,
+        // `long` really is 32-bit and is left alone. `long long`, `unsigned long
+        // long` and `long double` are the same everywhere and never touched.
+        constexpr bool is_ident_char(char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                   c == '_';
+        }
+
+        constexpr std::string portable_integers(std::string s) {
+            if constexpr (sizeof(long) != sizeof(std::size_t)) {
+                return s;
+            }
+            // the identifier starting at or after `pos` (spaces skipped), and its end
+            auto next_word = [&](std::size_t pos) {
+                while (pos < s.size() && s[pos] == ' ') {
+                    ++pos;
+                }
+                std::size_t end = pos;
+                while (end < s.size() && is_ident_char(s[end])) {
+                    ++end;
+                }
+                return std::pair{s.substr(pos, end - pos), end};
+            };
+            std::string out;
+            std::size_t i = 0;
+            while (i < s.size()) {
+                if (!is_ident_char(s[i]) || (i > 0 && is_ident_char(s[i - 1]))) {
+                    out += s[i++];
+                    continue;
+                }
+                auto [w, end] = next_word(i);
+                if (w == "unsigned") {
+                    auto [w2, end2] = next_word(end);
+                    if (w2 == "long") {
+                        auto [w3, end3] = next_word(end2);
+                        if (w3 == "long") { // unsigned long long: portable as is
+                            out += s.substr(i, end3 - i);
+                            i = end3;
+                        } else {
+                            out += "std::size_t";
+                            i = w3 == "int" ? end3 : end2;
+                        }
+                        continue;
+                    }
+                } else if (w == "long") {
+                    auto [w2, end2] = next_word(end);
+                    if (w2 == "long" || w2 == "double") { // long long, long double
+                        out += s.substr(i, end2 - i);
+                        i = end2;
+                    } else {
+                        out += "std::ptrdiff_t";
+                        i = w2 == "int" ? end2 : end;
+                    }
+                    continue;
+                }
+                out += w;
+                i = end;
+            }
+            return out;
+        }
+
         // ---- structural type spelling ------------------------------------------
         //
         // std::meta::display_string_of() is NOT a C++ spelling. For a class
@@ -160,7 +236,7 @@ namespace rosetta {
             // A builtin (`int`, `double`) has no identifier and no scope; its
             // display spelling is already the C++ one.
             if (!std::meta::has_identifier(ty)) {
-                return std::string(std::meta::display_string_of(ty));
+                return portable_integers(std::string(std::meta::display_string_of(ty)));
             }
             return scope_prefix_of(ty) + std::string(std::meta::identifier_of(ty));
         }
@@ -840,12 +916,31 @@ endif()
                     "    set(CMAKE_BUILD_TYPE " + build_type + ")\n"
                     "endif()";
             }
+            // Per compiler and never in Debug. A bare add_compile_options(-O2)
+            // reached every configuration of a multi-config generator, and
+            // Visual Studio builds Debug by default, whose /RTC1 MSVC refuses
+            // next to an optimization flag (D8016); MSVC also has no link-time
+            // -O, so add_link_options(-O2) only drew LNK4044. MSVC gets the
+            // nearest /O level at compile time; other compilers keep -O at
+            // compile AND link (emscripten optimizes at link time).
             if (!c.optimization.empty()) {
+                const std::string &o = c.optimization;
+                const std::string  msvc =
+                    (o == "-O0" || o == "-Og")                 ? "/Od"
+                    : (o == "-O1" || o == "-Os" || o == "-Oz") ? "/O1"
+                                                               : "/O2"; // -O2, -O3, -Ofast
+                const std::string not_debug = "$<$<NOT:$<CONFIG:Debug>>:";
                 build_config +=
                     "\n\n# Optimization level (manifest \"optimization\") — added after the build\n"
-                    "# type's own per-config flags, so this -O is the one that wins.\n"
-                    "add_compile_options(" + c.optimization + ")\n"
-                    "add_link_options(" + c.optimization + ")";
+                    "# type's own per-config flags, so this level is the one that wins. Not in\n"
+                    "# Debug (MSVC refuses an optimization flag next to /RTC1); MSVC has no\n"
+                    "# link-time level, so " + o + " becomes " + msvc + " at compile time only.\n"
+                    "if(MSVC)\n"
+                    "    add_compile_options(" + not_debug + msvc + ">)\n"
+                    "else()\n"
+                    "    add_compile_options(" + not_debug + o + ">)\n"
+                    "    add_link_options(" + not_debug + o + ">)\n"
+                    "endif()";
             }
             // {{OUT_DIR_BLOCK}} — copy the built artifact to the manifest's
             // per-target "out_dir" after every build, so the loadable module
@@ -892,6 +987,50 @@ endif()
                     c.python.find_first_not_of("0123456789.") == std::string::npos;
                 python_cmd = bare_version ? "python" + c.python : c.python;
             }
+            // {{PYTHON_PROBE}} — turns {{PYTHON_CMD}} into Python_EXECUTABLE (and
+            // Python3_EXECUTABLE, which the pybind11 template reads). The pin is
+            // written at GENERATION time, but the project may be configured on
+            // another machine: a Windows build of bindings generated on macOS
+            // finds "/Users/.../bin/python3" missing. That used to leave an EMPTY
+            // Python_EXECUTABLE forced into the cache, after which find_package
+            // took whatever interpreter it found, without a word. Now:
+            //   - -DROSETTA_PYTHON=<interpreter> at configure time wins over the
+            //     pin (-DPython_EXECUTABLE cannot: the probe has to FORCE it, or
+            //     a changed pin would never replace a cached interpreter);
+            //   - a pin that does not run here is reported, and find_package
+            //     chooses as it would without one;
+            //   - a ROSETTA_PYTHON that does not run is an error, never ignored.
+            const std::string python_probe =
+                "# Python interpreter: -DROSETTA_PYTHON=<python> at configure time, else the\n"
+                "# manifest's \"python\" pin. A pin that does not run on this machine (bindings\n"
+                "# generated elsewhere) is reported, and find_package chooses instead.\n"
+                "set(ROSETTA_PYTHON \"\" CACHE FILEPATH\n"
+                "    \"Python interpreter to build for (overrides the manifest pin)\")\n"
+                "if(ROSETTA_PYTHON)\n"
+                "    set(_rosetta_python_cmd \"${ROSETTA_PYTHON}\")\n"
+                "else()\n"
+                "    set(_rosetta_python_cmd \"" + python_cmd + "\")\n"
+                "endif()\n"
+                "execute_process(\n"
+                "    COMMAND \"${_rosetta_python_cmd}\" -c \"import sys; print(sys.executable)\"\n"
+                "    OUTPUT_VARIABLE _rosetta_python\n"
+                "    RESULT_VARIABLE _rosetta_python_rc\n"
+                "    ERROR_QUIET\n"
+                "    OUTPUT_STRIP_TRAILING_WHITESPACE)\n"
+                "if(_rosetta_python_rc EQUAL 0 AND _rosetta_python)\n"
+                "    set(Python_EXECUTABLE \"${_rosetta_python}\" CACHE FILEPATH \"\" FORCE)\n"
+                "    set(Python3_EXECUTABLE \"${_rosetta_python}\" CACHE FILEPATH \"\" FORCE)\n"
+                "elseif(ROSETTA_PYTHON)\n"
+                "    message(FATAL_ERROR \"ROSETTA_PYTHON=${ROSETTA_PYTHON} does not run\")\n"
+                "else()\n"
+                "    message(WARNING \"The pinned Python (${_rosetta_python_cmd}) does not run on this \"\n"
+                "        \"machine; find_package chooses the interpreter. Pass \"\n"
+                "        \"-DROSETTA_PYTHON=<python> to pick one.\")\n"
+                "    unset(Python_EXECUTABLE CACHE)\n"
+                "    unset(Python3_EXECUTABLE CACHE)\n"
+                "    find_package(Python 3 COMPONENTS Interpreter REQUIRED)\n"
+                "    set(Python3_EXECUTABLE \"${Python_EXECUTABLE}\" CACHE FILEPATH \"\" FORCE)\n"
+                "endif()";
             // {{PYTHON_MIN}} — the find_package(Python …) floor, taken from the
             // SAME field as pyproject's requires-python so the two cannot drift:
             // ">=3.10" ⇒ 3.10. The version is the first digit run onward, minus
@@ -986,6 +1125,7 @@ endif()
                                 {"WHEEL_FILES_BLOCK", wheel_files_block},
                                 {"WHEEL_PROJECT_EXTRA", wheel_project_extra},
                                 {"PYTHON_CMD", python_cmd},
+                                {"PYTHON_PROBE", python_probe},
                                 {"PYTHON_MIN", python_min},
                                 {"REQUIRES_PYTHON", requires_python},
                                 {"NAPI_VERSION", napi_version},
@@ -1736,7 +1876,7 @@ endif()
                     out = replace_type_token(std::move(out), id, qualified_class_name<U>());
                 }
             }
-            return out;
+            return portable_integers(std::move(out));
         }
 
         template <std::meta::info Fn, std::size_t... Is>

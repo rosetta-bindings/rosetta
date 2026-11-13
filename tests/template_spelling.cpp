@@ -23,6 +23,7 @@
 //
 // Requires: -freflection -freflection-latest -fannotation-attributes
 
+#include <cstddef>
 #include <gtest/gtest.h>
 #include <rosetta/generate.h>
 #include <string>
@@ -189,4 +190,63 @@ template <> struct rosetta::binding_info<tsp::plain::Simple> {
 TEST(TemplateSpelling, PlainClassSpellingIsUnchanged) {
     const auto c = rosetta::gen_detail::make_context<tsp::plain::Simple>("tsp");
     EXPECT_EQ(c.classes.front().qualified, "tsp::plain::Simple");
+}
+
+// ---- portable integer spelling ------------------------------------------------
+//
+// std::size_t / std::ptrdiff_t are reflected as the LP64 types they alias where
+// the bindings are generated (macOS, Linux): `unsigned long` / `long`. Emitted
+// that way, the overload-selecting casts do not compile on Windows (LLP64), so
+// they are spelled back as the aliases.
+
+TEST(TemplateSpelling, PortableIntegerSpelling) {
+    using rosetta::gen_detail::portable_integers;
+    if constexpr (sizeof(long) != sizeof(std::size_t)) {
+        GTEST_SKIP() << "generated on an LLP64 host: long is left alone";
+    }
+    EXPECT_EQ(portable_integers("double (unsigned long) const"), "double (std::size_t) const");
+    EXPECT_EQ(portable_integers("long"), "std::ptrdiff_t");
+    EXPECT_EQ(portable_integers("unsigned long int"), "std::size_t");
+    EXPECT_EQ(portable_integers("const unsigned long &"), "const std::size_t &");
+    EXPECT_EQ(portable_integers("std::vector<unsigned long>"), "std::vector<std::size_t>");
+    // the same on every platform: untouched
+    EXPECT_EQ(portable_integers("unsigned long long"), "unsigned long long");
+    EXPECT_EQ(portable_integers("long long"), "long long");
+    EXPECT_EQ(portable_integers("long double"), "long double");
+    // a word that merely contains "long" is an identifier, not the type
+    EXPECT_EQ(portable_integers("longitude (along)"), "longitude (along)");
+}
+
+namespace tsp::ints {
+    struct Grid {
+        double at(std::size_t i) const { return static_cast<double>(i); }
+        double at(std::size_t i, std::size_t j) const { return static_cast<double>(i + j); }
+        std::ptrdiff_t shift(std::ptrdiff_t d) const { return d; }
+        unsigned long long big(unsigned long long v) const { return v; }
+    };
+} // namespace tsp::ints
+template <> struct rosetta::binding_info<tsp::ints::Grid> {
+    static constexpr const char *header = "tsp.h";
+};
+
+TEST(TemplateSpelling, OverloadCastsSpellSizeTPortably) {
+    if constexpr (sizeof(long) != sizeof(std::size_t)) {
+        GTEST_SKIP() << "generated on an LLP64 host";
+    }
+    const auto c = rosetta::gen_detail::make_context<tsp::ints::Grid>("tsp");
+    for (const char *lang : {"nanobind", "wasm"}) {
+        const std::string s = rosetta::backend_registry().at(lang)->render(c);
+        EXPECT_NE(s.find("(tsp::ints::Grid::*)(std::size_t) const"), std::string::npos) << lang;
+        EXPECT_EQ(s.find("unsigned long)"), std::string::npos) << lang;
+        EXPECT_EQ(s.find("unsigned long,"), std::string::npos) << lang;
+    }
+    // embind keys a method by name and keeps the first overload only; nanobind
+    // binds the whole set, so the two-argument cast is there
+    const std::string nb = rosetta::backend_registry().at("nanobind")->render(c);
+    EXPECT_NE(nb.find("(tsp::ints::Grid::*)(std::size_t, std::size_t) const"), std::string::npos);
+    // embind casts every method, overloaded or not: ptrdiff_t and the 64-bit
+    // type that is the same everywhere
+    const std::string js = rosetta::backend_registry().at("wasm")->render(c);
+    EXPECT_NE(js.find("std::ptrdiff_t (tsp::ints::Grid::*)(std::ptrdiff_t) const"), std::string::npos);
+    EXPECT_NE(js.find("(tsp::ints::Grid::*)(unsigned long long) const"), std::string::npos);
 }
