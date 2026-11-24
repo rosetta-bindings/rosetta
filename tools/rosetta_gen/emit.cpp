@@ -224,10 +224,12 @@ static std::string render_project_gen_cpp(const Manifest &m) {
         << "    opt.out_dir         = argv[1];\n"
         << "    opt.user_include    = {";
     for (std::size_t i = 0; i < m.user_include.size(); ++i) {
-        out << (i ? ", " : "") << "\"" << m.user_include[i].string() << "\"";
+        out << (i ? ", " : "") << "\"" << m.user_include[i].generic_string() << "\"";
     }
+    // generic_string(): forward slashes on every host. A native Windows path
+    // ("C:\dev\c++\rosetta") inside a C++ literal would read "\r" as CR.
     out << "};\n"
-        << "    opt.rosetta_include = \"" << m.rosetta_include.string() << "\";\n";
+        << "    opt.rosetta_include = \"" << m.rosetta_include.generic_string() << "\";\n";
     // These reach the per-backend (thin) CMakeLists via GenContext; each is
     // emitted only when set (empty ⇒ generate() applies its built-in default).
     if (!m.cpp26_root.empty()) {
@@ -590,9 +592,11 @@ static std::string render_cmakelists(const Manifest &m) {
 
     out << "target_include_directories(" << target << " PRIVATE\n";
     for (const auto &inc : m.user_include) {
-        out << "    " << inc.string() << "\n";
+        // Quoted (paths may hold spaces) and forward-slashed: CMake treats a
+        // backslash as an escape even inside quotes ("C:\msys64" -> bad "\m").
+        out << "    \"" << inc.generic_string() << "\"\n";
     }
-    out << "    " << m.rosetta_include.string() << ")\n\n";
+    out << "    \"" << m.rosetta_include.generic_string() << "\")\n\n";
 
     // The driver includes the bound headers (the reflection walk), so it must
     // see the same preprocessor definitions the bindings will be built with.
