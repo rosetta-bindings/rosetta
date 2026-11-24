@@ -93,6 +93,8 @@ TEST(DynamicBackend, EmitsStockCppWithNoReflection) {
     EXPECT_NE(s.find("#include <rosetta/dynamic.h>"), std::string::npos);
     // The whole point: nothing that needs a C++26 toolchain on the target.
     EXPECT_EQ(s.find("<experimental/meta>"), std::string::npos);
+    EXPECT_EQ(s.find("<meta>"), std::string::npos);
+    EXPECT_EQ(s.find("<rosetta/meta.h>"), std::string::npos);
     EXPECT_EQ(s.find("^^"), std::string::npos);
     EXPECT_EQ(s.find("[:"), std::string::npos);
 }

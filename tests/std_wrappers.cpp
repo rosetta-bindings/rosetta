@@ -107,6 +107,7 @@ namespace {
         std::ifstream     in(dir / "typescript" / "swxtest.d.ts");
         std::stringstream ss;
         ss << in.rdbuf();
+        in.close(); // close before remove_all: Windows cannot delete an open file
         fs::remove_all(dir);
         return ss.str();
     }
@@ -228,8 +229,13 @@ TEST(StdWrappers, WasmBindsAndRegistersEachWrapper) {
     EXPECT_FALSE(has(s, "\"maybe_ptr\""));
     // A map is an emval passthrough under its EXACT type (comparator and
     // allocator included: that is the type id embind checks) ...
-    EXPECT_TRUE(has(s, "emscripten::register_type<std::map<std::string, int, "
-                       "std::less<std::string>,"));
+    // (GCC leaves the defaulted comparator / allocator out of the spelling —
+    // the same type, so the same type id.)
+    EXPECT_TRUE(has(s, ROSETTA_REFLECTION_GCC
+                           ? "emscripten::register_type<std::map<std::string, int>>"
+                           : "emscripten::register_type<std::map<std::string, int, "
+                             "std::less<std::string>,"))
+        << s;
     EXPECT_TRUE(has(s, "(\"Record<string, number>\");"));
     // ... an optional uses embind's own registration ...
     EXPECT_TRUE(has(s, "emscripten::register_optional<int>();"));

@@ -245,6 +245,7 @@ TEST(UniquePtr, TypescriptDeclaresThePointee) {
     std::ifstream     in(dir / "typescript" / "upxtest.d.ts");
     std::stringstream ss;
     ss << in.rdbuf();
+    in.close(); // close before remove_all: Windows cannot delete an open file
     fs::remove_all(dir);
     const std::string s = ss.str();
     ASSERT_FALSE(s.empty());

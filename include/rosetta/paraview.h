@@ -17,7 +17,7 @@
 #pragma once
 
 #include <cstddef>
-#include <experimental/meta>
+#include <rosetta/meta.h>
 
 namespace rosetta {
 
@@ -32,8 +32,8 @@ namespace rosetta {
         const char *group;     // "filters" / "sources" / "readers" / "writers"
         const char *label;     // human-facing label ("" -> the identifier)
         consteval paraview_proxy(const char *c, const char *g = "filters", const char *l = "")
-            : vtk_class(std::define_static_string(c)), group(std::define_static_string(g)),
-              label(std::define_static_string(l)) {}
+            : vtk_class(rosetta::static_string(c)), group(rosetta::static_string(g)),
+              label(rosetta::static_string(l)) {}
         bool operator==(const paraview_proxy &) const = default;
     };
 
@@ -48,8 +48,8 @@ namespace rosetta {
         const char *command;    // setter command
         consteval paraview_input(const char *n = "Input", const char *dt = "vtkDataSet",
                                  const char *cmd = "SetInputConnection")
-            : name(std::define_static_string(n)), data_type(std::define_static_string(dt)),
-              command(std::define_static_string(cmd)) {}
+            : name(rosetta::static_string(n)), data_type(rosetta::static_string(dt)),
+              command(rosetta::static_string(cmd)) {}
         bool operator==(const paraview_input &) const = default;
     };
 
@@ -62,7 +62,7 @@ namespace rosetta {
         const char *attribute_type; // "Scalars" / "Vectors" / "Tensors" / ...
         const char *input;          // input port name the arrays come from
         consteval paraview_array(const char *at = "Scalars", const char *in = "Input")
-            : attribute_type(std::define_static_string(at)), input(std::define_static_string(in)) {}
+            : attribute_type(rosetta::static_string(at)), input(rosetta::static_string(in)) {}
         bool operator==(const paraview_array &) const = default;
     };
 

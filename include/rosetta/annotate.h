@@ -43,7 +43,7 @@
 
 #include <array>
 #include <cstddef>
-#include <experimental/meta>
+#include <rosetta/meta.h>
 #include <rosetta/annotations.h>
 #include <string>
 #include <string_view>

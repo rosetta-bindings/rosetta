@@ -317,7 +317,7 @@ namespace rosetta {
         }
 
         consteval const char *ann_str(std::string_view v) {
-            return std::define_static_string(ann_unescape(v));
+            return rosetta::static_string(ann_unescape(v));
         }
 
         template <class T>
@@ -329,7 +329,7 @@ namespace rosetta {
                 if (m.name != member) continue;
                 if (m.has_doc)
                     out.push_back(
-                        std::meta::reflect_constant(rosetta::doc{std::define_static_string(m.doc)}));
+                        std::meta::reflect_constant(rosetta::doc{rosetta::static_string(m.doc)}));
                 if (m.has_range)
                     out.push_back(std::meta::reflect_constant(rosetta::range{m.rmin, m.rmax}));
                 if (m.has_readonly && m.readonly_on)
@@ -338,15 +338,15 @@ namespace rosetta {
                     rosetta::combobox cb{};
                     cb.count = m.combo.count;
                     for (std::size_t j = 0; j < m.combo.count; ++j)
-                        cb.choices[j] = std::define_static_string(m.combo.items[j]);
+                        cb.choices[j] = rosetta::static_string(m.combo.items[j]);
                     out.push_back(std::meta::reflect_constant(cb));
                 }
                 if (m.has_label)
                     out.push_back(std::meta::reflect_constant(
-                        rosetta::label{std::define_static_string(m.label)}));
+                        rosetta::label{rosetta::static_string(m.label)}));
                 if (m.has_button)
                     out.push_back(std::meta::reflect_constant(
-                        rosetta::button{std::define_static_string(m.button)}));
+                        rosetta::button{rosetta::static_string(m.button)}));
                 if (m.has_widget) {
                     // UI hint tags, matched by name (an unknown value is ignored
                     // rather than fatal, matching skip_value()'s tolerance).
@@ -374,7 +374,7 @@ namespace rosetta {
                 auto add = [&out](auto a) { out.push_back(std::meta::reflect_constant(a)); };
                 if (!m.unit.empty()) add(rosetta::unit{ann_str(m.unit)});
                 if (!m.example.empty())
-                    add(rosetta::example{std::define_static_string(m.example)}); // raw JSON
+                    add(rosetta::example{rosetta::static_string(m.example)}); // raw JSON
                 if (m.has_min) add(rosetta::min{m.vmin});
                 if (m.has_max) add(rosetta::max{m.vmax});
                 if (m.has_length)

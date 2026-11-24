@@ -39,7 +39,7 @@
 #pragma once
 
 #include "qml_reflected_object.h"
-#include <experimental/meta>
+#include <rosetta/meta.h>
 #include <rosetta/walk.h>
 
 namespace rosetta {

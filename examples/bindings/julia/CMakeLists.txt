@@ -10,20 +10,12 @@
 
 cmake_minimum_required(VERSION 3.28)
 
-set(CLANG_P2996_ROOT "$ENV{HOME}/devs/c++/clang-p2996/build"
-    CACHE PATH "Bloomberg clang-p2996 fork build directory")
-
-if(NOT CMAKE_CXX_COMPILER)
-    set(CMAKE_C_COMPILER   "${CLANG_P2996_ROOT}/bin/clang")
-    set(CMAKE_CXX_COMPILER "${CLANG_P2996_ROOT}/bin/clang++")
-endif()
+# Reflection toolchain: clang-p2996 when installed, else GCC 16+.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../../cmake/RosettaReflection.cmake)
 
 project(auto_jlcxx_example CXX)
 
-set(CMAKE_CXX_STANDARD 26)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+rosetta_reflection_setup()
 
 # Locate JlCxx (from libcxxwrap-julia). If it isn't hinted via JlCxx_DIR or
 # CMAKE_PREFIX_PATH, ask Julia's CxxWrap for the prefix that ships the
@@ -43,10 +35,7 @@ target_include_directories(reflected_person PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../include)
 
 target_compile_options(reflected_person PRIVATE
-    -freflection
-    -freflection-latest
-    -fexperimental-library
-    -fannotation-attributes)
+    ${ROSETTA_REFLECTION_COMPILE_OPTIONS} ${ROSETTA_ANNOTATION_FLAGS})
 
 target_link_libraries(reflected_person PRIVATE
     JlCxx::cxxwrap_julia
@@ -57,9 +46,4 @@ target_link_libraries(reflected_person PRIVATE
 # mixing it with the clang-p2996 fork's libc++ can surface ABI mismatches
 # (similar in spirit to the pybind11 NO_EXTRAS/LTO caveat). Rebuild
 # libcxxwrap-julia with the fork if you hit one.
-target_link_options(reflected_person PRIVATE
-    -nostdlib++
-    -L${CLANG_P2996_ROOT}/lib
-    -Wl,-rpath,${CLANG_P2996_ROOT}/lib
-    -lc++
-    -lc++abi)
+target_link_options(reflected_person PRIVATE ${ROSETTA_REFLECTION_LINK_OPTIONS})

@@ -34,7 +34,7 @@
 // =============================================================================
 
 #include <cstddef>
-#include <experimental/meta>
+#include <rosetta/meta.h>
 #include <functional>
 #include <list>
 #include <string_view>
@@ -105,7 +105,7 @@ namespace rosetta::moc {
         const char *name;
         const char *notify;
         consteval property(const char *n, const char *nf = "")
-            : name(std::define_static_string(n)), notify(std::define_static_string(nf)) {}
+            : name(rosetta::static_string(n)), notify(rosetta::static_string(nf)) {}
         bool operator==(const property &) const = default;
     };
 

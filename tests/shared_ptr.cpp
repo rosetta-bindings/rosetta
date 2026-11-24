@@ -192,6 +192,15 @@ TEST(SharedPtr, PythonHolderFromAFreeFunction) {
 TEST(SharedPtr, CommaBearingReturnTypeHidesBehindALocalAlias) {
     const auto c = rosetta::gen_detail::make_context<spns::Executor>("sptest");
     const std::string s = render("python", c);
+#if ROSETTA_REFLECTION_GCC
+    // GCC spells profile()'s return type without its defaulted allocator: no
+    // comma, so no alias is needed and the type goes into the macro as is.
+    EXPECT_NE(s.find("PYBIND11_OVERRIDE(std::vector<double>, spns::Executor, profile, );"),
+              std::string::npos)
+        << s;
+    EXPECT_EQ(count_of(s, "using rosetta_ret_t ="), 0u);
+    return;
+#endif
     EXPECT_NE(s.find("using rosetta_ret_t = vector<double, allocator<double>>;"),
               std::string::npos);
     EXPECT_NE(s.find("PYBIND11_OVERRIDE(rosetta_ret_t, spns::Executor, profile, );"),
@@ -205,11 +214,15 @@ TEST(SharedPtr, CommaFreeReturnTypeIsUnchanged) {
     const std::string s = render("python", c);
     // run() returns int — no alias, byte-identical to the pre-change output.
     EXPECT_NE(s.find("PYBIND11_OVERRIDE_PURE(int, spns::Executor, run, p0);"), std::string::npos);
-    // Exactly one alias in the whole file: profile()'s.
-    EXPECT_EQ(count_of(s, "using rosetta_ret_t ="), 1u);
+    // Exactly one alias in the whole file: profile()'s (none with GCC, whose
+    // spelling of it has no comma — see above).
+    EXPECT_EQ(count_of(s, "using rosetta_ret_t ="), ROSETTA_REFLECTION_GCC ? 0u : 1u);
 }
 
 TEST(SharedPtr, ExpandedPythonSharesTheSameTrampolineFix) {
+#if ROSETTA_REFLECTION_GCC
+    GTEST_SKIP() << "GCC spells profile()'s return type without a comma: no alias";
+#endif
     const auto c = rosetta::gen_detail::make_context<spns::Executor>("sptest");
     const std::string s = render("python", c);
     EXPECT_NE(s.find("using rosetta_ret_t = vector<double, allocator<double>>;"),

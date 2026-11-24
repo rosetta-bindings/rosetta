@@ -739,7 +739,7 @@ Manifest load(const fs::path &manifest_path) {
                         w.dest = ".";
                     }
                     const fs::path dest(w.dest);
-                    if (dest.is_absolute()) {
+                    if (dest.has_root_path()) { // not is_absolute(): "/usr/lib" is not absolute on Windows
                         throw std::runtime_error(
                             "a \"wheel_files\" dest must be relative to the wheel root, got \"" +
                             w.dest + "\"");
@@ -1392,7 +1392,7 @@ Manifest load(const fs::path &manifest_path) {
         for (const auto &g : j.at("generated_headers")) {
             GeneratedHeaderEntry e;
             e.path = g.at("path").get<std::string>();
-            if (e.path.empty() || fs::path(e.path).is_absolute()) {
+            if (e.path.empty() || fs::path(e.path).has_root_path()) {
                 throw std::runtime_error("\"generated_headers\" path must be a relative include "
                                          "path, e.g. \"geogram/version.h\"");
             }

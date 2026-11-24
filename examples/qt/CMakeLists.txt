@@ -10,23 +10,15 @@
 
 cmake_minimum_required(VERSION 3.28)
 
-set(CLANG_P2996_ROOT "$ENV{HOME}/devs/c++/clang-p2996/build"
-    CACHE PATH "Bloomberg clang-p2996 fork build directory")
+# Reflection toolchain: clang-p2996 when installed, else GCC 16+.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/RosettaReflection.cmake)
 
 set(QT_DIR "$ENV{HOME}/Qt/6.5.3/macos"
     CACHE PATH "Qt 6 install prefix")
 
-if(NOT CMAKE_CXX_COMPILER)
-    set(CMAKE_C_COMPILER   "${CLANG_P2996_ROOT}/bin/clang")
-    set(CMAKE_CXX_COMPILER "${CLANG_P2996_ROOT}/bin/clang++")
-endif()
-
 project(auto_qt_example CXX)
 
-set(CMAKE_CXX_STANDARD 26)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+rosetta_reflection_setup()
 
 # AUTOMOC is enabled because Qt's own widget headers contain Q_OBJECT.
 # Our own code defines no Q_OBJECT class — the visitor wires lambdas
@@ -50,12 +42,9 @@ target_link_libraries(auto_qt PRIVATE
 
 # Reflection flags only on the TU that includes <rosetta/walk.h>;
 # the deprecation warning is libc++26 flagging Qt's use of is_trivial_v.
+set(_rosetta_main_opts ${ROSETTA_REFLECTION_COMPILE_OPTIONS} ${ROSETTA_ANNOTATION_FLAGS}
+    -Wno-deprecated-declarations)
 set_source_files_properties(main.cpp PROPERTIES
-    COMPILE_OPTIONS "-freflection;-freflection-latest;-fexperimental-library;-fannotation-attributes;-Wno-deprecated-declarations")
+    COMPILE_OPTIONS "${_rosetta_main_opts}")
 
-target_link_options(auto_qt PRIVATE
-    -nostdlib++
-    -L${CLANG_P2996_ROOT}/lib
-    -Wl,-rpath,${CLANG_P2996_ROOT}/lib
-    -lc++
-    -lc++abi)
+target_link_options(auto_qt PRIVATE ${ROSETTA_REFLECTION_LINK_OPTIONS})

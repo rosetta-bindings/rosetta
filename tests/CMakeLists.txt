@@ -1,33 +1,13 @@
 cmake_minimum_required(VERSION 3.28)
 
-set(CLANG_P2996_ROOT "$ENV{HOME}/devs/c++/clang-p2996/build"
-    CACHE PATH "Bloomberg clang-p2996 fork build directory")
-
-if(NOT CMAKE_CXX_COMPILER)
-    set(CMAKE_C_COMPILER   "${CLANG_P2996_ROOT}/bin/clang")
-    set(CMAKE_CXX_COMPILER "${CLANG_P2996_ROOT}/bin/clang++")
-endif()
+# Reflection toolchain: clang-p2996 when installed, else GCC 16+.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/RosettaReflection.cmake)
 
 project(introspection-cpp26 CXX)
 
-set(CMAKE_CXX_STANDARD 26)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
-
-add_compile_options(
-    -freflection
-    -freflection-latest
-    -fexperimental-library
-)
-
-add_link_options(
-    -nostdlib++
-    -L${CLANG_P2996_ROOT}/lib
-    -Wl,-rpath,${CLANG_P2996_ROOT}/lib
-    -lc++
-    -lc++abi
-)
+rosetta_reflection_setup()
+add_compile_options(${ROSETTA_REFLECTION_COMPILE_OPTIONS})
+add_link_options(${ROSETTA_REFLECTION_LINK_OPTIONS})
 
 # GoogleTest is built from source (FetchContent) AFTER the options above so it
 # shares this toolchain's libc++ / -fexperimental-library ABI. A prebuilt gtest
@@ -54,11 +34,11 @@ include(GoogleTest)
 
 add_executable(docgen docgen.cpp)
 target_include_directories(docgen PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(docgen PRIVATE -fannotation-attributes)
+target_compile_options(docgen PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 
 add_executable(moc moc.cpp)
 target_include_directories(moc PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(moc PRIVATE -fannotation-attributes)
+target_compile_options(moc PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(moc PRIVATE GTest::gtest_main)
 gtest_discover_tests(moc)
 
@@ -66,7 +46,7 @@ gtest_discover_tests(moc)
 # customization point (the same point rosetta_gen bakes a JSON side-car into).
 add_executable(annotate_json annotate_json.cpp)
 target_include_directories(annotate_json PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(annotate_json PRIVATE -fannotation-attributes)
+target_compile_options(annotate_json PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(annotate_json PRIVATE GTest::gtest_main)
 gtest_discover_tests(annotate_json)
 
@@ -74,7 +54,7 @@ gtest_discover_tests(annotate_json)
 # and virtual-diamond collapse. Verified via to_json/from_json and to_markdown.
 add_executable(inheritance inheritance.cpp)
 target_include_directories(inheritance PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(inheritance PRIVATE -fannotation-attributes)
+target_compile_options(inheritance PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(inheritance PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
 gtest_discover_tests(inheritance)
 
@@ -83,7 +63,7 @@ gtest_discover_tests(inheritance)
 # boundary. Includes nanobind's single-base rule. Verifies the emitted source.
 add_executable(base_classes base_classes.cpp)
 target_include_directories(base_classes PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(base_classes PRIVATE -fannotation-attributes)
+target_compile_options(base_classes PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(base_classes PRIVATE GTest::gtest_main)
 gtest_discover_tests(base_classes)
 
@@ -91,7 +71,7 @@ gtest_discover_tests(base_classes)
 # Verifies the generated auto_pybind.cpp source, not a live pybind build.
 add_executable(python_trampoline python_trampoline.cpp)
 target_include_directories(python_trampoline PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(python_trampoline PRIVATE -fannotation-attributes)
+target_compile_options(python_trampoline PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(python_trampoline PRIVATE GTest::gtest_main)
 gtest_discover_tests(python_trampoline)
 
@@ -99,7 +79,7 @@ gtest_discover_tests(python_trampoline)
 # Verifies the generated auto_napi.cpp source (no live N-API build needed).
 add_executable(node_trampoline node_trampoline.cpp)
 target_include_directories(node_trampoline PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(node_trampoline PRIVATE -fannotation-attributes)
+target_compile_options(node_trampoline PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(node_trampoline PRIVATE GTest::gtest_main)
 gtest_discover_tests(node_trampoline)
 
@@ -107,7 +87,7 @@ gtest_discover_tests(node_trampoline)
 # overload-set gating in the *-expanded backends. Verifies generated sources.
 add_executable(member_object member_object.cpp)
 target_include_directories(member_object PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(member_object PRIVATE -fannotation-attributes)
+target_compile_options(member_object PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(member_object PRIVATE GTest::gtest_main)
 gtest_discover_tests(member_object)
 
@@ -115,7 +95,7 @@ gtest_discover_tests(member_object)
 # keep their namespaces, and libc++'s std::__1 never leaks into emitted code.
 add_executable(template_spelling template_spelling.cpp)
 target_include_directories(template_spelling PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(template_spelling PRIVATE -fannotation-attributes)
+target_compile_options(template_spelling PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(template_spelling PRIVATE GTest::gtest_main)
 gtest_discover_tests(template_spelling)
 
@@ -124,7 +104,7 @@ gtest_discover_tests(template_spelling)
 # is recorded rather than silently dropped.
 add_executable(overload overload.cpp)
 target_include_directories(overload PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(overload PRIVATE -fannotation-attributes)
+target_compile_options(overload PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(overload PRIVATE GTest::gtest_main)
 gtest_discover_tests(overload)
 
@@ -133,7 +113,7 @@ gtest_discover_tests(overload)
 # backends that form a function pointer disambiguate with a static_cast.
 add_executable(free_overload free_overload.cpp)
 target_include_directories(free_overload PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(free_overload PRIVATE -fannotation-attributes)
+target_compile_options(free_overload PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(free_overload PRIVATE GTest::gtest_main)
 gtest_discover_tests(free_overload)
 
@@ -142,7 +122,7 @@ gtest_discover_tests(free_overload)
 # handling) — the two gaps that kept a factory API off those targets.
 add_executable(path_shared path_shared.cpp)
 target_include_directories(path_shared PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(path_shared PRIVATE -fannotation-attributes)
+target_compile_options(path_shared PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(path_shared PRIVATE GTest::gtest_main)
 gtest_discover_tests(path_shared)
 
@@ -151,7 +131,7 @@ gtest_discover_tests(path_shared)
 # and skipped by every backend that has not opted in.
 add_executable(std_wrappers std_wrappers.cpp)
 target_include_directories(std_wrappers PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(std_wrappers PRIVATE -fannotation-attributes)
+target_compile_options(std_wrappers PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(std_wrappers PRIVATE GTest::gtest_main)
 gtest_discover_tests(std_wrappers)
 
@@ -160,7 +140,7 @@ gtest_discover_tests(std_wrappers)
 # reference everywhere.
 add_executable(unique_ptr unique_ptr.cpp)
 target_include_directories(unique_ptr PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(unique_ptr PRIVATE -fannotation-attributes)
+target_compile_options(unique_ptr PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(unique_ptr PRIVATE GTest::gtest_main)
 gtest_discover_tests(unique_ptr)
 
@@ -169,7 +149,7 @@ gtest_discover_tests(unique_ptr)
 # build system would have produced).
 add_executable(module_init module_init.cpp)
 target_include_directories(module_init PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(module_init PRIVATE -fannotation-attributes)
+target_compile_options(module_init PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(module_init PRIVATE GTest::gtest_main)
 gtest_discover_tests(module_init)
 
@@ -178,7 +158,7 @@ gtest_discover_tests(module_init)
 # Python, multiple returns in Lua, an array in JS. Never inferred.
 add_executable(out_params out_params.cpp)
 target_include_directories(out_params PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(out_params PRIVATE -fannotation-attributes)
+target_compile_options(out_params PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(out_params PRIVATE GTest::gtest_main)
 gtest_discover_tests(out_params)
 
@@ -186,7 +166,7 @@ gtest_discover_tests(out_params)
 # is recorded with a reason, and the JSON parses.
 add_executable(coverage coverage.cpp)
 target_include_directories(coverage PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(coverage PRIVATE -fannotation-attributes)
+target_compile_options(coverage PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(coverage PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
 gtest_discover_tests(coverage)
 
@@ -194,7 +174,7 @@ gtest_discover_tests(coverage)
 # (<rosetta/api_diff.h>, `rosetta_gen --api-diff`).
 add_executable(api_diff api_diff.cpp)
 target_include_directories(api_diff PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(api_diff PRIVATE -fannotation-attributes)
+target_compile_options(api_diff PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(api_diff PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
 gtest_discover_tests(api_diff)
 
@@ -202,7 +182,7 @@ gtest_discover_tests(api_diff)
 # containers through a std::vector boundary). Verifies generated sources.
 add_executable(sequence sequence.cpp)
 target_include_directories(sequence PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(sequence PRIVATE -fannotation-attributes)
+target_compile_options(sequence PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(sequence PRIVATE GTest::gtest_main)
 gtest_discover_tests(sequence)
 
@@ -210,7 +190,7 @@ gtest_discover_tests(sequence)
 # them). Verifies the CMake text emitted into every compiled backend.
 add_executable(user_lib user_lib.cpp)
 target_include_directories(user_lib PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(user_lib PRIVATE -fannotation-attributes)
+target_compile_options(user_lib PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(user_lib PRIVATE GTest::gtest_main)
 gtest_discover_tests(user_lib)
 
@@ -219,7 +199,7 @@ gtest_discover_tests(user_lib)
 # per-header STL casters / abstract-class constructor guard. Generated sources.
 add_executable(shared_ptr shared_ptr.cpp)
 target_include_directories(shared_ptr PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(shared_ptr PRIVATE -fannotation-attributes)
+target_compile_options(shared_ptr PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(shared_ptr PRIVATE GTest::gtest_main)
 gtest_discover_tests(shared_ptr)
 
@@ -228,7 +208,7 @@ gtest_discover_tests(shared_ptr)
 # split). Verifies generated sources.
 add_executable(expose expose.cpp)
 target_include_directories(expose PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(expose PRIVATE -fannotation-attributes)
+target_compile_options(expose PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(expose PRIVATE GTest::gtest_main)
 gtest_discover_tests(expose)
 
@@ -240,7 +220,7 @@ gtest_discover_tests(expose)
 # needs no Eigen dependency.
 add_executable(interop_eigen interop_eigen.cpp)
 target_include_directories(interop_eigen PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(interop_eigen PRIVATE -fannotation-attributes)
+target_compile_options(interop_eigen PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(interop_eigen PRIVATE GTest::gtest_main)
 gtest_discover_tests(interop_eigen)
 
@@ -248,7 +228,7 @@ gtest_discover_tests(interop_eigen)
 # is copied where the project wants it, wasm's .js+.wasm pair included.
 add_executable(out_dir out_dir.cpp)
 target_include_directories(out_dir PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(out_dir PRIVATE -fannotation-attributes)
+target_compile_options(out_dir PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(out_dir PRIVATE GTest::gtest_main)
 gtest_discover_tests(out_dir)
 
@@ -256,7 +236,7 @@ gtest_discover_tests(out_dir)
 # "napi_version" / "node_engine") in the emitted CMake, pyproject and package.json.
 add_executable(runtime_pins runtime_pins.cpp)
 target_include_directories(runtime_pins PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(runtime_pins PRIVATE -fannotation-attributes)
+target_compile_options(runtime_pins PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(runtime_pins PRIVATE GTest::gtest_main)
 gtest_discover_tests(runtime_pins)
 
@@ -264,7 +244,7 @@ gtest_discover_tests(runtime_pins)
 # bound class binds with reference_internal instead of being copied.
 add_executable(ref_return ref_return.cpp)
 target_include_directories(ref_return PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(ref_return PRIVATE -fannotation-attributes)
+target_compile_options(ref_return PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(ref_return PRIVATE GTest::gtest_main)
 gtest_discover_tests(ref_return)
 
@@ -272,7 +252,7 @@ gtest_discover_tests(ref_return)
 # through a vector-of-rows boundary). Verifies generated sources.
 add_executable(matrix matrix.cpp)
 target_include_directories(matrix PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(matrix PRIVATE -fannotation-attributes)
+target_compile_options(matrix PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(matrix PRIVATE GTest::gtest_main)
 gtest_discover_tests(matrix)
 
@@ -281,7 +261,7 @@ gtest_discover_tests(matrix)
 # family keeps numpy. Same stub-Eigen trick as above.
 add_executable(interop_sequence interop_sequence.cpp)
 target_include_directories(interop_sequence PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(interop_sequence PRIVATE -fannotation-attributes)
+target_compile_options(interop_sequence PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(interop_sequence PRIVATE GTest::gtest_main)
 gtest_discover_tests(interop_sequence)
 
@@ -346,7 +326,7 @@ gtest_discover_tests(param_names)
 
 add_executable(nested_enum nested_enum.cpp)
 target_include_directories(nested_enum PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(nested_enum PRIVATE -fannotation-attributes)
+target_compile_options(nested_enum PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(nested_enum PRIVATE GTest::gtest_main)
 gtest_discover_tests(nested_enum)
 
@@ -364,7 +344,7 @@ gtest_discover_tests(dynamic)
 
 add_executable(dynamic_gen dynamic_gen.cpp)
 target_include_directories(dynamic_gen PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(dynamic_gen PRIVATE -fannotation-attributes)
+target_compile_options(dynamic_gen PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(dynamic_gen PRIVATE GTest::gtest_main)
 gtest_discover_tests(dynamic_gen)
 
@@ -379,7 +359,7 @@ gtest_discover_tests(mcp)
 # and through the dynamic core + MCP server (dynamic_annotations, stock).
 add_executable(annotations_ext annotations_ext.cpp)
 target_include_directories(annotations_ext PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(annotations_ext PRIVATE -fannotation-attributes)
+target_compile_options(annotations_ext PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(annotations_ext PRIVATE GTest::gtest_main)
 gtest_discover_tests(annotations_ext)
 
@@ -428,7 +408,7 @@ add_executable(target_build target_build.cpp
 target_include_directories(target_build PRIVATE
     ${CMAKE_SOURCE_DIR}/../include
     ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen)
-target_compile_options(target_build PRIVATE -fannotation-attributes)
+target_compile_options(target_build PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(target_build PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
 gtest_discover_tests(target_build)
 
@@ -438,7 +418,7 @@ gtest_discover_tests(target_build)
 # (creatability, owned returns) and the rendered sources of the three backends.
 add_executable(holder holder.cpp)
 target_include_directories(holder PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(holder PRIVATE -fannotation-attributes)
+target_compile_options(holder PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(holder PRIVATE GTest::gtest_main)
 gtest_discover_tests(holder)
 
@@ -447,7 +427,7 @@ gtest_discover_tests(holder)
 # overload under one name (pybind11), and an unbound enum in a signature (jlcxx).
 add_executable(library_patterns library_patterns.cpp)
 target_include_directories(library_patterns PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(library_patterns PRIVATE -fannotation-attributes)
+target_compile_options(library_patterns PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(library_patterns PRIVATE GTest::gtest_main)
 gtest_discover_tests(library_patterns)
 
@@ -455,6 +435,6 @@ gtest_discover_tests(library_patterns)
 # cut their class registrations into part files listed in the emitted CMake.
 add_executable(sharding sharding.cpp)
 target_include_directories(sharding PRIVATE ${CMAKE_SOURCE_DIR}/../include)
-target_compile_options(sharding PRIVATE -fannotation-attributes)
+target_compile_options(sharding PRIVATE ${ROSETTA_ANNOTATION_FLAGS})
 target_link_libraries(sharding PRIVATE GTest::gtest_main)
 gtest_discover_tests(sharding)

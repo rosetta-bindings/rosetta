@@ -233,37 +233,37 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     // These reach the per-backend (thin) CMakeLists via GenContext; each is
     // emitted only when set (empty ⇒ generate() applies its built-in default).
     if (!m.cpp26_root.empty()) {
-        out << "    opt.cpp26_root      = \"" << m.cpp26_root << "\";\n";
+        out << "    opt.cpp26_root      = " << str_lit(m.cpp26_root) << ";\n";
     }
     if (!m.cpp26_cxx.empty()) {
-        out << "    opt.cpp26_cxx       = \"" << m.cpp26_cxx << "\";\n";
+        out << "    opt.cpp26_cxx       = " << str_lit(m.cpp26_cxx) << ";\n";
     }
     if (!m.cpp26_cc.empty()) {
-        out << "    opt.cpp26_cc        = \"" << m.cpp26_cc << "\";\n";
+        out << "    opt.cpp26_cc        = " << str_lit(m.cpp26_cc) << ";\n";
     }
     if (!m.cpp26_lib.empty()) {
-        out << "    opt.cpp26_lib       = \"" << m.cpp26_lib << "\";\n";
+        out << "    opt.cpp26_lib       = " << str_lit(m.cpp26_lib) << ";\n";
     }
     if (!m.qt_dir.empty()) {
-        out << "    opt.qt_dir          = \"" << m.qt_dir << "\";\n";
+        out << "    opt.qt_dir          = " << str_lit(m.qt_dir) << ";\n";
     }
     // Build configuration baked into every compiled backend's CMakeLists
     // (manifest "build_type" / "optimization").
     if (!m.build_type.empty()) {
-        out << "    opt.build_type      = \"" << m.build_type << "\";\n";
+        out << "    opt.build_type      = " << str_lit(m.build_type) << ";\n";
     }
     if (!m.optimization.empty()) {
-        out << "    opt.optimization    = \"" << m.optimization << "\";\n";
+        out << "    opt.optimization    = " << str_lit(m.optimization) << ";\n";
     }
     // C++ standard the user sources compile with (manifest "cxx_standard");
     // absent ⇒ they build at each target's own standard.
     if (!m.cxx_standard.empty()) {
-        out << "    opt.cxx_standard    = \"" << m.cxx_standard << "\";\n";
+        out << "    opt.cxx_standard    = " << str_lit(m.cxx_standard) << ";\n";
     }
     // Distribution version for the packaging artifacts (manifest "version");
     // absent ⇒ the backends stamp their own default into pyproject.toml.
     if (!m.version.empty()) {
-        out << "    opt.version         = \"" << m.version << "\";\n";
+        out << "    opt.version         = " << str_lit(m.version) << ";\n";
     }
     if (m.binding_shards > 0) {
         out << "    opt.binding_shards  = " << m.binding_shards << ";\n";
@@ -274,8 +274,8 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     if (!m.user_libs.empty()) {
         out << "    opt.user_libs       = {\n";
         for (const auto &u : m.user_libs) {
-            out << "        {\"" << u.name << "\", \"" << u.dir << "\", \""
-                << (u.link.empty() ? "shared" : u.link) << "\"},\n";
+            out << "        {" << str_lit(u.name) << ", " << str_lit(u.dir) << ", "
+                << str_lit(u.link.empty() ? "shared" : u.link) << "},\n";
         }
         out << "    };\n";
     }
@@ -283,7 +283,9 @@ static std::string render_project_gen_cpp(const Manifest &m) {
     if (!m.user_sources.empty()) {
         out << "    opt.user_sources    = {\n";
         for (const auto &src : m.user_sources) {
-            out << "        \"" << src << "\",\n";
+            // generic_string + str_lit: a Windows path ("C:\dev\c++\rosetta")
+            // spliced raw into a C++ literal reads "\r" as CR.
+            out << "        " << str_lit(fs::path(src).generic_string()) << ",\n";
         }
         out << "    };\n";
     }
@@ -304,17 +306,17 @@ static std::string render_project_gen_cpp(const Manifest &m) {
         // DESIGNATED initializers: TargetSpec has grown past the point where a
         // positional list is readable, and every field after `name` is optional
         // — positionally, one of them means spelling every earlier one.
-        out << "        {.lang = \"" << t.lang << "\", .name = \"" << t.name << "\"";
+        out << "        {.lang = " << str_lit(t.lang) << ", .name = " << str_lit(t.name);
         if (!t.link_options.empty()) {
             out << ", .link_options = {";
             for (std::size_t i = 0; i < t.link_options.size(); ++i) {
-                out << (i ? ", " : "") << "\"" << t.link_options[i] << "\"";
+                out << (i ? ", " : "") << str_lit(t.link_options[i]);
             }
             out << "}";
         }
         const auto field = [&out](const char *name, const std::string &v) {
             if (!v.empty()) {
-                out << ", ." << name << " = \"" << v << "\"";
+                out << ", ." << name << " = " << str_lit(v);
             }
         };
         field("artifact_dir", t.out_dir);
@@ -567,9 +569,22 @@ static std::string render_cmakelists(const Manifest &m) {
         << "    CACHE FILEPATH \"C++26 / P2996 C compiler\")\n"
         << "set(ROSETTA_STDLIB \"" << cpp26_lib << "\"\n"
         << "    CACHE PATH \"Directory holding the fork's libc++ / libc++abi (-L and -rpath)\")\n"
+        << "# Reflection compiler: an explicit -DCMAKE_CXX_COMPILER wins; otherwise the\n"
+        << "# clang-p2996 fork above when it is installed; otherwise CMake's default\n"
+        << "# compiler, which must then be GCC 16+ (checked after project()).\n"
         << "if(NOT CMAKE_CXX_COMPILER)\n"
-        << "    set(CMAKE_C_COMPILER   \"${ROSETTA_C_COMPILER}\")\n"
-        << "    set(CMAKE_CXX_COMPILER \"${ROSETTA_CXX_COMPILER}\")\n"
+        << "    if(IS_ABSOLUTE \"${ROSETTA_CXX_COMPILER}\")\n"
+        << "        set(_rosetta_cxx \"${ROSETTA_CXX_COMPILER}\")\n"
+        << "    else()\n"
+        << "        find_program(_rosetta_cxx NAMES \"${ROSETTA_CXX_COMPILER}\")\n"
+        << "    endif()\n"
+        << "    if(_rosetta_cxx AND EXISTS \"${_rosetta_cxx}\")\n"
+        << "        set(CMAKE_C_COMPILER   \"${ROSETTA_C_COMPILER}\")\n"
+        << "        set(CMAKE_CXX_COMPILER \"${_rosetta_cxx}\")\n"
+        << "    else()\n"
+        << "        message(STATUS \"rosetta: no clang-p2996 at ${ROSETTA_CXX_COMPILER} \"\n"
+        << "                       \"— using the default C++ compiler (needs GCC 16+)\")\n"
+        << "    endif()\n"
         << "endif()\n\n"
         << "project(" << target << " CXX)\n\n"
         << "set(CMAKE_CXX_STANDARD 26)\n"
@@ -608,18 +623,34 @@ static std::string render_cmakelists(const Manifest &m) {
         }
     }
 
-    // -fconstexpr-steps: the walk runs at compile time, and flattening a class
-    // with hundreds of members across a deep hierarchy (vtkPolyData inherits
-    // ~400 from vtkObjectBase down) blows clang's default budget of ~1M steps —
-    // "constexpr evaluation hit maximum step limit". The cost is only paid by
-    // classes that need it.
-    out << "target_compile_options(" << target << " PRIVATE\n"
-        << "    -freflection -freflection-latest -fexperimental-library "
+    // Raised constexpr budgets: the walk runs at compile time, and flattening a
+    // class with hundreds of members across a deep hierarchy (vtkPolyData
+    // inherits ~400 from vtkObjectBase down) blows the default budgets —
+    // clang's ~1M steps, GCC's loop limit. The cost is only paid by classes
+    // that need it.
+    //
+    // clang-p2996 links the fork's own libc++ (hence -L / rpath); GCC 16 uses
+    // its regular libstdc++ and needs only -freflection (annotations included).
+    out << "if(CMAKE_CXX_COMPILER_ID STREQUAL \"GNU\")\n"
+        << "    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16)\n"
+        << "        message(FATAL_ERROR \"rosetta: GCC ${CMAKE_CXX_COMPILER_VERSION} has no \"\n"
+        << "            \"reflection — need GCC 16+ or clang-p2996 (-DCLANG_P2996_ROOT=...)\")\n"
+        << "    endif()\n"
+        << "    target_compile_options(" << target << " PRIVATE\n"
+        << "        -freflection\n"
+        << "        -fconstexpr-ops-limit=68719476736 -fconstexpr-loop-limit=1000000000)\n"
+        << "elseif(CMAKE_CXX_COMPILER_ID MATCHES \"Clang\")\n"
+        << "    target_compile_options(" << target << " PRIVATE\n"
+        << "        -freflection -freflection-latest -fexperimental-library "
            "-fannotation-attributes\n"
-        << "    -fconstexpr-steps=1000000000)\n\n"
-        << "target_link_options(" << target << " PRIVATE\n"
-        << "    -nostdlib++ -L${ROSETTA_STDLIB} -Wl,-rpath,${ROSETTA_STDLIB}\n"
-        << "    -lc++ -lc++abi)\n";
+        << "        -fconstexpr-steps=1000000000)\n"
+        << "    target_link_options(" << target << " PRIVATE\n"
+        << "        -nostdlib++ -L${ROSETTA_STDLIB} -Wl,-rpath,${ROSETTA_STDLIB}\n"
+        << "        -lc++ -lc++abi)\n"
+        << "else()\n"
+        << "    message(FATAL_ERROR \"rosetta: ${CMAKE_CXX_COMPILER_ID} has no C++26 \"\n"
+        << "        \"reflection — need GCC 16+ or clang-p2996 (-DCLANG_P2996_ROOT=...)\")\n"
+        << "endif()\n";
 
     // If the bound headers only declare the API (bodies in an external library),
     // the driver links against it too: the reflection walk instantiates each
@@ -666,7 +697,19 @@ static std::string render_cmakelists(const Manifest &m) {
         }
         out << "list(REMOVE_DUPLICATES _rosetta_rpath)\n"
             << "set_target_properties(" << target << " PROPERTIES\n"
-            << "    BUILD_RPATH \"${_rosetta_rpath}\")\n";
+            << "    BUILD_RPATH \"${_rosetta_rpath}\")\n"
+            // Windows has no rpath: the loader searches the executable's own
+            // folder, so copy the user libraries' DLLs next to the generator.
+            << "if(WIN32)\n"
+            << "    foreach(_dir IN LISTS _rosetta_rpath)\n"
+            << "        file(GLOB _rosetta_dlls \"${_dir}/*.dll\")\n"
+            << "        foreach(_dll IN LISTS _rosetta_dlls)\n"
+            << "            add_custom_command(TARGET " << target << " POST_BUILD\n"
+            << "                COMMAND ${CMAKE_COMMAND} -E copy_if_different \"${_dll}\"\n"
+            << "                        \"$<TARGET_FILE_DIR:" << target << ">\")\n"
+            << "        endforeach()\n"
+            << "    endforeach()\n"
+            << "endif()\n";
     }
     return out.str();
 }
