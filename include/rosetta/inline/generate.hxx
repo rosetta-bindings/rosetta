@@ -1879,6 +1879,74 @@ endif()
             return portable_integers(std::move(out));
         }
 
+        // signal_traits<S>::method with {Field} / {field} expanded.
+        inline std::string signal_method_name(std::string pattern, const std::string &field) {
+            std::string cap = field;
+            if (!cap.empty() && cap[0] >= 'a' && cap[0] <= 'z') {
+                cap[0] = char(cap[0] - 'a' + 'A');
+            }
+            for (const auto &[key, value] :
+                 {std::pair<std::string, std::string>{"{Field}", cap}, {"{field}", field}}) {
+                for (std::string::size_type p = 0;
+                     (p = pattern.find(key, p)) != std::string::npos; p += value.size()) {
+                    pattern.replace(p, key.size(), value);
+                }
+            }
+            return pattern;
+        }
+
+        // The thunk a signal's connect method calls: one per (class, member),
+        // in namespace rosetta_sig, named after both so it cannot collide.
+        inline std::string signal_thunk_name(const std::string &qualified_class,
+                                             const std::string &field) {
+            std::string n;
+            for (std::size_t i = 0; i < qualified_class.size(); ++i) {
+                if (qualified_class.compare(i, 2, "::") == 0) {
+                    n += '_';
+                    ++i;
+                } else {
+                    const char ch = qualified_class[i];
+                    const bool id = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                                    (ch >= '0' && ch <= '9') || ch == '_';
+                    n += id ? ch : '_';
+                }
+            }
+            return "rosetta_sig::" + n + "__" + field;
+        }
+
+        // GenSignal for member `field` of type S in class T: the connect method
+        // takes signal_traits<S>::function and returns ::connection.
+        template <typename T, typename S> inline GenSignal describe_signal(const char *field) {
+            using Tr  = rosetta::signal_traits<S>;
+            using Fn  = typename Tr::function;
+            using Con = typename Tr::connection;
+            GenSignal sig;
+            sig.field = field;
+            constexpr const char *sp =
+                std::define_static_string(std::meta::display_string_of(std::meta::dealias(^^S)));
+            sig.signal_cpp   = prettify(sp);
+            sig.connect_expr = Tr::connect;
+
+            GenMethod &m = sig.connect;
+            m.name       = signal_method_name(Tr::method, field);
+            GenParam p;
+            p.name       = "fn";
+            p.type       = type_descriptor<Fn>();
+            p.type.spelling = exact_spelling<std::meta::dealias(^^Fn)>();
+            m.params.push_back(p);
+            m.param_cpp.push_back(p.type.spelling);
+            m.ret = type_descriptor<Con>();
+            if constexpr (std::is_void_v<Con>) {
+                m.ret_cpp = "void";
+            } else {
+                m.ret_cpp = exact_spelling<std::meta::dealias(^^Con)>();
+            }
+            m.is_extension  = true;
+            m.ext_qualified = signal_thunk_name(qualified_class_name<T>(), field);
+            m.doc = std::string("Connect a function to the `") + field + "` signal.";
+            return sig;
+        }
+
         template <std::meta::info Fn, std::size_t... Is>
         inline std::vector<std::string> param_cpp_impl(std::index_sequence<Is...>) {
             constexpr auto           ps = std::define_static_array(std::meta::parameters_of(Fn));
@@ -2116,6 +2184,23 @@ endif()
             GenClass &out;
 
             template <std::meta::info Fld, auto... Anns> void field(const char *name) {
+                // A signal member (rosetta/signal.h) is not data: it is recorded
+                // as a connect method, apart from the fields, for the backends
+                // that bind signals.
+                if constexpr (rosetta::signal_traits<std::remove_cvref_t<
+                                  typename[:std::meta::type_of(Fld):]>>::enabled) {
+                    using S = std::remove_cvref_t<typename[:std::meta::type_of(Fld):]>;
+                    GenSignal sig = describe_signal<T, S>(name);
+                    sig.doc       = ann::get_or<doc>(doc{""}, Anns...).text;
+                    if (!sig.doc.empty()) {
+                        sig.connect.doc = sig.doc;
+                    }
+                    sig.declaring_class =
+                        qualified_class_name<typename[:std::meta::parent_of(Fld):]>();
+                    sig.connect.declaring_class = sig.declaring_class;
+                    out.signals.push_back(std::move(sig));
+                    return;
+                }
                 GenField gf;
                 gf.name = name;
                 gf.type =
@@ -3577,6 +3662,7 @@ endif()
 // defines csx_double_lit() that backends/java.h reuses. The documentation and
 // GUI backends below depend on none of them.
 #include <rosetta/backends/python.h>
+#include <rosetta/backends/inline/signals.hxx>
 #include <rosetta/backends/csharp.h>
 #include <rosetta/backends/dynamic.h>
 #include <rosetta/backends/java.h>

@@ -64,6 +64,14 @@ namespace lpns {
         double range(int component = AllComponents) const { return component; }
     };
 
+    // A Qt-style constructor: every parameter defaulted.
+    struct Labelled {
+        explicit Labelled(std::string text = {}, Labelled *parent = nullptr)
+            : text(std::move(text)), parent(parent) {}
+        std::string text;
+        Labelled   *parent;
+    };
+
     // vtkFloatArray's shape: the bound base is reached only through an
     // unbound template (vtkAOSDataArrayTemplate<float>).
     struct ArrayBase {
@@ -218,6 +226,31 @@ TEST(LibraryPatterns, ANumericDefaultSpelledAsAnEnumeratorIsCastToTheParameterTy
     }
     const std::string s = rosetta::backend_registry().at("python")->render(c);
     EXPECT_TRUE(has(s, "py::arg(\"component\") = static_cast<int>(lpns::AllComponents)")) << s;
+}
+
+// `std::string s = {}` reaches the backend as the default "{}", which `py::arg() = {}`
+// cannot deduce a type for: the parameter's own type is spelled in front.
+TEST(LibraryPatterns, ABracedDefaultIsSpelledWithTheParameterType) {
+    rosetta::GenContext c = rosetta::gen_detail::make_context<lpns::Ranged>("lp");
+    for (auto &m : c.classes[0].methods) {
+        if (m.name == "range") {
+            m.params[0].default_text = "{}";
+        }
+    }
+    const std::string s = rosetta::backend_registry().at("python")->render(c);
+    EXPECT_TRUE(has(s, "py::arg(\"component\") = int{}")) << s;
+}
+
+// pybind's py::init<...> has no defaults: each shorter arity is a constructor of its
+// own, the C++ defaults filling in the rest.
+TEST(LibraryPatterns, DefaultedConstructorParametersGiveShorterConstructors) {
+    const auto        c = rosetta::gen_detail::make_context<lpns::Labelled>("lp");
+    const std::string s = rosetta::backend_registry().at("python")->render(c);
+    EXPECT_TRUE(has(s, "py::init<std::string, lpns::Labelled *>()")) << s;
+    EXPECT_TRUE(has(s, "py::init<std::string>()")) << s;
+    const auto first = s.find("py::init<>()");
+    ASSERT_NE(first, std::string::npos) << s;
+    EXPECT_EQ(s.find("py::init<>()", first + 1), std::string::npos) << s; // once
 }
 
 // The nearest BOUND ancestor stands in for an unbound direct base, so the class

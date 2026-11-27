@@ -11,7 +11,7 @@
 //
 //   * invokes positions() / triangles() dynamically to get the mesh,
 //   * reads whatever OPTIONAL appearance fields the class happens to have —
-//     visible, colour, opacity, size, spin, origin, shading, preset — skipping
+//     visible, colour, opacity, size, spin, origin, shading, showEdges, preset — skipping
 //     any that are absent,
 //   * builds a triangle soup and draws it.
 //
@@ -347,9 +347,31 @@ protected:
         prog_.setUniformValue("uFresnel", mat.fresnel);
         prog_.setUniformValue("uFlat", wire ? 1 : 0);
 
+        // `showEdges` overlays the wireframe on a Flat or Smooth surface. The
+        // fill is pushed back in depth so the lines on top of it do not
+        // z-fight, and the lines take a shade of the object's own colour —
+        // darker on a light surface, lighter on a dark one — so they read
+        // against it whatever the colour is.
+        const bool edges = !wire && bool_field(obj, "showEdges", false);
+
         upload(soup);
+        if (edges) {
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(1.0f, 1.0f);
+        }
         glPolygonMode(GL_FRONT_AND_BACK, wire ? GL_LINE : GL_FILL);
         glDrawArrays(GL_TRIANGLES, 0, GLsizei(soup.size() / 6));
+        if (edges) {
+            glDisable(GL_POLYGON_OFFSET_FILL);
+            const float     lum  = float(0.2126 * col.redF() + 0.7152 * col.greenF() +
+                                         0.0722 * col.blueF());
+            const QVector3D base(float(col.redF()), float(col.greenF()), float(col.blueF()));
+            const QVector3D line = lum > 0.5f ? base * 0.35f : base * 0.4f + QVector3D(0.6f, 0.6f, 0.6f);
+            prog_.setUniformValue("uColour", line);
+            prog_.setUniformValue("uFlat", 1);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            glDrawArrays(GL_TRIANGLES, 0, GLsizei(soup.size() / 6));
+        }
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         return int(soup.size() / 18);
     }
@@ -368,7 +390,9 @@ protected:
     // and cache the built vertex buffer, re-fetching only when a cheap stamp
     // says the geometry actually changed. vertexCount() / triangleCount() are
     // two scalar calls, so the steady state costs two dynamic invocations per
-    // object per frame instead of two whole meshes.
+    // object per frame instead of two whole meshes. The counts cannot see a
+    // change that only MOVES vertices (a relaxation), so a class that also
+    // offers a revision() counter gets a third scalar call that does.
     //
     // This is the honest shape of the trade-off: the dynamic path is perfectly
     // good for control (properties, commands, menus) and wants a cache in front
@@ -380,12 +404,14 @@ protected:
         const dynui::rd::MetaMethod *triangles     = nullptr;
         const dynui::rd::MetaMethod *vertexCount   = nullptr;
         const dynui::rd::MetaMethod *triangleCount = nullptr;
+        const dynui::rd::MetaMethod *revision      = nullptr; // optional
     };
 
     struct Cached {
         std::vector<float> soup;
         long long          vstamp  = -1;
         long long          tstamp  = -1;
+        long long          rstamp  = -1;
         QString            shading;
         bool               live = false; // seen this frame (mark & sweep)
     };
@@ -400,6 +426,7 @@ protected:
         p.triangles     = k.method("triangles");
         p.vertexCount   = k.method("vertexCount");
         p.triangleCount = k.method("triangleCount");
+        p.revision      = k.method("revision");
         return proto_.emplace(&k, p).first->second;
     }
 
@@ -419,16 +446,18 @@ protected:
 
         const long long vs = stamp(p.vertexCount, obj);
         const long long ts = stamp(p.triangleCount, obj);
+        const long long rs = stamp(p.revision, obj); // -1 when absent: ignored
         // No stamp available (a class without the counters) means rebuild every
         // frame — correct, just slow, and the status bar will show it.
         const bool fresh = !c.soup.empty() && vs >= 0 && ts >= 0 && vs == c.vstamp &&
-                           ts == c.tstamp && shading == c.shading;
+                           ts == c.tstamp && rs == c.rstamp && shading == c.shading;
         if (fresh) {
             return c.soup;
         }
         c.soup    = build_soup(obj, p, shading);
         c.vstamp  = vs;
         c.tstamp  = ts;
+        c.rstamp  = rs;
         c.shading = shading;
         return c.soup;
     }

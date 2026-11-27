@@ -160,6 +160,23 @@ static std::string render_bindings_h(const Manifest &m) {
         }
         out << "};\n\n";
     }
+    // Signal templates (manifest "signals"): one partial specialization each.
+    // The walk reads it in its field visitor and records every member of such a
+    // type as a GenSignal (rosetta/signal.h).
+    for (const auto &sg : m.signals) {
+        if (!sg.header.empty()) {
+            out << "#include \"" << sg.header << "\"\n";
+        }
+        out << "template <typename... A>\n"
+            << "struct rosetta::signal_traits<" << sg.template_name << "<A...>> {\n"
+            << "    static constexpr bool        enabled    = true;\n"
+            << "    using function                          = std::function<void(A...)>;\n"
+            << "    using connection                        = "
+            << (sg.returns.empty() ? std::string("void") : sg.returns) << ";\n"
+            << "    static constexpr const char *connect    = " << str_lit(sg.connect) << ";\n"
+            << "    static constexpr const char *method     = " << str_lit(sg.method) << ";\n"
+            << "};\n\n";
+    }
     // Foreign-library interop (manifest "interop"): the walk marks every type
     // the library owns, by enclosing namespace, so no type list is needed here
     // — one specialization covers VectorXd, MatrixXd, Map, Ref and the rest.

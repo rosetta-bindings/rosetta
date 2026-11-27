@@ -33,6 +33,47 @@ namespace scene {
 
     enum class Shading { Flat = 0, Smooth = 1, Wireframe = 2 };
 
+    namespace detail {
+        // Each vertex mapped to the first one at the same place (within a
+        // hair of the bounding box), found by sorting quantised positions.
+        // The sphere's seam and poles are stored as coincident copies; to a
+        // solver they are one vertex, and unwelded, every edge between them
+        // reads as an open rim.
+        inline std::vector<int> welded(const std::vector<double> &p) {
+            const int n = static_cast<int>(p.size() / 3);
+            double    lo[3] = {0, 0, 0}, hi[3] = {0, 0, 0};
+            for (int v = 0; v < n; ++v) {
+                for (int k = 0; k < 3; ++k) {
+                    lo[k] = v == 0 ? p[k] : std::min(lo[k], p[3 * v + k]);
+                    hi[k] = v == 0 ? p[k] : std::max(hi[k], p[3 * v + k]);
+                }
+            }
+            const double diag = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) +
+                                          (hi[1] - lo[1]) * (hi[1] - lo[1]) +
+                                          (hi[2] - lo[2]) * (hi[2] - lo[2]));
+            const double tol = diag > 0.0 ? 1e-7 * diag : 1.0;
+            std::vector<std::array<long long, 3>> key(n);
+            for (int v = 0; v < n; ++v) {
+                for (int k = 0; k < 3; ++k) {
+                    key[v][k] = std::llround((p[3 * v + k] - lo[k]) / tol);
+                }
+            }
+            std::vector<int> order(n);
+            for (int v = 0; v < n; ++v) {
+                order[v] = v;
+            }
+            std::sort(order.begin(), order.end(), [&](int a, int b) {
+                return key[a] != key[b] ? key[a] < key[b] : a < b;
+            });
+            std::vector<int> to(n);
+            for (int i = 0; i < n; ++i) {
+                to[order[i]] = (i > 0 && key[order[i]] == key[order[i - 1]]) ? to[order[i - 1]]
+                                                                             : order[i];
+            }
+            return to;
+        }
+    } // namespace detail
+
     struct Vec3 {
         double x = 0;
         double y = 0;
@@ -61,8 +102,9 @@ namespace scene {
         double      opacity = 1.0;       // slider [0,1]
         double      size    = 1.0;       // slider [0.1,5]
         double      spin    = 0.0;       // slider [0,360], degrees about Y
-        Shading     shading = Shading::Smooth;
-        std::string preset  = "default"; // combobox, out of line
+        Shading     shading   = Shading::Smooth;
+        bool        showEdges = false;     // wireframe drawn over Flat/Smooth
+        std::string preset    = "default"; // combobox, out of line
         std::string id      = "m0";      // readonly, out of line
         Vec3        origin;
         std::vector<double> weights{1.0, 2.0, 4.0};
@@ -72,6 +114,11 @@ namespace scene {
         std::vector<int>    triangles() const { return t_; }
         int vertexCount() const { return static_cast<int>(v_.size() / 3); }
         int triangleCount() const { return static_cast<int>(t_.size() / 3); }
+
+        // Bumped by every geometry change. The counts above miss a change that
+        // moves vertices without adding any (Relaxer), so a viewer caching the
+        // mesh keys on this too.
+        int revision() const { return rev_; }
 
         // ---- an overload set --------------------------------------------
         // Every name-keyed backend (node, wasm, C#, Java, REST, lua) binds only
@@ -104,18 +151,29 @@ namespace scene {
 
         // Splits every triangle into four. Nothing about the silhouette
         // changes — switch `shading` to Wireframe and you see it happen.
+        // A midpoint is made once per edge and shared by both triangles on
+        // it, so the result stays connected: per-triangle copies would crack
+        // smooth shading along every old edge and leave a solver nothing
+        // but boundary.
         void subdivide() {
             std::vector<double> nv = v_;
             std::vector<int>    nt;
             nt.reserve(t_.size() * 4);
+            std::map<std::pair<int, int>, int> made;
             auto midpoint = [&](int a, int b) {
+                const std::pair<int, int> key{std::min(a, b), std::max(a, b)};
+                if (auto it = made.find(key); it != made.end()) {
+                    return it->second;
+                }
                 const double mx = 0.5 * (v_[3 * a] + v_[3 * b]);
                 const double my = 0.5 * (v_[3 * a + 1] + v_[3 * b + 1]);
                 const double mz = 0.5 * (v_[3 * a + 2] + v_[3 * b + 2]);
                 nv.push_back(mx);
                 nv.push_back(my);
                 nv.push_back(mz);
-                return static_cast<int>(nv.size() / 3) - 1;
+                const int id = static_cast<int>(nv.size() / 3) - 1;
+                made.emplace(key, id);
+                return id;
             };
             for (std::size_t i = 0; i + 2 < t_.size(); i += 3) {
                 const int a = t_[i], b = t_[i + 1], c = t_[i + 2];
@@ -126,6 +184,7 @@ namespace scene {
             }
             v_ = std::move(nv);
             t_ = std::move(nt);
+            ++rev_;
         }
 
         // Short cuts to the two solvers below, each returning the solver's
@@ -183,8 +242,13 @@ namespace scene {
                     // other way the sphere is lit from inside: the
                     // diffuse term reads inverted and no specular
                     // highlight can ever appear on a visible fragment.
-                    for (int idx : {a, a + 1, b, a + 1, b + 1, b}) {
-                        m.t_.push_back(idx);
+                    // At the poles one of the pair has two corners on the
+                    // pole itself, i.e. zero area: it is left out.
+                    if (r != 0) {
+                        m.t_.insert(m.t_.end(), {a, a + 1, b});
+                    }
+                    if (r != rings - 1) {
+                        m.t_.insert(m.t_.end(), {a + 1, b + 1, b});
                     }
                 }
             }
@@ -259,6 +323,7 @@ namespace scene {
         void setPositions(const std::vector<double> &p) {
             if (p.size() == v_.size()) {
                 v_ = p;
+                ++rev_;
             }
         }
 
@@ -278,11 +343,13 @@ namespace scene {
             }
             v_ = p;
             t_ = t;
+            ++rev_;
         }
 
     private:
-        std::vector<double> v_; // flat xyz, object space
-        std::vector<int>    t_; // index triples
+        std::vector<double> v_;       // flat xyz, object space
+        std::vector<int>    t_;       // index triples
+        int                 rev_ = 0; // see revision()
     };
 
     /**
@@ -307,6 +374,20 @@ namespace scene {
      * mean quality 0.834 -> 0.915 either way, but the bounding-box diagonal
      * loses 1.05% with the projection off and 0.01% with it on.
      *
+     * A tangent plane only exists where the surface is smooth. Across a
+     * crease — a cube's edge — the averaged normal points between the two
+     * faces, and "sliding in the tangent plane" cuts the corner off or pushes
+     * it out. So, with `preserveShape`, an edge whose faces meet at more than
+     * `featureAngle` is a crease: a vertex where three or more creases meet
+     * (a corner) stays put, and one with two crease edges running roughly
+     * straight through it slides along that crease only. Any other crease
+     * edge — a lone sharp edge, a crease that kinks or ends — is taken for
+     * noise, which a scan like the bunny has, and relaxed as smooth surface;
+     * pinning those would leave slivers around them.
+     *
+     * Coincident vertices (the sphere's seam and poles) are welded first, so
+     * a seam is relaxed as the surface it is rather than pinned as a rim.
+     *
      * Quality per triangle is the standard normalised ratio
      * `q = 4*sqrt(3)*A / (a^2 + b^2 + c^2)`, which is 1 for an equilateral
      * triangle and falls to 0 as one degenerates.
@@ -320,6 +401,7 @@ namespace scene {
         double step          = 0.5;  // slider [0, 1], relaxation factor
         bool   pinBoundary   = true; // hold the boundary loop still
         bool   preserveShape = true; // project onto the tangent plane
+        double featureAngle  = 60.0; // [0, 180] deg; a sharper edge is a crease
 
         // ---- outcome: filled by run(), read-only to a UI ----------------
         double meanQuality  = 0.0;
@@ -348,40 +430,90 @@ namespace scene {
                 return;
             }
 
+            // Coincident copies (the sphere's seam and poles) are one vertex
+            // to the surface. Relaxing them separately would tear the seam
+            // open, and their edges would read as boundary and stay pinned,
+            // so work on the welded mesh: every index goes through `weld`,
+            // triangles it collapses are dropped, and only representatives
+            // (weld[v] == v) move — the copies follow at the end.
+            const std::vector<int> weld = detail::welded(p);
+            std::vector<int>       tw;
+            tw.reserve(t.size());
+            for (std::size_t i = 0; i + 2 < t.size(); i += 3) {
+                if (t[i] < 0 || t[i + 1] < 0 || t[i + 2] < 0 || t[i] >= static_cast<int>(n) ||
+                    t[i + 1] >= static_cast<int>(n) || t[i + 2] >= static_cast<int>(n)) {
+                    continue;
+                }
+                const int a = weld[t[i]], b = weld[t[i + 1]], c = weld[t[i + 2]];
+                if (a != b && b != c && a != c) {
+                    tw.insert(tw.end(), {a, b, c});
+                }
+            }
+
             // One-ring adjacency, and which vertices sit on a boundary edge.
             // An edge belongs to the boundary when exactly one triangle uses
             // it; those vertices are the ones that must not move, or the mesh
             // erodes from its rim inward.
             std::vector<std::vector<int>> ring(n);
-            std::vector<int>              edgeUse;
-            std::vector<std::pair<int, int>> edges;
             const auto edgeKey = [&](int a, int b) {
                 return std::pair<int, int>{std::min(a, b), std::max(a, b)};
             };
             std::vector<std::pair<std::pair<int, int>, int>> tally;
-            for (std::size_t i = 0; i + 2 < t.size(); i += 3) {
-                const int v[3] = {t[i], t[i + 1], t[i + 2]};
+            for (std::size_t i = 0; i + 2 < tw.size(); i += 3) {
+                const int v[3] = {tw[i], tw[i + 1], tw[i + 2]};
                 for (int e = 0; e < 3; ++e) {
                     const int a = v[e], b = v[(e + 1) % 3];
-                    if (a < 0 || b < 0 || a >= static_cast<int>(n) ||
-                        b >= static_cast<int>(n)) {
-                        continue;
-                    }
                     ring[a].push_back(b);
                     ring[b].push_back(a);
-                    tally.emplace_back(edgeKey(a, b), 1);
+                    tally.emplace_back(edgeKey(a, b), static_cast<int>(i / 3));
                 }
             }
             std::sort(tally.begin(), tally.end());
-            std::vector<bool> onBoundary(n, false);
+
+            // Creases: an edge shared by two faces whose normals differ by
+            // more than featureAngle. Each vertex counts its crease edges and
+            // remembers the first two neighbours across them.
+            const double cosFeature = std::cos(featureAngle * 3.14159265358979323846 / 180.0);
+            const auto   faceNormal = [&](int f, double out[3]) {
+                const int a = tw[3 * f], b = tw[3 * f + 1], c = tw[3 * f + 2];
+                const double u[3] = {p[3 * b] - p[3 * a], p[3 * b + 1] - p[3 * a + 1],
+                                     p[3 * b + 2] - p[3 * a + 2]};
+                const double w[3] = {p[3 * c] - p[3 * a], p[3 * c + 1] - p[3 * a + 1],
+                                     p[3 * c + 2] - p[3 * a + 2]};
+                out[0] = u[1] * w[2] - u[2] * w[1];
+                out[1] = u[2] * w[0] - u[0] * w[2];
+                out[2] = u[0] * w[1] - u[1] * w[0];
+                const double len = std::sqrt(out[0] * out[0] + out[1] * out[1] + out[2] * out[2]);
+                for (int k = 0; k < 3; ++k) {
+                    out[k] = len > 1e-30 ? out[k] / len : 0.0;
+                }
+            };
+            std::vector<bool>               onBoundary(n, false);
+            std::vector<int>                creases(n, 0);
+            std::vector<std::array<int, 2>> creaseNb(n, {-1, -1});
+            const auto addCrease = [&](int v, int w) {
+                if (creases[v] < 2) {
+                    creaseNb[v][creases[v]] = w;
+                }
+                ++creases[v];
+            };
             for (std::size_t i = 0; i < tally.size();) {
                 std::size_t j = i;
                 while (j < tally.size() && tally[j].first == tally[i].first) {
                     ++j;
                 }
+                const auto [a, b] = tally[i].first;
                 if (j - i == 1) { // used once => boundary
-                    onBoundary[tally[i].first.first]  = true;
-                    onBoundary[tally[i].first.second] = true;
+                    onBoundary[a] = true;
+                    onBoundary[b] = true;
+                } else if (j - i == 2 && preserveShape) {
+                    double n0[3], n1[3];
+                    faceNormal(tally[i].second, n0);
+                    faceNormal(tally[i + 1].second, n1);
+                    if (n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2] < cosFeature) {
+                        addCrease(a, b);
+                        addCrease(b, a);
+                    }
                 }
                 i = j;
             }
@@ -390,17 +522,52 @@ namespace scene {
                 r.erase(std::unique(r.begin(), r.end()), r.end());
             }
 
+            // A crease vertex proper: two crease edges, leaving it in roughly
+            // opposite directions (more than 120 degrees apart).
+            const auto onCrease = [&](std::size_t v) {
+                if (creases[v] != 2) {
+                    return false;
+                }
+                double u[3], w[3];
+                for (int x = 0; x < 3; ++x) {
+                    u[x] = p[3 * creaseNb[v][0] + x] - p[3 * v + x];
+                    w[x] = p[3 * creaseNb[v][1] + x] - p[3 * v + x];
+                }
+                const double uw = u[0] * w[0] + u[1] * w[1] + u[2] * w[2];
+                const double uu = u[0] * u[0] + u[1] * u[1] + u[2] * u[2];
+                const double ww = w[0] * w[0] + w[1] * w[1] + w[2] * w[2];
+                return uw < -0.5 * std::sqrt(uu * ww);
+            };
+
             const int passes = iterations < 1 ? 1 : (iterations > 500 ? 500 : iterations);
             const double k    = step < 0.0 ? 0.0 : (step > 1.0 ? 1.0 : step);
 
             std::vector<double> next(p.size());
             for (int pass = 0; pass < passes; ++pass) {
                 const std::vector<double> nrm = preserveShape
-                                                    ? vertexNormals(p, t, n)
+                                                    ? vertexNormals(p, tw, n)
                                                     : std::vector<double>();
                 next = p;
                 for (std::size_t v = 0; v < n; ++v) {
-                    if (ring[v].empty() || (pinBoundary && onBoundary[v])) {
+                    if (ring[v].empty() || (pinBoundary && onBoundary[v]) || creases[v] > 2) {
+                        continue; // rim, or a corner where creases meet
+                    }
+                    double d[3];
+                    if (onCrease(v)) {
+                        // On a crease: toward the midpoint of its two crease
+                        // neighbours, along the line through them only.
+                        const int    a = creaseNb[v][0], b = creaseNb[v][1];
+                        double       dir[3], len2 = 0.0, along = 0.0;
+                        for (int x = 0; x < 3; ++x) {
+                            dir[x] = p[3 * b + x] - p[3 * a + x];
+                            d[x]   = 0.5 * (p[3 * a + x] + p[3 * b + x]) - p[3 * v + x];
+                            len2 += dir[x] * dir[x];
+                            along += d[x] * dir[x];
+                        }
+                        for (int x = 0; x < 3; ++x) {
+                            next[3 * v + x] =
+                                p[3 * v + x] + (len2 > 1e-30 ? k * along / len2 * dir[x] : 0.0);
+                        }
                         continue;
                     }
                     double c[3] = {0, 0, 0};
@@ -409,7 +576,6 @@ namespace scene {
                             c[a] += p[3 * w + a];
                         }
                     }
-                    double d[3];
                     for (int a = 0; a < 3; ++a) {
                         d[a] = c[a] / static_cast<double>(ring[v].size()) - p[3 * v + a];
                     }
@@ -427,6 +593,11 @@ namespace scene {
                     }
                 }
                 p.swap(next);
+            }
+            for (std::size_t v = 0; v < n; ++v) { // copies follow their representative
+                for (int a = 0; a < 3; ++a) {
+                    p[3 * v + a] = p[3 * weld[v] + a];
+                }
             }
 
             m.setPositions(p);
@@ -575,7 +746,7 @@ namespace scene {
             // Coincident vertices are one vertex as far as the surface goes:
             // subdivide() and the sphere's seam both leave copies, and
             // unwelded, every edge between them reads as an open rim.
-            const std::vector<int> weld = welded(p);
+            const std::vector<int> weld = detail::welded(p);
 
             std::vector<std::array<int, 3>> F;
             F.reserve(tin.size() / 3);
@@ -916,42 +1087,6 @@ namespace scene {
                     std::copy(o, o + 3, c.x);
                 }
             }
-        }
-
-        // Each vertex mapped to the first one at the same place (within a
-        // hair of the bounding box), found by sorting quantised positions.
-        static std::vector<int> welded(const std::vector<double> &p) {
-            const int n = static_cast<int>(p.size() / 3);
-            double    lo[3] = {0, 0, 0}, hi[3] = {0, 0, 0};
-            for (int v = 0; v < n; ++v) {
-                for (int k = 0; k < 3; ++k) {
-                    lo[k] = v == 0 ? p[k] : std::min(lo[k], p[3 * v + k]);
-                    hi[k] = v == 0 ? p[k] : std::max(hi[k], p[3 * v + k]);
-                }
-            }
-            const double diag = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) +
-                                          (hi[1] - lo[1]) * (hi[1] - lo[1]) +
-                                          (hi[2] - lo[2]) * (hi[2] - lo[2]));
-            const double tol = diag > 0.0 ? 1e-7 * diag : 1.0;
-            std::vector<std::array<long long, 3>> key(n);
-            for (int v = 0; v < n; ++v) {
-                for (int k = 0; k < 3; ++k) {
-                    key[v][k] = std::llround((p[3 * v + k] - lo[k]) / tol);
-                }
-            }
-            std::vector<int> order(n);
-            for (int v = 0; v < n; ++v) {
-                order[v] = v;
-            }
-            std::sort(order.begin(), order.end(), [&](int a, int b) {
-                return key[a] != key[b] ? key[a] < key[b] : a < b;
-            });
-            std::vector<int> to(n);
-            for (int i = 0; i < n; ++i) {
-                to[order[i]] = (i > 0 && key[order[i]] == key[order[i - 1]]) ? to[order[i - 1]]
-                                                                             : order[i];
-            }
-            return to;
         }
 
         // Would collapsing b into a turn one of b's triangles into a copy of

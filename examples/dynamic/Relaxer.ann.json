@@ -7,6 +7,9 @@
                      "label": "Pin boundary", "widget": "checkbox" },
   "preserveShape": { "doc": "Project each displacement onto the tangent plane, so the surface slides rather than shrinks",
                      "label": "Preserve shape", "widget": "checkbox" },
+  "featureAngle":  { "doc": "Edges whose faces meet at more than this are creases (with Preserve shape): corners stay put, crease vertices slide along the crease; 180 turns it off",
+                     "range": [0, 180], "unit": "deg", "label": "Feature angle", "widget": "slider",
+                     "enabled_if": "preserveShape" },
 
   "meanQuality":   { "doc": "Mean triangle quality after the last run; 1 is equilateral",
                      "readonly": true, "label": "Mean quality" },

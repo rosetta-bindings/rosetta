@@ -1330,6 +1330,60 @@ Manifest load(const fs::path &manifest_path) {
         }
     }
 
+    // `signals` is optional: signal templates whose members bind as connect
+    // methods (rosetta/signal.h). The strings are C++ the driver and the
+    // bindings compile, so a wrong one surfaces against the manifest there.
+    if (j.contains("signals")) {
+        if (!j.at("signals").is_array()) {
+            throw std::runtime_error("\"signals\" must be an array of signal templates");
+        }
+        for (const auto &sj : j.at("signals")) {
+            SignalEntry e;
+            if (sj.is_string()) {
+                e.template_name = sj.get<std::string>();
+            } else if (sj.is_object()) {
+                const auto str = [&](const char *key, std::string &dst) {
+                    if (!sj.contains(key)) {
+                        return;
+                    }
+                    if (!sj.at(key).is_string() || sj.at(key).get<std::string>().empty()) {
+                        throw std::runtime_error(std::string("a \"signals\" entry's \"") + key +
+                                                 "\" must be a non-empty string");
+                    }
+                    dst = sj.at(key).get<std::string>();
+                };
+                str("template", e.template_name);
+                str("header", e.header);
+                str("connect", e.connect);
+                str("returns", e.returns);
+                str("method", e.method);
+            } else {
+                throw std::runtime_error(
+                    "each \"signals\" entry must be a template name or an object");
+            }
+            if (e.template_name.empty()) {
+                throw std::runtime_error("a \"signals\" entry needs \"template\"");
+            }
+            if (e.connect.find("$fn") == std::string::npos) {
+                throw std::runtime_error("the \"connect\" expression of signal \"" +
+                                         e.template_name + "\" never uses $fn");
+            }
+            if (e.method.find("{Field}") == std::string::npos &&
+                e.method.find("{field}") == std::string::npos) {
+                throw std::runtime_error("the \"method\" of signal \"" + e.template_name +
+                                         "\" must contain {Field} or {field}, or every "
+                                         "signal of a class would bind under one name");
+            }
+            for (const auto &prev : m.signals) {
+                if (prev.template_name == e.template_name) {
+                    throw std::runtime_error("two \"signals\" entries name \"" +
+                                             e.template_name + "\"");
+                }
+            }
+            m.signals.push_back(std::move(e));
+        }
+    }
+
     // `module_init` is optional: C++ statements the generated module runs when
     // it LOADS, plus the headers that declare them. Two forms — a bare array of
     // statements, or an object with "headers" + "statements" — because the

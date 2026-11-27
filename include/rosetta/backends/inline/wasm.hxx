@@ -223,7 +223,10 @@ namespace rosetta_wx {
     template <typename U, std::size_t N> struct is_std_array<std::array<U, N>> : std::true_type {};
 
     template <typename T> emscripten::val to_val(const T &x) {
-        if constexpr (is_std_array<std::remove_cvref_t<T>>::value) {
+        if constexpr (std::is_pointer_v<T>) {
+            // A pointer to a registered class: a borrowed handle (null -> null).
+            return emscripten::val(x, emscripten::allow_raw_pointers());
+        } else if constexpr (is_std_array<std::remove_cvref_t<T>>::value) {
             emscripten::val a = emscripten::val::array();
             for (std::size_t i = 0; i < x.size(); ++i) a.set(i, to_val(x[i]));
             return a;
@@ -375,11 +378,18 @@ namespace rosetta_wx {
         // Can a value of this type ride across the boundary INSIDE a JS callback,
         // i.e. through the emitted rosetta_wx::to_val / from_val helpers? That set
         // is: scalars, bool, strings, enums, std::array (element-wise), vectors of
-        // such, and registered classes (embind val ↔ registered type). Raw
-        // pointers, nested callbacks, and unbound by-value objects are out — so a
-        // callback taking e.g. `Triangle*` or `Eigen::VectorXd&` stays skipped.
-        inline bool wx_val_convertible(const GenType &t, const GenContext &c) {
-            if (t.is_pointer || t.is_callback) {
+        // such, and registered classes (embind val ↔ registered type). A raw
+        // pointer to a registered class rides as a borrowed handle when the
+        // callback RECEIVES it (`as_arg`) — to_val wraps it with
+        // allow_raw_pointers; a returned pointer has no owner to hand back to, so
+        // it stays out, as do nested callbacks and unbound by-value objects: a
+        // callback taking `Eigen::VectorXd&` stays skipped.
+        inline bool wx_val_convertible(const GenType &t, const GenContext &c,
+                                       bool as_arg = false) {
+            if (t.is_pointer) {
+                return as_arg && wx_is_bound(t, c);
+            }
+            if (t.is_callback) {
                 return false;
             }
             if (t.kind == "number" || t.kind == "boolean" || t.kind == "string" ||
@@ -419,11 +429,19 @@ namespace rosetta_wx {
                 return false;
             }
             for (std::size_t i = 1; i < t.callback_sig.size(); ++i) {
-                if (!wx_val_convertible(t.callback_sig[i], c)) {
+                if (!wx_val_convertible(t.callback_sig[i], c, /*as_arg=*/true)) {
                     return false;
                 }
             }
             return true;
+        }
+
+        // A signal member binds as `on<Name>(fn)` when the callback signature
+        // converts and the name is free (rosetta/signal.h).
+        inline bool wx_signal_bindable(const GenClass &k, const GenSignal &s,
+                                       const GenContext &c) {
+            return !signal_name_taken(k, s) &&
+                   wx_callback_convertible(s.connect.params.front().type, c);
         }
 
         // A parameter is bindable when embind marshals it directly, OR it is a
@@ -882,7 +900,13 @@ namespace rosetta_wx {
                                      }) +
                        "                s." + f.name + " = v;\n            })";
             }
-            return ".property(\"" + f.name + "\", &" + self + "::" + f.name + ")";
+            // Typed as a pointer to a member of the BOUND class: a field inherited
+            // from a base that is not bound (Layout::alignment, declared by
+            // LayoutItem) would otherwise be `T Base::*`, which class_<Self>
+            // rejects. An identity cast for a field the class declares itself.
+            return ".property(\"" + f.name + "\", static_cast<decltype(" + self + "::" + f.name +
+                   ") " + self + "::*>(&" + self + "::" + f.name + ")" +
+                   (wx_type_has_raw_ptr(f.type) ? ", emscripten::allow_raw_pointers()" : "") + ")";
         }
 
         // `+[](decls) { return Holder<P>(call); }` — a method (or free
@@ -1070,16 +1094,28 @@ namespace rosetta_wx {
                                    ");\n        }, emscripten::allow_raw_pointers())");
                     continue;
                 }
-                std::string args;
+                std::string args, decls, names;
                 for (std::size_t j = 0; j < params.size(); ++j) {
                     std::string one = qualify_std(params[j]);
                     if (j < ir.size()) {
                         one = qualify_objects(std::move(one), ir[j].type);
                     }
                     args += (j ? ", " : "") + one;
+                    decls += (j ? ", " : "") + one + " a" + std::to_string(j);
+                    names += (j ? ", a" : "a") + std::to_string(j);
                 }
-                const std::string policy = raw_ptr ? "emscripten::allow_raw_pointers()" : "";
-                segs.push_back(".constructor<" + args + ">(" + policy + ")");
+                if (raw_ptr) {
+                    // Not `.constructor<T *>(allow_raw_pointers())`: with one explicit
+                    // template argument and one policy, current embind picks its
+                    // `constructor<Signature, Callable>(Callable)` overload and the
+                    // policy is taken for the factory. A factory function is
+                    // unambiguous (and embind applies allow_raw_pointers to it).
+                    segs.push_back(".constructor(+[](" + decls + ") -> " + kn +
+                                   " * { return new " + kn + "(" + names +
+                                   "); }, emscripten::allow_raw_pointers())");
+                    continue;
+                }
+                segs.push_back(".constructor<" + args + ">()");
             }
             if (!saw_default && k.is_default_constructible && !has_holder(k)) {
                 segs.push_back(".constructor<>()");
@@ -1226,8 +1262,13 @@ namespace rosetta_wx {
                 // Extension method: bind the free function directly — embind
                 // treats a non-member whose first parameter is the class type
                 // (by ref) as an instance method.
-                if (m.is_extension) {
-                    segs.push_back(".function(\"" + m.name + "\", &" + m.ext_qualified + ")");
+                // A raw pointer in its signature needs allow_raw_pointers, as for a
+                // member; one taking a callback goes through the adapter below.
+                if (m.is_extension && !wx_params_have_callback(m.params)) {
+                    segs.push_back(".function(\"" + m.name + "\", &" + m.ext_qualified +
+                                   (wx_method_has_raw_ptr(m) ? ", emscripten::allow_raw_pointers()"
+                                                             : "") +
+                                   ")");
                     coverage::note_bound("wasm", k, m);
                     continue;
                 }
@@ -1245,7 +1286,10 @@ namespace rosetta_wx {
                     const WxAdapterParams ad = wx_adapter_params(m.param_cpp, m.params);
                     const std::string     decls =
                         kn + " &self" + (ad.decls.empty() ? "" : ", " + ad.decls);
-                    const std::string call = "self." + m.name + "(" + ad.args + ")";
+                    const std::string call =
+                        m.is_extension
+                            ? m.ext_qualified + "(self" + (ad.args.empty() ? "" : ", " + ad.args) + ")"
+                            : "self." + m.name + "(" + ad.args + ")";
                     const std::string body = (m.ret.kind == "void")
                                                  ? ("            " + call + ";\n")
                                                  : ("            return " + call + ";\n");
@@ -1285,6 +1329,29 @@ namespace rosetta_wx {
                     wx_method_has_raw_ptr(m) ? ", emscripten::allow_raw_pointers()" : "";
                 segs.push_back((m.is_static ? ".class_function(\"" : ".function(\"") + m.name +
                                "\", " + mp + policy + ")");
+                coverage::note_bound("wasm", k, m);
+            }
+            // Signal members: `on<Name>(fn)`, through the connect thunk
+            // (signal_thunks_cpp). The JS function is wrapped by make_fn like any
+            // callback parameter; the connection comes back when it is bound.
+            for (const auto &sg : k.signals) {
+                const GenMethod m = signal_method(sg, c);
+                if (signal_name_taken(k, sg)) {
+                    coverage::note_skip("wasm", k, m, "name_clash",
+                                        "a member of the class already binds this name");
+                    continue;
+                }
+                if (!wx_signal_bindable(k, sg, c)) {
+                    coverage::note_skip("wasm", k, m, "unmarshalable_signature",
+                                        "a slot parameter has no embind conversion (an unbound "
+                                        "class, or a mutable reference)");
+                    continue;
+                }
+                const std::string call =
+                    m.ext_qualified + "(self, rosetta_wx::make_fn<" + signal_fn_cpp(m) + ">(fn))";
+                segs.push_back(".function(\"" + m.name + "\", +[](" + kn +
+                               " &self, emscripten::val fn) { " +
+                               (m.ret.kind == "void" ? "" : "return ") + call + "; })");
                 coverage::note_bound("wasm", k, m);
             }
 
@@ -1472,6 +1539,9 @@ namespace rosetta_wx {
             out += WASMX_MAP_HELPER;       // std::map / unordered_map <-> plain JS object
             out += WASMX_CALLBACK_HELPER;  // rosetta_wx::make_fn / to_val / from_val
             out += wx_holder_decls(c);     // smart_ptr_trait / raw_destructor for held classes
+            out += signal_thunks_cpp(c, [&c](const GenClass &k, const GenSignal &sg) {
+                return wx_signal_bindable(k, sg, c);
+            });
             const std::string pre = out;
             out += "\nEMSCRIPTEN_BINDINGS(" + c.lib + ") {\n";
             out += init_block(c);

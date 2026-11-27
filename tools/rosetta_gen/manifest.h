@@ -254,6 +254,29 @@ struct HolderEntry {
     std::vector<std::string> owned_returns;
 };
 
+// One entry of the manifest's "signals": a library's SIGNAL TEMPLATE (see
+// rosetta/signal.h). Every public member whose type is a specialization of
+// `template_name` binds as a connect method taking a script function, in the
+// backends that support signals (wasm, node).
+//
+//   "signals": [{
+//     "template": "veyra::Signal",                 // required — class template over the
+//                                                  //   slot's parameter types (Signal<A...>)
+//     "header":   "veyra/core/signal.h",           // optional — its #include
+//     "connect":  "$signal.connect(&$self, $fn)",  // optional — C++ expression; default
+//                                                  //   "$signal.connect($fn)"
+//     "returns":  "veyra::Connection",             // optional — what connect returns,
+//                                                  //   handed to the script when bound
+//     "method":   "on{Field}"                      // optional — the method name ({Field}:
+//   }]                                             //   member capitalized, {field}: as is)
+struct SignalEntry {
+    std::string template_name;
+    std::string header;
+    std::string connect = "$signal.connect($fn)";
+    std::string returns;
+    std::string method = "on{Field}";
+};
+
 // One entry of the manifest's "sequences" / "matrices": a foreign container
 // that marshals like a std::vector of its element (or, for a matrix, like a
 // vector of row vectors). Two forms, because two shapes of container exist:
@@ -496,6 +519,10 @@ struct Manifest {
     // rosetta::holder_policy specializations selected by derivation from
     // `base`, which is how the reflection walk learns about them.
     std::vector<HolderEntry> holders;
+
+    // Optional signal templates ("signals") — see SignalEntry. Emitted into
+    // bindings.h as partial specializations of rosetta::signal_traits.
+    std::vector<SignalEntry> signals;
 
     // Optional default for every target's "out_dir" (see TargetEntry::out_dir),
     // absolute. A target's own entry overrides it.

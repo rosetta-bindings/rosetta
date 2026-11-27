@@ -571,8 +571,22 @@ script once per interpreter.)MD";
         // own type: pybind11 / nanobind turn an `arg` default into a Python
         // object when the module IMPORTS, using the default's C++ type, and an
         // enumerator of an unbound enum has no caster — the whole import fails.
+        inline std::string qualify_std(std::string s);
         inline std::string px_default_expr(const GenParam &p) {
             const std::string &d = p.default_text;
+            // A braced default (`std::string name = {}`, `int n{}`) has no type of its
+            // own; `py::arg(...) = {}` cannot deduce one. Spell the parameter's type.
+            if (!d.empty() && d.front() == '{') {
+                if (p.type.kind == "string") {
+                    return "std::string" + d;
+                }
+                if (p.type.kind == "boolean") {
+                    return "bool" + d;
+                }
+                if (!p.type.spelling.empty()) {
+                    return qualify_std(p.type.spelling) + d;
+                }
+            }
             if (p.type.kind != "number" || p.type.spelling.empty()) {
                 return d;
             }
@@ -988,6 +1002,42 @@ script once per interpreter.)MD";
         inline bool        px_borrowed_pointer(const GenType &t, const GenContext &c);
         inline std::string px_keep_alive(const GenMethod &m, const GenContext &c,
                                          const char *ns);
+
+    } // namespace backend
+} // namespace rosetta
+
+// The signal helpers spell types through qualify_std (above); the pybind11 backend
+// binds signals too, so they come in here rather than after this file.
+#include <rosetta/backends/inline/signals.hxx>
+
+namespace rosetta {
+    namespace backend {
+
+        // A slot argument pybind11 can hand to Python: a scalar, string, enum, vector of
+        // those, or a bound class (by value, reference or pointer — a pointer arrives as
+        // a borrowed reference).
+        inline bool px_slot_arg_ok(const GenType &t, const GenContext &c) {
+            if (t.kind == "number" || t.kind == "boolean" || t.kind == "string" || t.kind == "enum")
+                return true;
+            if (t.kind == "vector")
+                return !t.element.empty() && px_slot_arg_ok(t.element.front(), c);
+            if (t.is_pointer) { // the pointee is a bound class: passed as a reference
+                GenType o = t;
+                o.kind    = "object";
+                return sig_names_bound_class(o, c);
+            }
+            return sig_names_bound_class(t, c);
+        }
+        inline bool px_method_ok(const GenMethod &m, const GenContext &c);
+        inline bool px_signal_bindable(const GenClass &k, const GenSignal &s, const GenContext &c) {
+            if (signal_name_taken(k, s) || !px_method_ok(signal_method(s, c), c))
+                return false;
+            const GenType &cb = s.connect.params.front().type;
+            for (std::size_t i = 1; i < cb.callback_sig.size(); ++i)
+                if (cb.callback_sig[i].cb_mutable_ref || !px_slot_arg_ok(cb.callback_sig[i], c))
+                    return false;
+            return true;
+        }
 
         inline bool px_method_ok(const GenMethod &m, const GenContext &c) {
             // An overload set is NOT rejected here: the walk keeps its
@@ -1714,18 +1764,33 @@ script once per interpreter.)MD";
                     continue;
                 }
                 const auto &params = k.ctor_param_cpp[i];
-                if (params.empty()) {
-                    saw_default = true;
-                }
-                std::string args;
-                for (std::size_t j = 0; j < params.size(); ++j) {
-                    std::string one = qualify_std(params[j]);
-                    if (i < k.ctors.size() && j < k.ctors[i].size()) {
-                        one = qualify_objects(std::move(one), k.ctors[i][j].type);
+                // Trailing defaulted parameters: one py::init per shorter arity too,
+                // where C++ fills in the defaults (`Button(text = {}, parent = nullptr)`
+                // is callable as Button(), Button("Go") and Button("Go", parent)).
+                std::size_t shortest = params.size();
+                if (i < k.ctors.size() && k.ctors[i].size() == params.size()) {
+                    while (shortest > 0 && k.ctors[i][shortest - 1].has_default) {
+                        --shortest;
                     }
-                    args += (j ? ", " : "") + one;
                 }
-                s += "    c.def(py::init<" + args + ">());\n";
+                for (std::size_t n = params.size() + 1; n-- > shortest;) {
+                    std::string args;
+                    for (std::size_t j = 0; j < n; ++j) {
+                        std::string one = qualify_std(params[j]);
+                        if (i < k.ctors.size() && j < k.ctors[i].size()) {
+                            one = qualify_objects(std::move(one), k.ctors[i][j].type);
+                        }
+                        args += (j ? ", " : "") + one;
+                    }
+                    const std::string line = "    c.def(py::init<" + args + ">());\n";
+                    if (s.find(line) != std::string::npos) {
+                        continue; // another constructor has this signature already
+                    }
+                    if (n == 0) {
+                        saw_default = true;
+                    }
+                    s += line;
+                }
             }
             if (!saw_default && k.is_default_constructible) {
                 s += "    c.def(py::init<>());\n";
@@ -1936,6 +2001,27 @@ script once per interpreter.)MD";
                 bound_kind.emplace(m.name, m.is_static);
                 coverage::note_bound("python", k, m);
             }
+            // Signal members (rosetta/signal.h): `on<Name>(fn)` on the connect thunk;
+            // pybind11/functional.h turns the Python callable into the std::function
+            // (and takes the GIL when C++ calls it).
+            for (const auto &sg : k.signals) {
+                const GenMethod m = signal_method(sg, c);
+                if (signal_name_taken(k, sg) || bound_kind.count(m.name)) {
+                    coverage::note_skip("python", k, m, "name_clash",
+                                        "a member of the class already binds this name");
+                    continue;
+                }
+                if (!px_signal_bindable(k, sg, c)) {
+                    coverage::note_skip("python", k, m, "unmarshalable_signature",
+                                        "a slot parameter has no pybind11 conversion (an unbound "
+                                        "class)");
+                    continue;
+                }
+                s += indent("    c.def(\"" + m.name + "\", &" + m.ext_qualified + doc_arg(m.doc) +
+                            ", py::arg(\"fn\"));\n");
+                bound_kind.emplace(m.name, false);
+                coverage::note_bound("python", k, m);
+            }
             s += "    }\n";
             return s;
         }
@@ -2072,6 +2158,9 @@ script once per interpreter.)MD";
             pre += using_namespaces_of(c); // `using namespace` for namespaced user types
             pre += "\nnamespace py = pybind11;\n";
             pre += px_holder_decls(c); // intrusive holders of the held classes
+            pre += signal_thunks_cpp(c, [&c](const GenClass &k, const GenSignal &sg) {
+                return px_signal_bindable(k, sg, c);
+            });
             pre += trampolines_of(c); // reflection-free; empty when no virtuals
 
             std::string out = pre;

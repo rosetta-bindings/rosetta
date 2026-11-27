@@ -322,6 +322,17 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
             return true;
         }
 
+        // A signal member binds as `on<Name>(fn)` when its slot signature
+        // converts, the connect method passes the ordinary gates, and the name is
+        // free (rosetta/signal.h).
+        inline bool nx_method_ok(const GenMethod &m, const GenContext &c);
+        inline bool nx_signal_bindable(const GenClass &k, const GenSignal &s,
+                                       const GenContext &c) {
+            return !signal_name_taken(k, s) &&
+                   nx_callback_convertible(s.connect.params.front().type) &&
+                   nx_method_ok(signal_method(s, c), c);
+        }
+
         // OK as an input (parameter / setter side)?
         inline bool nx_pass_ok(const GenParam &p) {
             const GenType &t = p.type;
@@ -793,6 +804,28 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                 coverage::note_bound("node", k, m);
             }
 
+            // Signal members: `on<Name>(fn)` — an extension method on the connect
+            // thunk (signal_thunks_cpp), whose std::function parameter
+            // ext_method converts with napi_make_fn (a persistent reference, so
+            // the callback outlives this call).
+            for (const auto &sg : k.signals) {
+                const GenMethod m = signal_method(sg, c);
+                if (signal_name_taken(k, sg)) {
+                    coverage::note_skip("node", k, m, "name_clash",
+                                        "a member of the class already binds this name");
+                    continue;
+                }
+                if (!nx_signal_bindable(k, sg, c)) {
+                    coverage::note_skip("node", k, m, "unmarshalable_signature",
+                                        "a slot parameter has no N-API conversion (an object or "
+                                        "a pointer)");
+                    continue;
+                }
+                s += "        props.push_back(This::InstanceMethod<&This::ext_method<&" +
+                     m.ext_qualified + ">>(\"" + m.name + "\"));\n";
+                coverage::note_bound("node", k, m);
+            }
+
             s += "        Napi::Function ctor = This::DefineClass(env, \"" + kx + "\", props);\n";
             s += "        rosetta::ctor_ref<" + self + ">() = Napi::Persistent(ctor);\n";
             s += "        rosetta::ctor_ref<" + self + ">().SuppressDestruct();\n";
@@ -942,6 +975,9 @@ node -e "const m = require('./{{LIB}}.node'); console.log(Object.keys(m))"
                        "#include <vector>\n"
                        "namespace rosetta_nx_seq {\n" + adapters + "}\n";
             }
+            out += signal_thunks_cpp(c, [&c](const GenClass &k, const GenSignal &sg) {
+                return nx_signal_bindable(k, sg, c);
+            });
             out += node_trampolines_of(c); // reflection-free; empty when no virtuals
             out += "\nNapi::Object Init(Napi::Env env, Napi::Object exports) {\n";
             out += init_block(c);

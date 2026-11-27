@@ -36,6 +36,7 @@ Every field is listed in [Top-level fields](#top-level-fields); the sections bel
 - [Foreign sequence containers (`sequences`)](#foreign-sequence-containers-sequences)
   - [Registering a concrete type](#registering-a-concrete-type)
 - [Foreign matrices (`matrices`)](#foreign-matrices-matrices)
+- [Signals (`signals`)](#signals-signals)
 - [Reference-counted classes (`holders`)](#reference-counted-classes-holders)
 - [Large libraries (`generator_shards`, `binding_shards`)](#large-libraries-generator_shards-binding_shards)
 - [Foreign-library interop (`interop`)](#foreign-library-interop-interop)
@@ -147,6 +148,7 @@ cmake -B build && cmake --build build
 | `matrices` | — | `[]` | Foreign 2-D matrices (same two entry forms as `sequences`) that marshal as an array of row arrays. See [Foreign matrices](#foreign-matrices-matrices). |
 | `generator_shards` | — | `"auto"` | How many translation units the generator's reflection walk is split into — they compile in parallel and link into one generator. `"auto"`: one up to 24 classes, else ~16 classes per shard. See [Large libraries](#large-libraries-generator_shards-binding_shards). |
 | `binding_shards` | — | `"auto"` | How many source files the compiled `python`, `nanobind`, `wasm` and `julia` bindings split their class registrations into. `"auto"`: one up to 30 classes, else ~25 per part. See [Large libraries](#large-libraries-generator_shards-binding_shards). |
+| `signals` | — | `[]` | Signal templates whose public members bind as `on<Name>(fn)` connect methods, taking a script function (`veyra::Signal`, boost.signals2, sigc++). Bound by `wasm` and `node`, declared by `typescript`. See [Signals](#signals-signals). |
 | `holders` | — | `[]` | Holder policies for libraries that reference-count their objects intrusively (VTK: protected destructors, `T::New()`, `vtkSmartPointer`). Bound classes deriving from a policy's `base` are bound through the library's own holder by `python`, `wasm` and `julia`. See [Reference-counted classes](#reference-counted-classes-holders). |
 | `interop` | — | `[]` | Foreign libraries whose types the target's binding framework marshals itself (`["eigen"]`). `python` / `nanobind` bind them natively (numpy); backends with no caster skip those members. See [Foreign-library interop](#foreign-library-interop-interop). |
 | `user_lib` | — | — | Link the generated bindings against pre-built external libraries — one object, or an array of them when your library has dependencies of its own. See [Linking external libraries](#linking-external-libraries-user_lib). |
@@ -632,6 +634,56 @@ Three things to know:
 - **A mutable `Mat&` parameter binds input-only**, like a sequence one — the adapter's local is a real lvalue, but in-place mutations are discarded.
 
 Where an `interop` library owns the type, the same split applies: registering `Eigen::MatrixXd` here gives node / wasm / lua the array of rows and costs the Python family nothing — they keep the numpy caster. See [Foreign-library interop](#foreign-library-interop-interop).
+
+---
+
+## Signals (`signals`)
+
+Event-driven libraries publish their events as public members of a signal type:
+
+```cpp
+class Button : public Widget {
+public:
+    veyra::Signal<>     clicked;
+    veyra::Signal<bool> toggled;
+};
+```
+
+Such a member is not copyable, and what a script wants from it is not its value but a way to connect a function. Declare the signal template once and every member of that type, in every bound class, binds as a connect method:
+
+```json
+"signals": [{
+  "template": "veyra::Signal",
+  "header":   "veyra/core/signal.h",
+  "connect":  "$signal.connect(&$self, $fn)",
+  "returns":  "veyra::Connection",
+  "method":   "on{Field}"
+}]
+```
+
+```js
+const c = button.onToggled((on) => console.log('toggled', on));
+c.disconnect();
+```
+
+| Field | Required | Default | Meaning |
+|---|:---:|---|---|
+| `template` | ✅ | — | The signal class template, over the slot's parameter types (`Signal<A...>`). A bare string is the shorthand for an entry with only this field. |
+| `header` | — | — | Its `#include`. |
+| `connect` | — | `$signal.connect($fn)` | The C++ expression that connects. `$signal` is the member (`self.toggled`), `$self` the object, `$fn` the script function, already wrapped into `std::function<void(A...)>`. Passing `&$self` as a context, Qt style, drops the connection when the object dies, so a script callback never outlives its widget. |
+| `returns` | — | `void` | What `connect` returns. The script receives it when the type is a bound class, and nothing otherwise. |
+| `method` | — | `on{Field}` | The method name: `{Field}` is the member capitalized, `{field}` the member as written. |
+
+`rosetta_gen` turns each entry into a [`rosetta::signal_traits`](../include/rosetta/signal.h) specialization; write one yourself for programmatic use. What each backend does:
+
+| Backend | Behaviour |
+|---|---|
+| `wasm` | `button.onToggled(fn)`. The JS function is wrapped like any callback parameter. A slot argument that is a pointer to a bound class arrives as a borrowed handle (or `null`): never `.delete()` it. |
+| `node` | The same, through `ext_method`. The function is held by a persistent reference, so it can fire long after the call that connected it. Pointer slot arguments are not passed (`to_napi` copies objects), and those signals are skipped. |
+| `typescript` | `onToggled(fn: (arg0: boolean) => void): Connection;`, with a note on the signals only the wasm module binds. |
+| others | Keep skipping signal members, as before. |
+
+Each bound signal gets a small inline thunk in the generated source (`rosetta_sig::<class>__<member>`), which is where the `connect` expression is spliced. A signal whose slot has an argument no conversion exists for (an unbound class), or whose method name a member already uses, is skipped and reported in `coverage.json`. A member wins over a signal that would take its name, so an existing hand-written `onClicked` extension keeps working until you delete it.
 
 ---
 

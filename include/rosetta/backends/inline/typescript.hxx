@@ -82,6 +82,28 @@ namespace rosetta {
             return "any"; // unknown (e.g. std::function, unsupported types)
         }
 
+        // The script function a signal's connect method takes, spelled as a TS
+        // function type: `(arg0: boolean) => void`. A pointer to a bound class
+        // arrives as that class, or null.
+        inline std::string ts_slot_type(const GenType &cb, const GenContext &c) {
+            std::string out = "(";
+            for (std::size_t i = 1; i < cb.callback_sig.size(); ++i) {
+                const GenType &a = cb.callback_sig[i];
+                std::string    t;
+                if (a.is_pointer) {
+                    GenType pointee   = a;
+                    pointee.kind      = "object";
+                    pointee.is_pointer = false;
+                    t = ts_type(pointee, c) + " | null";
+                } else {
+                    t = ts_type(a, c);
+                }
+                out += (i > 1 ? ", " : "") + std::string("arg") + std::to_string(i - 1) + ": " + t;
+            }
+            const GenType *ret = cb.callback_sig.empty() ? nullptr : &cb.callback_sig.front();
+            return out + ") => " + (ret ? ts_type(*ret, c) : std::string("void"));
+        }
+
         // A parameter name that is safe to write in a `.d.ts`. The IR now
         // carries the identifier the C++ declaration used, and C++ happily names
         // a parameter `function`, `var` or `new` — each of which is a syntax
@@ -346,6 +368,28 @@ namespace rosetta {
                     out += ts_doc(m.doc, m.params, m.returns, "        ", &m.annotations);
                     out += "        " + std::string(m.is_static ? "static " : "") + m.name + "(" +
                            ts_params(m.params, c) + "): " + ts_return(m.ret, m.params, c) + ";\n";
+                    coverage::note_bound("typescript", k, m);
+                }
+
+                // Signal members (rosetta/signal.h): declared when a runtime
+                // backend binds them. The wasm module also passes pointer slot
+                // arguments, which node does not, so such a method says so.
+                for (const auto &sg : k.signals) {
+                    const GenMethod m    = signal_method(sg, c);
+                    const bool      node = nx_signal_bindable(k, sg, c);
+                    if (!node && !wx_signal_bindable(k, sg, c)) {
+                        coverage::note_skip("typescript", k, m, "unmarshalable_signature",
+                                            "neither runtime backend binds this signal");
+                        continue;
+                    }
+                    const std::string doc =
+                        m.doc + (node ? "" : "\n\nWebAssembly module only (the node module cannot "
+                                            "pass this slot's arguments).");
+                    out += ts_doc(doc, {}, {}, "        ", nullptr);
+                    out += "        " + m.name + "(fn: " +
+                           ts_slot_type(m.params.front().type, c) + "): " +
+                           (m.ret.kind == "void" ? std::string("void") : ts_type(m.ret, c)) +
+                           ";\n";
                     coverage::note_bound("typescript", k, m);
                 }
 

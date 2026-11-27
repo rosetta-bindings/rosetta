@@ -44,6 +44,7 @@
 #include <rosetta/interop.h>
 #include <rosetta/matrix.h>
 #include <rosetta/sequence.h>
+#include <rosetta/signal.h>
 #include <rosetta/walk.h>
 #include <string>
 #include <string_view>
@@ -548,6 +549,33 @@ namespace rosetta {
     };
 
     /**
+     * @brief One public signal member (a type with rosetta::signal_traits — see
+     * rosetta/signal.h), erased to plain data.
+     *
+     * Kept apart from `fields` and `methods` on purpose: it is bound as a
+     * method only by the backends that opt in, which emit the connect THUNK
+     * `connect.ext_qualified` names (gen_detail::signal_thunks_cpp) and then
+     * bind `connect` like any extension method taking a callback. A backend
+     * that does not opt in never sees a method whose definition it would not
+     * emit.
+     */
+    struct GenSignal {
+        std::string field;        // the C++ member name ("clicked")
+        std::string signal_cpp;   // its type as reflected ("Signal<bool>"), for docs
+        std::string connect_expr; // signal_traits<S>::connect, $signal / $self / $fn unexpanded
+
+        // The connect method scripts call: `name` from signal_traits<S>::method,
+        // one parameter — the callback, `params[0].type.is_callback` with its
+        // callback_sig — and `ret` the connection type (kind "void" when the
+        // trait declares none). is_extension is set and `ext_qualified` names the
+        // thunk (`rosetta_sig::<class>__<field>`), whose receiver is the class.
+        GenMethod connect;
+
+        std::string doc;             // rosetta::doc on the member, if any
+        std::string declaring_class; // qualified class that declares the member
+    };
+
+    /**
      * @brief One free (non-member) function, erased to plain data. Declared in
      * the manifest (header + name + optional doc) rather than reflected from a
      * type, so the user's headers stay pristine. `qualified` is the C++ spelling
@@ -691,6 +719,7 @@ namespace rosetta {
 
         std::vector<GenField>              fields;  // public data members
         std::vector<GenMethod>             methods; // instance + static methods
+        std::vector<GenSignal>             signals; // signal members (rosetta/signal.h)
         std::vector<std::vector<GenParam>> ctors;   // one param list per constructor
 
         // Whether T is default-constructible. The implicitly-declared default

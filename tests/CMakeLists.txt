@@ -458,3 +458,20 @@ target_include_directories(sharding PRIVATE ${CMAKE_SOURCE_DIR}/../include)
 target_compile_options(sharding PRIVATE -fannotation-attributes)
 target_link_libraries(sharding PRIVATE GTest::gtest_main)
 gtest_discover_tests(sharding)
+
+# Signal members (rosetta/signal.h): the walk records them as GenSignal, the
+# wasm / node backends bind each as `on<Name>(fn)` through an emitted connect
+# thunk, the TypeScript declarations follow.
+add_executable(signals signals.cpp)
+target_include_directories(signals PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_compile_options(signals PRIVATE -fannotation-attributes)
+target_link_libraries(signals PRIVATE GTest::gtest_main)
+gtest_discover_tests(signals)
+
+# The manifest "signals" field: defaults and validation (the loader alone).
+add_executable(manifest_signals manifest_signals.cpp
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/manifest.cpp
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/doccomments.cpp)
+target_include_directories(manifest_signals PRIVATE ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen)
+target_link_libraries(manifest_signals PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
+gtest_discover_tests(manifest_signals)
