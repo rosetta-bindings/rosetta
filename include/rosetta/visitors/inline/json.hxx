@@ -11,7 +11,7 @@ namespace rosetta {
             template for (constexpr auto e :
                           std::define_static_array(std::meta::enumerators_of(^^E))) {
                 if (v == [:e:]) {
-                    out = std::define_static_string(std::meta::identifier_of(e));
+                    out = rosetta::static_string(std::meta::identifier_of(e));
                 }
             }
             return out;
@@ -21,7 +21,7 @@ namespace rosetta {
             E out{};
             template for (constexpr auto e :
                           std::define_static_array(std::meta::enumerators_of(^^E))) {
-                constexpr const char *nm = std::define_static_string(std::meta::identifier_of(e));
+                constexpr const char *nm = rosetta::static_string(std::meta::identifier_of(e));
                 if (name == nm) {
                     out = [:e:];
                 }

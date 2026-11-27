@@ -241,11 +241,14 @@ Annotations (P3394) and token injection (P3294) are newer and currently exist on
 ## Requirements
 
 <details>
-<summary>A clang-p2996 build, CMake 3.28+, and the fork's reflection flags <i>(expand)</i></summary>
+<summary>A C++26 reflection compiler (clang-p2996 or GCC 16+) and CMake 3.28+ <i>(expand)</i></summary>
 
-- A clang-p2996 build at `$HOME/devs/c++/clang-p2996/build` (or override `CLANG_P2996_ROOT` when invoking cmake).
+- A reflection compiler, either of:
+  - **clang-p2996** at `$HOME/devs/c++/clang-p2996/build` (or override `CLANG_P2996_ROOT` when invoking cmake). Used whenever it is found. Flags: `-freflection -freflection-latest -fexperimental-library`, plus `-fannotation-attributes` for annotation-using code, linked against the fork's libc++.
+  - **GCC 16.2+** (Linux, MinGW-w64 / MSYS2 on Windows), used when no fork is found or when passed explicitly (`-DCMAKE_CXX_COMPILER=g++-16`). Flag: `-freflection` (annotations included); regular libstdc++. Early GCC 16 snapshots (e.g. Ubuntu 26.04's `16-20260322`) reject valid reflection code. Use a released 16.2.
 - CMake 3.28+, Ninja or Make.
-- C++26 mode with the fork's flags: `-freflection -freflection-latest -fexperimental-library`. Annotation-using code also needs `-fannotation-attributes`.
+- The generated `gen/` projects and the repo's own CMake files (via [`cmake/RosettaReflection.cmake`](cmake/RosettaReflection.cmake)) pick the compiler and flags automatically.
+- Type spellings in generated code differ cosmetically between the two compilers: GCC leaves out defaulted template arguments (`std::vector<double>` vs `vector<double, allocator<double>>`). Both compile identically.
 
 </details>
 

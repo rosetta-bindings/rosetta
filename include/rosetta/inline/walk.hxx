@@ -301,15 +301,15 @@ namespace rosetta {
                 // else (operators included) has one.
                 const char *sig =
                     (d.reason == drop_reason::function_template)
-                        ? std::define_static_string("")
-                        : std::define_static_string(
-                              std::meta::display_string_of(std::meta::type_of(d.member)));
+                        ? rosetta::static_string("")
+                        : rosetta::static_string(
+                              rosetta::display_type(std::meta::type_of(d.member)));
                 // Every string here must go through define_static_string: these
                 // become template arguments via define_static_array below, and a
                 // pointer into a string literal is not a valid one.
                 out.push_back(drop_text{
-                    std::define_static_string(std::meta::display_string_of(d.member)), sig,
-                    std::define_static_string(drop_reason_name(d.reason))});
+                    rosetta::static_string(rosetta::display_type(d.member)), sig,
+                    rosetta::static_string(drop_reason_name(d.reason))});
             }
             return out;
         }
@@ -359,9 +359,17 @@ namespace rosetta {
         // see <rosetta/annotate.h>) are honoured rather than T's.
         template for (constexpr auto m :
                       std::define_static_array(detail::flattened_members(^^T))) {
-            constexpr auto name = std::define_static_string(std::meta::identifier_of(m));
+            constexpr auto name = rosetta::static_string(std::meta::identifier_of(m));
             using Owner = [:std::meta::parent_of(m):];
-            constexpr auto anns = std::define_static_array(detail::member_annotations<Owner>(m));
+            // `static` (here and for M / anns below): the lambdas read these
+            // without capturing them. Capturing a std::meta::info (or a span
+            // of them) gives the closure a consteval-only type, which makes the
+            // lambda an immediate function under the C++26 rules (GCC applies
+            // them; clang-p2996 does not) — and it then cannot call the
+            // run-time visitor. A static needs no capture.
+            static constexpr std::meta::info M = m;
+            static constexpr auto anns =
+                std::define_static_array(detail::member_annotations<Owner>(m));
             // rosetta::hidden: public in C++, but not API — no visitor sees it,
             // so no backend binds it.
             constexpr bool hide = [] {
@@ -374,12 +382,12 @@ namespace rosetta {
             }();
 
             if constexpr (!hide) [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-                if constexpr (std::meta::is_static_member(m)) {
-                    v.template method_static<m, ([:anns[Is]:])...>(name);
-                } else if constexpr (is_exportable_member_function(m)) {
-                    v.template method_instance<m, ([:anns[Is]:])...>(name);
+                if constexpr (std::meta::is_static_member(M)) {
+                    v.template method_static<M, ([:anns[Is]:])...>(name);
+                } else if constexpr (is_exportable_member_function(M)) {
+                    v.template method_instance<M, ([:anns[Is]:])...>(name);
                 } else {
-                    v.template field<m, ([:anns[Is]:])...>(name);
+                    v.template field<M, ([:anns[Is]:])...>(name);
                 }
             }(std::make_index_sequence<anns.size()>{});
         }
@@ -389,14 +397,17 @@ namespace rosetta {
         template for (constexpr auto ctor :
                       std::define_static_array(std::meta::members_of(^^T, ctx))) {
             if constexpr (is_exportable_constructor(ctor)) {
-                constexpr auto anns = std::define_static_array(std::meta::annotations_of(ctor));
+                // static: see the member loop above.
+                static constexpr std::meta::info C = ctor;
+                static constexpr auto anns =
+                    std::define_static_array(std::meta::annotations_of(ctor));
 
                 [&]<std::size_t... Is>(std::index_sequence<Is...>) {
                     if constexpr (requires {
-                                      v.template constructor<ctor,
+                                      v.template constructor<C,
                                                              ([:std::meta::constant_of(anns[Is]):])...>();
                                   }) {
-                        v.template constructor<ctor, ([:std::meta::constant_of(anns[Is]):])...>();
+                        v.template constructor<C, ([:std::meta::constant_of(anns[Is]):])...>();
                     }
                 }(std::make_index_sequence<anns.size()>{});
             }

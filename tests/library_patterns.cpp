@@ -269,6 +269,7 @@ TEST(LibraryPatterns, AnUnboundTemplateBaseIsBridgedToTheNearestBoundAncestor) {
     rosetta::generate<lpns::ArrayBase, lpns::FloatArray>(opt);
     std::ifstream     in(dir / "python" / "auto_pybind.cpp");
     const std::string s{std::istreambuf_iterator<char>(in), {}};
+    in.close(); // close before remove_all: Windows cannot delete an open file
     fs::remove_all(dir);
     EXPECT_TRUE(has(s, "py::class_<lpns::FloatArray, lpns::ArrayBase>")) << s;
 }

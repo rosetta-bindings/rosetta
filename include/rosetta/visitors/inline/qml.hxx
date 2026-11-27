@@ -5,7 +5,7 @@
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
-#include <experimental/meta>
+#include <rosetta/meta.h>
 #include <rosetta/walk.h>
 #include <string>
 #include <type_traits>

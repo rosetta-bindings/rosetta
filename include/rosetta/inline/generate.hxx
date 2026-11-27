@@ -228,7 +228,7 @@ namespace rosetta {
                     // type: its display spelling is the literal and needs no
                     // qualification.
                     out += std::meta::is_type(arg) ? qualified_type_spelling(arg)
-                                                   : std::string(std::meta::display_string_of(arg));
+                                                   : std::string(rosetta::display_type(arg));
                 }
                 return out + ">";
             }
@@ -236,7 +236,7 @@ namespace rosetta {
             // A builtin (`int`, `double`) has no identifier and no scope; its
             // display spelling is already the C++ one.
             if (!std::meta::has_identifier(ty)) {
-                return portable_integers(std::string(std::meta::display_string_of(ty)));
+                return portable_integers(std::string(rosetta::display_type(ty)));
             }
             return scope_prefix_of(ty) + std::string(std::meta::identifier_of(ty));
         }
@@ -247,9 +247,9 @@ namespace rosetta {
         // identifier, so fall back to its full display spelling — identifier_of
         // would otherwise be a hard constant-evaluation error.
         template <typename T> inline std::string class_name() {
-            constexpr const char *n = std::define_static_string(
-                std::meta::has_identifier(^^T) ? std::meta::identifier_of(^^T)
-                                               : std::meta::display_string_of(^^T));
+            constexpr const char *n = rosetta::static_string(
+                std::meta::has_identifier(^^T) ? std::string(std::meta::identifier_of(^^T))
+                                               : rosetta::display_type(^^T));
             return std::string(n);
         }
 
@@ -260,7 +260,7 @@ namespace rosetta {
         // distinct namespace so they can keep spelling bound types by their
         // unqualified identifier (see using_namespaces_of()).
         template <typename T> inline std::string class_namespace() {
-            constexpr const char *n = std::define_static_string([] consteval -> std::string {
+            constexpr const char *n = rosetta::static_string([] consteval -> std::string {
                 std::vector<std::string_view> parts;
                 std::meta::info               scope = std::meta::parent_of(^^T);
                 while (std::meta::is_namespace(scope) && std::meta::has_identifier(scope)) {
@@ -289,7 +289,7 @@ namespace rosetta {
         // stripped template arguments.)
         template <typename T> inline std::string ns_qualified_name() {
             constexpr const char *n =
-                std::define_static_string(qualified_type_spelling(^^T));
+                rosetta::static_string(qualified_type_spelling(^^T));
             return std::string(n);
         }
 
@@ -423,9 +423,22 @@ set(ROSETTA_C_COMPILER "{{CPP26_CC}}"
     CACHE FILEPATH "C++26 / P2996 C compiler")
 set(ROSETTA_STDLIB "{{CPP26_LIB}}"
     CACHE PATH "Directory holding the fork's libc++ / libc++abi (-L and -rpath)")
+# Reflection compiler: an explicit -DCMAKE_CXX_COMPILER wins; otherwise the
+# clang-p2996 fork above when it is installed; otherwise CMake's default
+# compiler, which must then be GCC 16+.
 if(NOT CMAKE_CXX_COMPILER)
-    set(CMAKE_C_COMPILER   "${ROSETTA_C_COMPILER}")
-    set(CMAKE_CXX_COMPILER "${ROSETTA_CXX_COMPILER}")
+    if(IS_ABSOLUTE "${ROSETTA_CXX_COMPILER}")
+        set(_rosetta_cxx "${ROSETTA_CXX_COMPILER}")
+    else()
+        find_program(_rosetta_cxx NAMES "${ROSETTA_CXX_COMPILER}")
+    endif()
+    if(_rosetta_cxx AND EXISTS "${_rosetta_cxx}")
+        set(CMAKE_C_COMPILER   "${ROSETTA_C_COMPILER}")
+        set(CMAKE_CXX_COMPILER "${_rosetta_cxx}")
+    else()
+        message(STATUS "rosetta: no clang-p2996 at ${ROSETTA_CXX_COMPILER} "
+                       "— using the default C++ compiler (needs GCC 16+)")
+    endif()
 endif()
 )CMK";
 
@@ -435,10 +448,19 @@ endif()
         // target_link_options call the template still owns (it names the target).
         //   REFLECTION_FLAGS — turn on the p2996 reflection + annotation front-end.
         //   STDLIB_LINK      — link the fork's libc++/libc++abi (-L/-rpath ROSETTA_STDLIB).
+        //
+        // Both are generator expressions keyed on the compiler, because the
+        // header runs before project() and the compiler is only known after:
+        // GCC 16+ needs -freflection (annotations included) and its own
+        // libstdc++; clang-p2996 needs its flag set and the fork's libc++.
         constexpr std::string_view REFLECTION_FLAGS =
-            "-freflection -freflection-latest -fexperimental-library -fannotation-attributes";
+            "\"$<$<CXX_COMPILER_ID:GNU>:-freflection;-fconstexpr-ops-limit=68719476736;"
+            "-fconstexpr-loop-limit=1000000000>\"\n"
+            "    \"$<$<NOT:$<CXX_COMPILER_ID:GNU>>:-freflection;-freflection-latest;"
+            "-fexperimental-library;-fannotation-attributes>\"";
         constexpr std::string_view STDLIB_LINK =
-            "-nostdlib++ -L${ROSETTA_STDLIB} -Wl,-rpath,${ROSETTA_STDLIB} -lc++ -lc++abi";
+            "\"$<$<NOT:$<CXX_COMPILER_ID:GNU>>:-nostdlib++;-L${ROSETTA_STDLIB};"
+            "-Wl,-rpath,${ROSETTA_STDLIB};-lc++;-lc++abi>\"";
 
         // -------- shared render helpers (used by every backend) --------
 
@@ -1373,7 +1395,7 @@ endif()
                 // class_namespace walks the specialization's parents — the same
                 // chain encloses the template itself.
                 const std::string     ns = class_namespace<U>();
-                constexpr const char *id = std::define_static_string(std::meta::identifier_of(
+                constexpr const char *id = rosetta::static_string(std::meta::identifier_of(
                     std::meta::template_of(std::meta::dealias(^^U))));
                 const std::string     head = ns.empty() ? std::string(id) : ns + "::" + id;
                 return head + "<" + marshal_spelling<typename U::value_type>() + ">";
@@ -1389,7 +1411,7 @@ endif()
                 return std::string(rosetta::matrix_cpp_name<U>::value);
             } else {
                 const std::string     ns = class_namespace<U>();
-                constexpr const char *id = std::define_static_string(std::meta::identifier_of(
+                constexpr const char *id = rosetta::static_string(std::meta::identifier_of(
                     std::meta::template_of(std::meta::dealias(^^U))));
                 const std::string     head = ns.empty() ? std::string(id) : ns + "::" + id;
                 return head + "<" + marshal_spelling<typename U::value_type>() + ">";
@@ -1403,8 +1425,8 @@ endif()
             } else if constexpr (std::is_same_v<V, bool>) {
                 return "bool";
             } else if constexpr (std::is_arithmetic_v<V>) {
-                constexpr const char *sp = std::define_static_string(
-                    std::meta::display_string_of(std::meta::dealias(^^V)));
+                constexpr const char *sp = rosetta::static_string(
+                    rosetta::display_type(std::meta::dealias(^^V)));
                 return sp; // "double", "unsigned int", ...
             } else if constexpr (is_vec<V>::value) {
                 return "std::vector<" + marshal_spelling<typename V::value_type>() + ">";
@@ -1414,8 +1436,8 @@ endif()
                 const std::string ns = class_namespace<V>();
                 return ns.empty() ? class_name<V>() : ns + "::" + class_name<V>();
             } else {
-                constexpr const char *sp = std::define_static_string(
-                    std::meta::display_string_of(std::meta::dealias(^^V)));
+                constexpr const char *sp = rosetta::static_string(
+                    rosetta::display_type(std::meta::dealias(^^V)));
                 return sp;
             }
         }
@@ -1427,7 +1449,7 @@ endif()
             // dealias so we print the underlying type ("std::string", "int"),
             // not the local alias name "U".
             constexpr const char *sp =
-                std::define_static_string(std::meta::display_string_of(std::meta::dealias(^^U)));
+                rosetta::static_string(rosetta::display_type(std::meta::dealias(^^U)));
             g.spelling = prettify(sp);
             if constexpr (std::is_void_v<U>) {
                 g.kind = "void";
@@ -1543,7 +1565,7 @@ endif()
                 template for (constexpr auto e : std::define_static_array(
                                   std::meta::enumerators_of(std::meta::dealias(^^U)))) {
                     constexpr const char *en =
-                        std::define_static_string(std::meta::identifier_of(e));
+                        rosetta::static_string(std::meta::identifier_of(e));
                     g.enumerators.push_back(GenEnumerator{en, static_cast<long long>([:e:])});
                 }
             } else if constexpr (std::is_same_v<U, const char *> || std::is_same_v<U, char *>) {
@@ -1661,7 +1683,7 @@ endif()
                 // the positional fallback below fills it in.
                 if constexpr (std::meta::has_identifier(p)) {
                     constexpr const char *id =
-                        std::define_static_string(std::meta::identifier_of(p));
+                        rosetta::static_string(std::meta::identifier_of(p));
                     gp.name = id;
                 }
                 gp.type           = type_descriptor<std::remove_cvref_t<P>>();
@@ -1802,7 +1824,7 @@ endif()
             // qualified_type_spelling(), which composes the template-id from
             // template_of / template_arguments_of instead.
             constexpr const char *n =
-                std::define_static_string(qualified_type_spelling(^^T));
+                rosetta::static_string(qualified_type_spelling(^^T));
             return std::string(n);
         }
 
@@ -1862,7 +1884,7 @@ endif()
         // classes, so the bare token would not resolve — re-qualify it with
         // its full parent chain (always legal, whatever scope it lands in).
         template <std::meta::info Ty> inline std::string exact_spelling() {
-            constexpr const char *s = std::define_static_string(std::meta::display_string_of(Ty));
+            constexpr const char *s = rosetta::static_string(rosetta::display_type(Ty));
             std::string out         = prettify(s);
             using U                 = std::remove_cvref_t<typename[:Ty:]>;
             if constexpr (std::is_class_v<U> || std::is_enum_v<U>) {
@@ -1872,7 +1894,7 @@ endif()
                 if constexpr (std::meta::has_identifier(ur) &&
                               std::meta::is_type(std::meta::parent_of(ur))) {
                     constexpr const char *id =
-                        std::define_static_string(std::meta::identifier_of(ur));
+                        rosetta::static_string(std::meta::identifier_of(ur));
                     out = replace_type_token(std::move(out), id, qualified_class_name<U>());
                 }
             }
@@ -2123,7 +2145,7 @@ endif()
                     }
                 }
                 if (distinct.size() > 1) {
-                    out.push_back(std::define_static_string(names[order[i]]));
+                    out.push_back(rosetta::static_string(names[order[i]]));
                 }
                 i = j;
             }
@@ -2576,7 +2598,7 @@ endif()
                             continue;
                         }
                         seen.push_back(t);
-                        out.push_back(std::define_static_string(qualified_type_spelling(t)));
+                        out.push_back(rosetta::static_string(qualified_type_spelling(t)));
                         next.push_back(t);
                     }
                 }
@@ -2709,11 +2731,11 @@ endif()
                 ge.expose = binding_info<T>::expose;
             }
             ge.header     = binding_info<T>::header;
-            ge.underlying = std::define_static_string(
-                std::meta::display_string_of(std::meta::underlying_type(^^T)));
+            ge.underlying = rosetta::static_string(
+                rosetta::display_type(std::meta::underlying_type(^^T)));
             template for (constexpr auto e :
                           std::define_static_array(std::meta::enumerators_of(^^T))) {
-                constexpr const char *en = std::define_static_string(std::meta::identifier_of(e));
+                constexpr const char *en = rosetta::static_string(std::meta::identifier_of(e));
                 ge.values.push_back(GenEnumerator{en, static_cast<long long>([:e:])});
             }
             ge.doc = render_enum_markdown(ge);
@@ -3743,18 +3765,37 @@ namespace rosetta {
     // user headers stay untouched). `expose` (manifest "expose") replaces the
     // reflected identifier as the binding name — the C++ spelling stays
     // `qualified`, so only what scripts see changes.
+    namespace gen_detail {
+        // Return type of free function F. GCC 16.2 cannot give the type of a
+        // function whose FIRST declaration is a friend (rosetta::script::
+        // classes): return_type_of / type_of throw "reflection does not have a
+        // type", while decltype of the splice is right. clang-p2996 keeps the
+        // direct query.
+        template <class> struct fn_return;
+        template <class R, class... A> struct fn_return<R(A...)> { using type = R; };
+        template <class R, class... A> struct fn_return<R(A...) noexcept> { using type = R; };
+        template <std::meta::info F> consteval std::meta::info free_function_return() {
+#if ROSETTA_REFLECTION_GCC
+            return ^^typename fn_return<decltype([:F:])>::type;
+#else
+            return std::meta::return_type_of(F);
+#endif
+        }
+    } // namespace gen_detail
+
     template <std::meta::info F>
     inline GenFunction make_function(const char *qualified, const char *header, const char *doc,
                                      const char *expose) {
         GenFunction gf;
         gf.name      = (expose && *expose) ? std::string(expose)
-                                           : std::string(std::define_static_string(
+                                           : std::string(rosetta::static_string(
                                                  std::meta::identifier_of(F)));
         gf.qualified = qualified;
         gf.header    = header;
         gf.ret       = gen_detail::type_descriptor<
-            std::remove_cvref_t<typename[:std::meta::return_type_of(F):]>>();
-        gf.ret_is_ref = std::is_lvalue_reference_v<typename[:std::meta::return_type_of(F):]>;
+            std::remove_cvref_t<typename[:gen_detail::free_function_return<F>():]>>();
+        gf.ret_is_ref =
+            std::is_lvalue_reference_v<typename[:gen_detail::free_function_return<F>():]>;
         gf.params = gen_detail::params_of<F>();
         gf.doc    = doc;
         return gf;

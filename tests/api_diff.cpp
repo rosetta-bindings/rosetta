@@ -170,6 +170,7 @@ TEST(ApiSnapshot, GenerateWritesItNextToTheCoverageReport) {
     std::ifstream in(dir / "api.json");
     ASSERT_TRUE(in) << "generate() must always write api.json";
     const json s = json::parse(in);
+    in.close(); // close before remove_all: Windows cannot delete an open file
     EXPECT_EQ(s.at("version"), "3.1.4");
     EXPECT_EQ(s.at("classes").size(), 1u);
     EXPECT_TRUE(fs::exists(dir / "coverage.json"));

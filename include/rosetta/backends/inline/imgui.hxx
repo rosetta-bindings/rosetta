@@ -37,7 +37,8 @@ if(ROSETTA_IMGUI_CPP26)
         CACHE PATH "C++26 / P2996 reflection toolchain root (clang-p2996 build dir)")
     set(ROSETTA_STDLIB "{{CPP26_LIB}}"
         CACHE PATH "Directory holding the fork's libc++ / libc++abi (-L and -rpath)")
-    if(NOT CMAKE_CXX_COMPILER)
+    # The fork when installed; otherwise the default compiler (GCC 16+).
+    if(NOT CMAKE_CXX_COMPILER AND EXISTS "{{CPP26_CXX}}")
         set(CMAKE_CXX_COMPILER "{{CPP26_CXX}}")
     endif()
 endif()
@@ -97,15 +98,20 @@ if(ROSETTA_IMGUI_CPP26)
     # Inline annotations pull in <rosetta/annotations.h> → <experimental/meta>,
     # which needs the fork's flags and libc++ (only glfw, a C target, stays on
     # the system toolchain).
-    target_compile_options({{LIB}}_imgui PRIVATE
-        -freflection -freflection-latest -fexperimental-library -fannotation-attributes)
-    if(APPLE)
-        # Apple clang enables ObjC blocks implicitly; the fork must be told —
-        # the macOS SDK frameworks glfw3native.h pulls in typedef them.
-        target_compile_options({{LIB}}_imgui PRIVATE -fblocks)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        # GCC 16+: -freflection covers annotations; regular libstdc++.
+        target_compile_options({{LIB}}_imgui PRIVATE -freflection)
+    else()
+        target_compile_options({{LIB}}_imgui PRIVATE
+            -freflection -freflection-latest -fexperimental-library -fannotation-attributes)
+        if(APPLE)
+            # Apple clang enables ObjC blocks implicitly; the fork must be told —
+            # the macOS SDK frameworks glfw3native.h pulls in typedef them.
+            target_compile_options({{LIB}}_imgui PRIVATE -fblocks)
+        endif()
+        target_link_options({{LIB}}_imgui PRIVATE
+            -nostdlib++ -L${ROSETTA_STDLIB} -Wl,-rpath,${ROSETTA_STDLIB} -lc++ -lc++abi)
     endif()
-    target_link_options({{LIB}}_imgui PRIVATE
-        -nostdlib++ -L${ROSETTA_STDLIB} -Wl,-rpath,${ROSETTA_STDLIB} -lc++ -lc++abi)
 endif()
 
 set(ROSETTA_BINDING_TARGET {{LIB}}_imgui)

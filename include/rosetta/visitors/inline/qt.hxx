@@ -24,7 +24,7 @@
 #include <QVariantList>
 #include <QWidget>
 #include <climits>
-#include <experimental/meta>
+#include <rosetta/meta.h>
 #include <functional>
 #include <rosetta/walk.h>
 #include <string>

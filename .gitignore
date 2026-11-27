@@ -15,8 +15,11 @@ __pycache__
 *-lock.json
 ~*
 *.cmake
+!cmake/*.cmake
 *.bin
 *.make
 .DS_Store
 lkn.md
 TODO2.md
+# the generator driver rosetta_gen builds next to each manifest (Windows)
+generator.exe

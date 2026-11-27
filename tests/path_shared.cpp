@@ -231,6 +231,7 @@ TEST(PathShared, TypescriptDeclaresPointeeAndString) {
     std::ifstream     in(dir / "typescript" / "psxtest.d.ts");
     std::stringstream ss;
     ss << in.rdbuf();
+    in.close(); // close before remove_all: Windows cannot delete an open file
     const std::string s = ss.str();
     fs::remove_all(dir);
 

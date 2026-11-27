@@ -13,7 +13,7 @@
 #pragma once
 
 #include <cstddef>
-#include <experimental/meta>
+#include <rosetta/meta.h>
 
 namespace rosetta {
 
@@ -23,7 +23,7 @@ namespace rosetta {
      */
     struct doc {
         const char *text;
-        consteval doc(const char *t) : text(std::define_static_string(t)) {}
+        consteval doc(const char *t) : text(rosetta::static_string(t)) {}
         bool operator==(const doc &) const = default;
     };
 
@@ -87,7 +87,7 @@ namespace rosetta {
         template <std::size_t N> consteval combobox(const char *const (&arr)[N]) : count(N) {
             static_assert(N <= MAX, "rosetta::combobox: too many choices (max 16)");
             for (std::size_t i = 0; i < N; ++i) {
-                choices[i] = std::define_static_string(arr[i]);
+                choices[i] = rosetta::static_string(arr[i]);
             }
         }
 
@@ -106,7 +106,7 @@ namespace rosetta {
      */
     struct label {
         const char *text;
-        consteval label(const char *t) : text(std::define_static_string(t)) {}
+        consteval label(const char *t) : text(rosetta::static_string(t)) {}
         bool operator==(const label &) const = default;
     };
 
@@ -121,8 +121,8 @@ namespace rosetta {
      */
     struct button {
         const char *label;
-        consteval button() : label(std::define_static_string("")) {}
-        consteval button(const char *l) : label(std::define_static_string(l)) {}
+        consteval button() : label(rosetta::static_string("")) {}
+        consteval button(const char *l) : label(rosetta::static_string(l)) {}
         bool operator==(const button &) const = default;
     };
 
@@ -211,7 +211,7 @@ namespace rosetta {
      */
     struct unit {
         const char *text;
-        consteval unit(const char *t) : text(std::define_static_string(t)) {}
+        consteval unit(const char *t) : text(rosetta::static_string(t)) {}
         bool operator==(const unit &) const = default;
     };
 
@@ -235,11 +235,11 @@ namespace rosetta {
         double      number = 0;
         const char *text   = nullptr; // non-null: a string default
         consteval default_value(const char *p, double v)
-            : param(std::define_static_string(p)), number(v) {}
+            : param(rosetta::static_string(p)), number(v) {}
         consteval default_value(const char *p, int v)
-            : param(std::define_static_string(p)), number(v) {}
+            : param(rosetta::static_string(p)), number(v) {}
         consteval default_value(const char *p, const char *s)
-            : param(std::define_static_string(p)), text(std::define_static_string(s)) {}
+            : param(rosetta::static_string(p)), text(rosetta::static_string(s)) {}
         bool operator==(const default_value &) const = default;
     };
 
@@ -252,7 +252,7 @@ namespace rosetta {
      */
     struct example {
         const char *json;
-        consteval example(const char *j) : json(std::define_static_string(j)) {}
+        consteval example(const char *j) : json(rosetta::static_string(j)) {}
         bool operator==(const example &) const = default;
     };
 
@@ -290,7 +290,7 @@ namespace rosetta {
      */
     struct regex {
         const char *pattern;
-        consteval regex(const char *p) : pattern(std::define_static_string(p)) {}
+        consteval regex(const char *p) : pattern(rosetta::static_string(p)) {}
         bool operator==(const regex &) const = default;
     };
 
@@ -315,7 +315,7 @@ namespace rosetta {
         const char *expr;
         const char *message;
         consteval requires_(const char *e, const char *m = "")
-            : expr(std::define_static_string(e)), message(std::define_static_string(m)) {}
+            : expr(rosetta::static_string(e)), message(rosetta::static_string(m)) {}
         bool operator==(const requires_ &) const = default;
     };
 
@@ -340,7 +340,7 @@ namespace rosetta {
      */
     struct confirm {
         const char *question;
-        consteval confirm(const char *q) : question(std::define_static_string(q)) {}
+        consteval confirm(const char *q) : question(rosetta::static_string(q)) {}
         bool operator==(const confirm &) const = default;
     };
 
@@ -367,14 +367,14 @@ namespace rosetta {
     /** @brief Still bound, but on its way out; `use` names the replacement. */
     struct deprecated {
         const char *use;
-        consteval deprecated(const char *u = "") : use(std::define_static_string(u)) {}
+        consteval deprecated(const char *u = "") : use(rosetta::static_string(u)) {}
         bool operator==(const deprecated &) const = default;
     };
 
     /** @brief The version that introduced the member, e.g. "1.2". */
     struct since {
         const char *version;
-        consteval since(const char *v) : version(std::define_static_string(v)) {}
+        consteval since(const char *v) : version(rosetta::static_string(v)) {}
         bool operator==(const since &) const = default;
     };
 
@@ -405,7 +405,7 @@ namespace rosetta {
     /** @brief Section of the property panel the field belongs to. */
     struct group {
         const char *name;
-        consteval group(const char *n) : name(std::define_static_string(n)) {}
+        consteval group(const char *n) : name(rosetta::static_string(n)) {}
         bool operator==(const group &) const = default;
     };
 
@@ -423,14 +423,14 @@ namespace rosetta {
      */
     struct enabled_if {
         const char *expr;
-        consteval enabled_if(const char *e) : expr(std::define_static_string(e)) {}
+        consteval enabled_if(const char *e) : expr(rosetta::static_string(e)) {}
         bool operator==(const enabled_if &) const = default;
     };
 
     /** @brief Shown only while a condition on the object holds. */
     struct visible_if {
         const char *expr;
-        consteval visible_if(const char *e) : expr(std::define_static_string(e)) {}
+        consteval visible_if(const char *e) : expr(rosetta::static_string(e)) {}
         bool operator==(const visible_if &) const = default;
     };
 

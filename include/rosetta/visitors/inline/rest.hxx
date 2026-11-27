@@ -267,7 +267,7 @@ namespace rosetta {
         nlohmann::json j;
         template for (constexpr auto en :
                       std::define_static_array(std::meta::enumerators_of(^^T))) {
-            constexpr const char *nm = std::define_static_string(std::meta::identifier_of(en));
+            constexpr const char *nm = rosetta::static_string(std::meta::identifier_of(en));
             j[nm] = static_cast<std::underlying_type_t<T>>([:en:]);
         }
         server.Get(base, [j](const httplib::Request &, httplib::Response &res) {

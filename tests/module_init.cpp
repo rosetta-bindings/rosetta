@@ -137,6 +137,7 @@ TEST(ModuleInit, GeneratedHeaderIsWrittenAndComesFirstOnTheIncludePath) {
     std::ifstream     in(written);
     std::stringstream ss;
     ss << in.rdbuf();
+    in.close(); // close before remove_all: Windows cannot delete an open file
     EXPECT_EQ(ss.str(), "#define MIX_VERSION \"1.2.3\"\n");
 
     // And its directory precedes the user's own include dir in the emitted
@@ -145,6 +146,7 @@ TEST(ModuleInit, GeneratedHeaderIsWrittenAndComesFirstOnTheIncludePath) {
     std::ifstream     cm(opt.out_dir / "python" / "CMakeLists.txt");
     std::stringstream cs;
     cs << cm.rdbuf();
+    cm.close(); // close before remove_all: Windows cannot delete an open file
     const std::string cmake = cs.str();
     const auto        gen   = cmake.find((opt.out_dir / "include").string());
     const auto        usr   = cmake.find(user.string());
