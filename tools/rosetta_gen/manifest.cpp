@@ -384,7 +384,7 @@ static std::vector<UserLibEntry> parse_user_libs(const json &ul, const fs::path 
         if (u.name.empty()) {
             throw std::runtime_error(where + " entry has an empty \"name\"");
         }
-        u.dir = fs::weakly_canonical(base / fs::path(e.at("dir").get<std::string>())).string();
+        u.dir = fs::weakly_canonical(base / fs::path(e.at("dir").get<std::string>())).generic_string();
         // Optional "link": prefer linking the shared or the static form of the
         // library. "dynamic" is accepted as an alias for "shared". Default shared.
         // (WebAssembly always links static regardless — see the wasm backend.)
